@@ -46,3 +46,9 @@ def test_parse_time(s, exp):
 @pytest.mark.parametrize("s,exp", [("510(+6)", (510, 6)), ("498(-12)", (498, -12)), ("計不", (None, None))])
 def test_body_weight(s, exp):
     assert parse_body_weight(s) == exp
+
+
+def test_steeplechase_course_text():
+    html = HTML.replace("芝左2400m", "障芝ダート2910m")
+    race = parse_race(html, "202408060704").race
+    assert (race.course_type, race.direction, race.distance) == ("障", None, 2910)

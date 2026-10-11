@@ -111,7 +111,7 @@ def _parse_race_info(soup: BeautifulSoup, race_id: str) -> Race:
 
     info = soup.select_one("dl.racedata dd p")
     info_text = _squash(info.get_text(" ") if info else "")
-    m = re.search(r"(芝|ダ|障)(左|右|直線)?(?:外|内|内2周|外2周)?(\d{3,4})m", info_text)
+    m = re.search(r"(障|芝|ダ)(?:芝|ダート|ダ)*(左|右|直線)?(?:外|内|内2周|外2周)?(\d{3,4})m", info_text)
     if m:
         race.course_type, race.direction, race.distance = m.group(1), m.group(2), int(m.group(3))
     if m := re.search(r"天候:(\S+?)(?:/|$)", info_text):

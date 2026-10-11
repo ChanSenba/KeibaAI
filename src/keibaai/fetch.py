@@ -21,7 +21,7 @@ class Fetcher:
         self.cache_dir = Path(cache_dir)
         self.min_interval = max(min_interval, MIN_INTERVAL_SEC)
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", USER_AGENT)
+        self.session.headers["User-Agent"] = USER_AGENT  # requests 既定の UA は 400 を返される
         self._sleep, self._clock = sleep, clock
         self._last = None
 

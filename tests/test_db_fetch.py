@@ -58,3 +58,10 @@ def test_backoff_on_429(tmp_path):
     f = Fetcher(tmp_path, session=sess, sleep=sleeps.append, clock=lambda: 0.0)
     assert f.race_html("202405050812") == "ok"
     assert 30 in sleeps
+
+
+def test_default_requests_user_agent_is_replaced(tmp_path):
+    import requests
+
+    f = Fetcher(tmp_path, session=requests.Session())
+    assert "python-requests" not in f.session.headers["User-Agent"]
