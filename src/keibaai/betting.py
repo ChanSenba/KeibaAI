@@ -171,6 +171,7 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
               max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD,
               min_hit: float = MIN_HIT) -> Plan:
     """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。"""
+    cap = min(cap, bankroll)
     p = np.asarray(p, dtype=float)
     p = p / p.sum()
     bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3, min_hit)

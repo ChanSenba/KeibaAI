@@ -117,3 +117,9 @@ def test_plan_default_ignores_tiny_probability_bets():
     odds = {"単勝": {(4,): 60.0}}  # EV 1.2 だが的中確率は2%
     plan = bt.make_plan(NUMS, p, odds)
     assert plan.bets == [] and "的中確率" in plan.note
+
+
+def test_small_bankroll_never_exceeds_it():
+    odds = {"単勝": {(1,): 3.0}}
+    plan = bt.make_plan(NUMS, P, odds, bankroll=100, cap=10_000)
+    assert plan.total <= 100
