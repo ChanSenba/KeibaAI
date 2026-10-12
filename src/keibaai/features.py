@@ -21,6 +21,8 @@ BASE_FEATURES = [
     "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate",
 ]
 MARKET_FEATURES = ["win_odds", "popularity"]
+BIAS_FEATURES = ["track_front_bias", "track_inner_bias"]  # トラックバイアス(下の _track_bias)
+BIAS_WINDOW = "10D"
 
 
 def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -70,6 +72,36 @@ def _expanding_rate(df: pd.DataFrame, key: str, flag: str) -> tuple[pd.Series, p
     return pd.Series(n, index=df.index), pd.Series(rate, index=df.index)
 
 
+def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
+    """同じ競馬場・同じ芝/ダートの、直近(BIAS_WINDOW 以内)の前の開催日に出ていた偏りを返す。
+
+    front: 前に付けた馬(序盤の位置が前の3分の1)の3着以内率 − そのほかの馬の率。大きいほど先行有利。
+    inner: 内の馬(馬番がレース内で前の3分の1)の3着以内率 − 外の馬(後ろの3分の1)の率。大きいほど内有利。
+    当日のレースは含めない(出走前には分からないため)。値は ±1 に収まり、差がない所は 0 付近。
+    """
+    done = df[df["finish"].notna() & df["venue"].notna()].copy()
+    done["_top3"] = (done["finish"] <= 3).astype(float)
+    pos = done["number"] / done["field_size"]
+    done["_front"] = np.where(done["early_pos"].isna(), np.nan, (done["early_pos"] <= 1 / 3).astype(float))
+    done["_inner"] = np.where(pos <= 1 / 3, 1.0, np.where(pos >= 2 / 3, 0.0, np.nan))
+
+    def diff(g: pd.DataFrame, col: str) -> float:
+        a, b = g.loc[g[col] == 1, "_top3"], g.loc[g[col] == 0, "_top3"]
+        return a.mean() - b.mean() if len(a) and len(b) else np.nan
+
+    keys = ["venue", "course_type", "date"]
+    day = done.groupby(keys, observed=True).apply(
+        lambda g: pd.Series({"track_front_bias": diff(g, "_front"), "track_inner_bias": diff(g, "_inner")}),
+        include_groups=False).reset_index()
+    out = []
+    for _, g in day.sort_values("date").groupby(["venue", "course_type"], observed=True):
+        r = g.set_index("date")[BIAS_FEATURES].rolling(BIAS_WINDOW, closed="left", min_periods=1).mean()
+        out.append(r.reset_index().assign(venue=g["venue"].iloc[0], course_type=g["course_type"].iloc[0]))
+    if not out:
+        return pd.DataFrame(columns=keys + BIAS_FEATURES)
+    return pd.concat(out, ignore_index=True)
+
+
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(["date", "race_id", "number"]).reset_index(drop=True)
     df["win"] = (df["finish"] == 1).astype(int)
@@ -105,6 +137,12 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["early_pos_rel_3"] = ep.groupby(df["horse_id"]).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
     prev_jockey = g["jockey_id"].shift(1)
     df["jockey_changed"] = np.where(prev_jockey.isna(), np.nan, (prev_jockey != df["jockey_id"]).astype(float))
+
+    bias = _track_bias(df)
+    df = df.merge(bias, on=["venue", "course_type", "date"], how="left")
+    for c in BIAS_FEATURES:
+        if c not in df:
+            df[c] = np.nan
 
     # --- 騎手・調教師(前日までの成績) ---
     df["jockey_n"], df["jockey_win_rate"] = _expanding_rate(df, "jockey_id", "win")

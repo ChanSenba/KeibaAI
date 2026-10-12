@@ -11,6 +11,7 @@ import pandas as pd
 from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
 from .features import BASE_FEATURES, CATEGORICAL, MARKET_FEATURES, build_features, load_results
+from .factors import COLUMN, FACTORS, predict_factors
 from .model import PARAMS, normalize_within_race
 
 
@@ -90,8 +91,11 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
     target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())
     target["ev_ability"] = target["p_win_ability"] * target["win_odds"]
     target["ev_market"] = target["p_win_market"] * target["win_odds"]
+    fp = predict_factors(train, target, rounds=rounds)  # 要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場)
+    for name, col in COLUMN.items():
+        target[col] = fp[name]
     cols = ["race_id", "date", "venue", "round", "race_name", "number", "horse_name", "jockey", "win_odds",
-            "popularity", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
+            "popularity", "p_win_ability", "p_win_market", "ev_ability", "ev_market", *COLUMN.values()]
     out = target[cols].copy()
     out["venue"] = out["venue"].astype(str)  # 特徴量用の category のままだと画面側で文字連結ができない
     return out.sort_values(["venue", "round", "number"]).reset_index(drop=True)

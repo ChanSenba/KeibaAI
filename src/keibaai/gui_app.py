@@ -246,6 +246,12 @@ PRED_COLUMNS = {
     "win_odds": st.column_config.NumberColumn("単勝", format="%.1f"),
     "p_win_ability": st.column_config.ProgressColumn("勝率(能力)", min_value=0, max_value=1, format="percent"),
     "p_win_market": st.column_config.ProgressColumn("勝率(オッズ込)", min_value=0, max_value=1, format="percent"),
+    "p_win_quality": st.column_config.ProgressColumn("馬の質", min_value=0, max_value=1, format="percent",
+                                                     help="過去の成績・上がり・距離適性・クラスだけで見た勝率"),
+    "p_win_human": st.column_config.ProgressColumn("騎手・厩舎", min_value=0, max_value=1, format="percent",
+                                                   help="騎手と調教師の成績・乗り替わりだけで見た勝率"),
+    "p_win_track": st.column_config.ProgressColumn("展開・馬場", min_value=0, max_value=1, format="percent",
+                                                   help="枠順・脚質・直近の馬場の偏り(先行/内有利)だけで見た勝率"),
     "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f"),
     "ev_market": st.column_config.NumberColumn("期待値(オッズ込)", format="%.2f"),
 }
