@@ -193,3 +193,9 @@ button, a, [role="button"] { touch-action: manipulation; }
 .kb-fs-ready { border-left-color: #2e9e5b; }
 .kb-fs-partial { border-left-color: #d89a1e; }
 .kb-fs-missing { border-left-color: #b9bec6; }
+.kb-factor-legend { list-style: none; margin: 0.25rem 0 0; padding: 0; display: grid; gap: 0.3rem; font-size: 0.82rem; }
+.kb-factor-legend li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.5rem; }
+.kb-factor-legend span:last-child { opacity: 0.8; flex-basis: 100%; }
+.kb-fl-good, .kb-fl-none { font-size: 0.72rem; padding: 0 0.4rem; border-radius: 999px; }
+.kb-fl-good { background: rgba(46, 158, 91, 0.2); color: light-dark(#1d6b3c, #8fd9ad); }
+.kb-fl-none { background: light-dark(#eef0f3, #2b2f36); opacity: 0.8; }

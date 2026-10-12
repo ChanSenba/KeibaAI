@@ -99,3 +99,29 @@ def test_pedigree_names_and_status_follow_what_is_collected(conn):
 def test_no_entries_raises(conn):
     with pytest.raises(ValueError):
         fv.factor_values(conn, "2031-01-01")
+
+
+def test_every_column_has_an_explanation():
+    for s in fv.SECTIONS:
+        for col, _ in s["cols"]:
+            info, good = fv.COLUMN_INFO[col]
+            assert info and good in (None, *fv.GOOD_LABEL), col
+
+
+def test_top_rank_colors_the_best_five_in_the_good_direction():
+    s = pd.Series([0.1, 0.5, 0.3, np.nan, 0.9, 0.2, 0.4, 0.0, 0.6, 0.7, 0.8, 0.05])
+    hi = fv.top_rank(s, "high")
+    assert hi.notna().sum() == 5 and hi[4] == 1 and set(hi.dropna().index) == {4, 10, 9, 8, 1}
+    lo = fv.top_rank(s, "low")
+    assert lo[7] == 1 and set(lo.dropna().index) == {7, 11, 0, 5, 2}
+    assert fv.top_rank(pd.Series([-6.0, 2.0, 0.0, 10.0]), "near0").dropna().to_dict() == {2: 1, 1: 2}  # 4頭なら2頭まで
+    assert fv.top_rank(s, None).isna().all()
+    assert fv.top_rank(pd.Series([0.2] * 8), "high").isna().all()  # 差がなければ色なし
+
+
+def test_top_rank_for_records_and_recent_finishes():
+    rec = pd.Series(["0-0-0-5", "2-1-0-3", "1-2-0-1", "0-0-1-0", "—", "3-0-0-9"])
+    r = fv.top_rank(rec, "record")
+    assert r[5] == 1 and r[1] == 2 and r.notna().sum() == 2  # 比べられる4頭の半分まで
+    last5 = pd.Series(["1-2-3", "8-9", "—", "4-4-4-4-4", "2-1"])
+    assert fv.top_rank(last5, "last5").dropna().to_dict() == {4: 1, 0: 2}

@@ -44,7 +44,8 @@ SECTIONS: list[dict] = [
               ("n_front_runners", "先行寄りの馬の数"), ("class_change", "クラス変化"), ("distance_change", "距離の変化(m)"),
               ("dist_note", "距離短縮・延長")]},
     {"name": "オッズのゆがみ",
-     "note": "騎手の単勝回収率が高いほど過剰人気の傾向、前走の人気 − 着順が大きいほど前走は人気以上に走っています。",
+     "note": "騎手の単勝回収率が高いほど、その騎手は人気以上に走らせていて妙味があります。"
+             "前走の人気 − 着順が大きいほど、前走は人気以上に走っています。",
      "cols": [("win_odds", "単勝オッズ"), ("popularity", "人気"), ("jockey_roi", "騎手の単勝回収率(倍)"),
               ("prev_pop_gap", "前走の人気 − 着順")]},
     {"name": "血統",
@@ -58,6 +59,113 @@ SECTIONS: list[dict] = [
      "cols": [("prev_pace_diff", "前走のペース差"), ("pace_diff_3", "ペース差(3走平均)"),
               ("l3f_vs_lap_3", "自分の上がり−場の後半3F(3走平均)")]},
 ]
+
+# 列ごとの説明と、良い向き。good は high(高いほど良い)/ low(低いほど良い)/ near0(0に近いほど良い)/
+# record(着度数。3着内の回数が多いほど良い)/ last5(近走の着順の平均が小さいほど良い)/ None(良し悪しはない)
+COLUMN_INFO: dict[str, tuple[str, str | None]] = {
+    "style": ("過去3走の通過順から推定した脚質。展開との相性で見る", None),
+    "early_pos_rel_3": ("過去3走の最初のコーナーの位置 ÷ 頭数の平均。0に近いほど前、1に近いほど後ろ", None),
+    "age": ("馬の年齢", None),
+    "body_weight": ("今回の馬体重(kg)", None),
+    "body_weight_diff": ("前走からの馬体重の増減(kg)。大きく増減した馬は調子の変化に注意", "near0"),
+    "bw_vs_avg": ("過去の平均体重との差(kg)。大きく離れているほど普段と違う状態", "near0"),
+    "weight_carried": ("騎手が背負う重さ(kg)。軽いほど有利", "low"),
+    "weight_ratio": ("斤量 ÷ 馬体重。小さいほど体に対して負担が軽い", "low"),
+    "weight_change": ("前走からの斤量の増減(kg)。減っているほど楽になる", "low"),
+    "rec_ct": ("今回と同じ芝/ダートでの『1着-2着-3着-着外』", "record"),
+    "rec_dist": ("今回の距離±200mでの『1着-2着-3着-着外』", "record"),
+    "rec_dir": ("今回と同じ回り(右/左)での『1着-2着-3着-着外』", "record"),
+    "rec_venue": ("今回と同じ競馬場での『1着-2着-3着-着外』", "record"),
+    "rec_ground": ("今回と同じ馬場状態(良・稍重など)での『1着-2着-3着-着外』", "record"),
+    "same_dist_top3_rate": ("今回の距離帯で3着以内に来た割合。高いほど良い", "high"),
+    "last5": ("近5走の着順(左が新しい)。小さい数字が並ぶほど好調", "last5"),
+    "avg_finish_5": ("近5走の着順の平均。小さいほど良い", "low"),
+    "time_diff_5": ("近5走の、勝ち馬とのタイム差(秒)の平均。小さいほど良い", "low"),
+    "l3f_rank_3": ("過去3走の上がり3Fの順位 ÷ 頭数の平均。小さいほど末脚が速い", "low"),
+    "rotation": ("前走からの間隔と、休み明けから何戦目か", None),
+    "days_since_last": ("前走からの日数", None),
+    "jockey": ("今回の騎手", None),
+    "jockey_rank": ("今年の勝利数の順位。小さいほど上位の騎手", "low"),
+    "jockey_wins_year": ("今年1月から前日までの勝利数。多いほど良い", "high"),
+    "jockey_ct_top3_rate": ("騎手の、今回と同じ芝/ダートでの3着内率。高いほど良い", "high"),
+    "jockey_dist_top3_rate": ("騎手の、今回の距離帯での3着内率。高いほど良い", "high"),
+    "jockey_venue_top3_rate": ("騎手の、今回の競馬場での3着内率。高いほど良い", "high"),
+    "pair_n": ("この馬に、この騎手が乗った回数", None),
+    "pair_top3_rate": ("この馬とこの騎手の組み合わせでの3着内率。高いほど良い", "high"),
+    "jockey_change": ("前走と騎手が変わったか", None),
+    "tj_n": ("この厩舎の馬に、この騎手が乗った回数", None),
+    "tj_top3_rate": ("この厩舎×この騎手の組み合わせでの3着内率。高いほど良い", "high"),
+    "bracket": ("枠番。内外の有利不利は、コースと内有利度で変わる", None),
+    "number": ("馬番", None),
+    "inner_pos": ("馬番 ÷ 頭数。0に近いほど内、1に近いほど外", None),
+    "track_front_bias": ("直近10日の同じ競馬場・芝ダの偏り。プラスなら前に付ける馬が有利(レース共通の値)", None),
+    "track_inner_bias": ("直近10日の同じ競馬場・芝ダの偏り。プラスなら内の馬が有利(レース共通の値)", None),
+    "pace_forecast": ("メンバーの脚質構成からのペースの目安(レース共通)", None),
+    "n_front_runners": ("逃げ・先行寄りの馬の数(レース共通)。多いとペースが速くなりやすい", None),
+    "class_change": ("前走からのクラスの変化。マイナスは格下げ(降級)で有利、プラスは昇級", "low"),
+    "distance_change": ("前走からの距離の変化(m)。プラスは延長、マイナスは短縮", None),
+    "dist_note": ("前走から300m以上の距離短縮・延長", None),
+    "win_odds": ("単勝オッズ(倍)。低いほど人気=勝つと見られている", "low"),
+    "popularity": ("単勝の人気順。小さいほど人気", "low"),
+    "jockey_roi": ("騎手の単勝を買い続けたときの回収率(倍)。1を超えるほど人気以上に走らせていて妙味がある", "high"),
+    "prev_pop_gap": ("前走の人気 − 着順。プラスが大きいほど人気以上に走った", "high"),
+    "sire": ("父", None),
+    "damsire": ("母の父", None),
+    "sire_line": ("父の系統", None),
+    "sire_top3_rate": ("父の産駒が3着以内に来た割合。高いほど良い", "high"),
+    "sire_ctdist_top3_rate": ("父の産駒の、今回と同じ芝ダ×距離帯での3着内率。高いほど良い", "high"),
+    "sire_ground_top3_rate": ("父の産駒の、今回と同じ芝ダ×馬場状態での3着内率。高いほど良い", "high"),
+    "damsire_top3_rate": ("母の父の産駒が3着以内に来た割合。高いほど良い", "high"),
+    "damsire_ctdist_top3_rate": ("母の父の産駒の、今回と同じ芝ダ×距離帯での3着内率。高いほど良い", "high"),
+    "prev_pace_diff": ("前走の前半3F − 後半3F(秒)。プラスはスロー寄り、マイナスはハイペース寄り", None),
+    "pace_diff_3": ("過去3走のペース差の平均。どんなペースを走ってきたか", None),
+    "l3f_vs_lap_3": ("自分の上がり3F − レース全体の後半3F(3走平均・秒)。マイナスが大きいほど周りより速く上がった", "low"),
+}
+
+GOOD_LABEL = {"high": "高いほど良い", "low": "低いほど良い", "near0": "0に近いほど良い",
+              "record": "3着内の回数が多いほど良い", "last5": "小さい着順が多いほど良い"}
+
+
+def _good_score(values: pd.Series, good: str) -> pd.Series:
+    """大きいほど良い、に揃えた点数。比べられない値は NaN。"""
+    if good == "high":
+        return pd.to_numeric(values, errors="coerce")
+    if good == "low":
+        return -pd.to_numeric(values, errors="coerce")
+    if good == "near0":
+        return -pd.to_numeric(values, errors="coerce").abs()
+    if good == "record":
+        def rec(v):
+            try:
+                a, b, c, _ = (int(x) for x in str(v).split("-"))
+            except ValueError:
+                return np.nan
+            top3 = a + b + c
+            return top3 + a / 100 + b / 10000 if top3 else np.nan  # 3着内の回数、同じなら1着・2着の多い順
+        return values.map(rec)
+    if good == "last5":
+        def avg(v):
+            nums = [int(x) for x in str(v).split("-") if x.isdigit()]
+            return -sum(nums) / len(nums) if nums else np.nan
+        return values.map(avg)
+    return pd.Series(np.nan, index=values.index)
+
+
+def top_rank(values: pd.Series, good: str | None, n: int = 5) -> pd.Series:
+    """良い値の順位(1が最良)。上位 n 頭(同じ値は同順位)だけ入り、ほかは NaN。
+
+    頭数が少ないときは半分まで。全馬が同じ値なら、差がないので順位をつけない。
+    """
+    if good is None:
+        return pd.Series(np.nan, index=values.index)
+    score = _good_score(values, good)
+    known = score.dropna()
+    if known.nunique() < 2:
+        return pd.Series(np.nan, index=values.index)
+    n = min(n, -(-len(known) // 2))
+    rank = score.rank(method="min", ascending=False)
+    return rank.where(rank <= n)
+
 
 STYLES = ["逃げ", "先行", "差し", "追込"]
 
