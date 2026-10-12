@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import html
 from pathlib import Path
 
 import altair as alt
@@ -247,6 +248,12 @@ PRED_COLUMNS = {
     "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f"),
     "ev_market": st.column_config.NumberColumn("期待値(オッズ込)", format="%.2f"),
 }
+ENTRY_COLUMNS = {
+    "bracket": st.column_config.NumberColumn("枠", format="%d"),
+    "number": PRED_COLUMNS["number"], "horse_name": "馬名", "sex_age": "性齢",
+    "weight_carried": st.column_config.NumberColumn("斤量", format="%.1f"), "jockey": "騎手",
+    "win_odds": PRED_COLUMNS["win_odds"], "popularity": PRED_COLUMNS["popularity"],
+}
 
 
 def page_predict() -> None:
@@ -295,29 +302,66 @@ def page_predict() -> None:
         except ValueError as e:
             st.error(str(e))
 
-    if "prediction" not in st.session_state:
-        return
-    when, table = st.session_state["prediction"]
-    if when != date:
-        st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
-        return
+    table = None
+    if "prediction" in st.session_state:
+        when, table = st.session_state["prediction"]
+        if when != date:
+            st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
+            table = None
 
-    st.subheader("期待値の高い馬", anchor=False)
-    key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
-    top = table.dropna(subset=[key]).nlargest(8, key)
-    with st.container(border=True):
-        st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
-            ["race", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]],
-            hide_index=True, width="stretch", column_config={**PRED_COLUMNS, "race": "レース"})
-        st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
-                   "過去のレースでの検証はこれからで、今は参考表示です。")
+    if table is not None:
+        st.subheader("期待値の高い馬", anchor=False)
+        key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
+        top = table.dropna(subset=[key]).nlargest(8, key)
+        with st.container(border=True):
+            st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
+                ["race", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]],
+                hide_index=True, width="stretch", column_config={**PRED_COLUMNS, "race": "レース"})
+            st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
+                       "過去のレースでの検証はこれからで、今は参考表示です。")
 
-    st.subheader("レース別", anchor=False)
-    races = table.drop_duplicates("race_id")
-    labels = {r.race_id: f"{r.venue}{int(r.round)}R {r.race_name or ''}" for r in races.itertuples()}
-    race_id = st.selectbox("レース", list(labels), format_func=labels.get)
-    one = table[table["race_id"] == race_id].sort_values("number")
-    st.dataframe(one[list(PRED_COLUMNS)], hide_index=True, width="stretch", column_config=PRED_COLUMNS)
+    races = gui.day_races(conn, date.isoformat())
+    if not races.empty:
+        st.subheader("出馬表" if table is None else "レース別", anchor=False)
+        race_board(conn, races, table, key=date.isoformat())
+
+
+# 枠番の色(JRA の帽子の色)
+BRACKET_COLORS = {1: ("#ffffff", "#222222"), 2: ("#222222", "#ffffff"), 3: ("#e8383d", "#ffffff"),
+                  4: ("#2f6fdb", "#ffffff"), 5: ("#ffd400", "#222222"), 6: ("#2e9e5b", "#ffffff"),
+                  7: ("#f39800", "#222222"), 8: ("#f19ec2", "#222222")}
+
+
+def bracket_color(b) -> str:
+    bg, fg = BRACKET_COLORS.get(b, (None, None))
+    return f"background-color: {bg}; color: {fg}; text-align: center" if bg else ""
+
+
+def race_board(conn, races, prediction, key: str) -> None:
+    """競馬場のタブと 1R〜12R のボタンでレースを選び、その出馬表を出す(netkeiba のレース一覧に近い形)。"""
+    venues = list(dict.fromkeys(races["venue"]))
+    with st.container(key="venue_tabs"):
+        venue = st.segmented_control("競馬場", venues, default=venues[0], key=f"venue_{key}",
+                                     label_visibility="collapsed", width="stretch") or venues[0]
+    here = races[races["venue"] == venue]
+    rounds = here["round"].astype(int).tolist()
+    with st.container(border=True, key="race_board"):
+        with st.container(key="round_grid"):
+            rnd = st.segmented_control("レース", rounds, default=rounds[0], format_func=lambda r: f"{r}R",
+                                       key=f"round_{key}_{venue}", label_visibility="collapsed",
+                                       width="stretch") or rounds[0]
+        race = here[here["round"] == rnd].iloc[0]
+        meta = [f"{race.course_type or ''}{race.distance}m" if race.distance else None, race.ground,
+                f"{race.start_time} 発走" if race.start_time else None, f"{race.runners}頭"]
+        st.html(f'<div class="kb-race-head"><span class="kb-race-no">{rnd}R</span>'
+                f'<span class="kb-race-name">{html.escape(race["name"] or "")}</span></div>'
+                f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
+        cols = {**ENTRY_COLUMNS, **(PRED_COLUMNS if prediction is not None else {})}
+        one = gui.race_entries(conn, race["race_id"], prediction)
+        st.dataframe(one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"]),
+                     hide_index=True, width="stretch", column_config=cols)
+        if prediction is None:
+            st.caption(":material/info: 「予想する」を押すと、勝率と期待値の列が加わります。")
 
 
 # ---------------------------------------------------------------- 設定
