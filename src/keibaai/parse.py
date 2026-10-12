@@ -27,6 +27,9 @@ class Race:
     weather: str | None = None
     ground: str | None = None  # 良 / 稍重 / 重 / 不良
     start_time: str | None = None
+    lap_times: str | None = None  # 200m ごとのラップ('12.7 - 11.4 - ...')
+    pace_first3f: float | None = None  # 前半3ハロン
+    pace_last3f: float | None = None  # 後半3ハロン
 
 
 @dataclass
@@ -124,7 +127,27 @@ def _parse_race_info(soup: BeautifulSoup, race_id: str) -> Race:
     small = soup.select_one("p.smalltxt")
     if small and (m := re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", small.get_text())):
         race.date = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    _parse_lap(soup, race)
     return race
+
+
+def _parse_lap(soup: BeautifulSoup, race: Race) -> None:
+    """ラップタイムの表(summary='ラップタイム')から、ラップと前後半3ハロンを取る。無いレースもある。"""
+    table = soup.find("table", attrs={"summary": "ラップタイム"})
+    if table is None:
+        return
+    for tr in table.find_all("tr"):
+        th, td = tr.find("th"), tr.find("td")
+        if th is None or td is None:
+            continue
+        label, text = _squash(th.get_text()), td.get_text(" ", strip=True).replace("\xa0", " ")
+        if label == "ラップ":
+            race.lap_times = _squash(text) or None
+        elif label == "ペース" and (m := re.search(r"\((\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\)", text)):
+            race.pace_first3f, race.pace_last3f = float(m.group(1)), float(m.group(2))
+    laps = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", race.lap_times or "")]
+    if race.pace_first3f is None and len(laps) >= 6:  # 括弧の表記がないときは、ラップから足す
+        race.pace_first3f, race.pace_last3f = round(sum(laps[:3]), 1), round(sum(laps[-3:]), 1)
 
 
 # ヘッダー(空白除去後) -> Result の属性。プレミアム限定列などは無視する。
