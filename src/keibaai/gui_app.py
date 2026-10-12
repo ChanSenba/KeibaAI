@@ -257,6 +257,8 @@ PRED_COLUMNS = {
                                                    help="騎手と調教師の成績・乗り替わりだけで見た勝率"),
     "p_win_track": st.column_config.ProgressColumn("展開・馬場", min_value=0, max_value=1, format="percent",
                                                    help="枠順・脚質・直近の馬場の偏り(先行/内有利)だけで見た勝率"),
+    "p_win_pedigree": st.column_config.ProgressColumn("血統", min_value=0, max_value=1, format="percent",
+                                                      help="父・母の父の産駒の、同じ条件での過去の成績だけで見た勝率(血統を取得した馬のみ)"),
     "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f"),
     "ev_market": st.column_config.NumberColumn("期待値(オッズ込)", format="%.2f"),
 }

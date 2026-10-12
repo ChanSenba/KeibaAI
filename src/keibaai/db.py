@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS races (
     race_id TEXT PRIMARY KEY,
     name TEXT, date TEXT, venue TEXT, round INTEGER,
     course_type TEXT, direction TEXT, distance INTEGER,
-    weather TEXT, ground TEXT, start_time TEXT
+    weather TEXT, ground TEXT, start_time TEXT,
+    lap_times TEXT, pace_first3f REAL, pace_last3f REAL
 );
 CREATE TABLE IF NOT EXISTS results (
     race_id TEXT NOT NULL REFERENCES races(race_id),
@@ -48,6 +49,12 @@ CREATE TABLE IF NOT EXISTS predictions (
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL,
     PRIMARY KEY (race_id, number)
 );
+-- 血統(父・母・母の父)。馬ごとに1回取得する
+CREATE TABLE IF NOT EXISTS pedigree (
+    horse_id TEXT PRIMARY KEY,
+    sire_id TEXT, sire TEXT, dam_id TEXT, dam TEXT, damsire_id TEXT, damsire TEXT,
+    sire_sire_id TEXT, sire_sire TEXT, sire_line TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_results_horse ON results(horse_id);
 CREATE INDEX IF NOT EXISTS idx_races_date ON races(date);
 """
@@ -59,7 +66,21 @@ def connect(path: str | Path) -> sqlite3.Connection:
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+    _add_missing_columns(conn)
     return conn
+
+
+# 後から増えた列。作成済みの DB にも足す
+_ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("pace_last3f", "REAL")]}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, cols in _ADDED_COLUMNS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, typ in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+    conn.commit()
 
 
 def _upsert(conn: sqlite3.Connection, table: str, cls, obj) -> None:

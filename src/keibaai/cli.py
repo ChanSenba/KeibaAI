@@ -92,6 +92,10 @@ def main(argv=None) -> None:
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
     e.add_argument("--cache", default="data/cache")
+    pd_ = sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
+    pd_.add_argument("--db", default="data/keiba.db")
+    pd_.add_argument("--cache", default="data/cache")
+    pd_.add_argument("--limit", type=int, default=0, help="この頭数で止める(0なら全部)。まず試すとき用")
     fa = sub.add_parser("factors", help="要素(馬の質・騎手と厩舎・展開と馬場)ごとの予想の当たりやすさを比べる")
     fa.add_argument("--test-from", required=True, help="この日以後で評価する(YYYY-MM-DD)")
     fa.add_argument("--db", default="data/keiba.db")
@@ -114,13 +118,23 @@ def main(argv=None) -> None:
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
-    if args.cmd in ("entries", "collect", "weekly"):
+    if args.cmd in ("entries", "collect", "weekly", "pedigree"):
         warn_if_race_time()
     if args.cmd == "entries":
         from .predict import fetch_entries
 
         n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
+        return
+    if args.cmd == "pedigree":
+        from .pedigree import collect_pedigrees, pending_horse_ids
+
+        conn = db.connect(args.db)
+        todo = len(pending_horse_ids(conn))
+        todo = min(todo, args.limit) if args.limit else todo
+        print(f"血統が未取得の馬: {todo}頭(1頭 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
+        n = collect_pedigrees(conn, Fetcher(cache_dir=args.cache), args.limit)
+        print(f"done: {n} horses")
         return
     if args.cmd == "weekly":
         from .weekly import run_weekly
@@ -165,7 +179,7 @@ def main(argv=None) -> None:
                                    "win_odds": "オッズ", "p_win_ability": "勝率(能力)",
                                    "p_win_market": "勝率(オッズ込)", "ev_ability": "期待値(能力)",
                                    "ev_market": "期待値(オッズ込)", "p_win_quality": "馬の質", "p_win_fit": "適性", "p_win_rotation": "ローテ",
-                                   "p_win_human": "騎手厩舎", "p_win_track": "展開馬場"})
+                                   "p_win_human": "騎手厩舎", "p_win_track": "展開馬場", "p_win_pedigree": "血統"})
         print(show.drop(columns=["race_id", "date", "race_name", "jockey", "popularity"]).to_string(
             index=False, float_format=lambda x: f"{x:.2f}"))
         return

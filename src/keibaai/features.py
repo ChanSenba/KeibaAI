@@ -31,7 +31,13 @@ HUMAN_EXTRA = ["jockey_ct_top3_rate", "jockey_dist_top3_rate", "jockey_venue_top
                "pair_n", "pair_top3_rate", "tj_n", "tj_top3_rate"]
 PACE_FEATURES = ["style_front_rate", "style_closer_rate", "n_front_runners", "front_share", "field_style_mean",
                  "style_vs_field", "inner_pos"]
-ARTICLE_FEATURES = APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
+# ラップ: 過去のレースのペース(前半3F − 後半3F。正なら後傾=スロー)と、自分の上がりが場のラップよりどれだけ速かったか
+LAP_FEATURES = ["prev_pace_diff", "pace_diff_3", "l3f_vs_lap_3"]
+# 血統: 父・母の父の産駒が、同じ条件でこれまでどれだけ3着以内に来たか(結果は「そのレースより前」だけ)
+PEDIGREE_FEATURES = ["sire_n", "sire_top3_rate", "sire_ctdist_top3_rate", "sire_ground_top3_rate",
+                     "damsire_n", "damsire_top3_rate", "damsire_ctdist_top3_rate"]
+ARTICLE_FEATURES = (APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
+                    + LAP_FEATURES + PEDIGREE_FEATURES)
 BIAS_FEATURES = ["track_front_bias", "track_inner_bias"]  # トラックバイアス(下の _track_bias)
 BIAS_WINDOW = "10D"
 
@@ -39,8 +45,10 @@ BIAS_WINDOW = "10D"
 def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
-        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground
-        FROM results r JOIN races c USING (race_id)
+        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground,
+               c.pace_first3f, c.pace_last3f,
+               p.sire_id, p.damsire_id
+        FROM results r JOIN races c USING (race_id) LEFT JOIN pedigree p USING (horse_id)
         WHERE r.finish IS NOT NULL AND c.date IS NOT NULL
         """,
         conn,
@@ -135,7 +143,7 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     """記事にあるファクターのうち、結果表だけから作れるもの(適性・内容・ローテーション・騎手・ペース)。"""
     h = df["horse_id"]
     g = df.groupby("horse_id", sort=False)
-    for c in ("direction",):
+    for c in ("direction", "pace_first3f", "pace_last3f", "sire_id", "damsire_id"):
         if c not in df:
             df[c] = np.nan
 
@@ -189,7 +197,23 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["field_style_mean"] = df.groupby("race_id")["early_pos_rel_3"].transform("mean")
     df["style_vs_field"] = df["early_pos_rel_3"] - df["field_style_mean"]
     df["inner_pos"] = df["number"] / df["field_size"]
-    return df.drop(columns=["dist_bucket_s", "_ret", "l3f_rank_rel", "time_diff", "pos_gain"])
+
+    # --- ラップ: 過去のレースのペースと、自分の上がりが場の後半3Fよりどれだけ速かったか ---
+    for c in ("pace_first3f", "pace_last3f"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")  # DB の NULL は object で来る
+    df["pace_diff"] = df["pace_first3f"] - df["pace_last3f"]
+    df["l3f_vs_lap"] = df["last3f"] - df["pace_last3f"]
+    df["prev_pace_diff"] = g["pace_diff"].shift(1)
+    df["pace_diff_3"] = _prior_mean(df["pace_diff"], h, 3)
+    df["l3f_vs_lap_3"] = _prior_mean(df["l3f_vs_lap"], h, 3)
+
+    # --- 血統: 父・母の父の産駒の過去成績(同じ日の他レースは含めない) ---
+    df["sire_n"], df["sire_top3_rate"] = _expanding_rate(df, "sire_id", "top3")
+    df["sire_ctdist_top3_rate"] = _expanding_rate(df, ["sire_id", "course_type", "dist_bucket_s"], "top3")[1]
+    df["sire_ground_top3_rate"] = _expanding_rate(df, ["sire_id", "course_type", "ground"], "top3")[1]
+    df["damsire_n"], df["damsire_top3_rate"] = _expanding_rate(df, "damsire_id", "top3")
+    df["damsire_ctdist_top3_rate"] = _expanding_rate(df, ["damsire_id", "course_type", "dist_bucket_s"], "top3")[1]
+    return df.drop(columns=["dist_bucket_s", "_ret", "l3f_rank_rel", "time_diff", "pos_gain", "pace_diff", "l3f_vs_lap"])
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
