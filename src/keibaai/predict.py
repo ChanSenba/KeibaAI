@@ -33,6 +33,9 @@ def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime
         except ValueError as e:
             print(f"skip {race_id}: {e}")
             continue
+        if not parsed.entries:  # 馬番の確定前(特別登録の段階)は馬が1頭もいない。保存せず、取得済みにもしない
+            print(f"skip {race_id}: 出馬表がまだ確定していません(0頭)")
+            continue
         if not parsed.race.date:
             parsed.race.date = date
         try:

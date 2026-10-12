@@ -140,3 +140,17 @@ def test_predict_day_uses_only_earlier_results():
 def test_predict_day_without_entries():
     with pytest.raises(ValueError):
         predict_day(synthetic_db(n_days=5), "2030-01-05")
+
+
+def test_fetch_entries_skips_race_without_horses_yet(capsys):
+    """馬番が決まる前のページ(馬が0頭)は保存しない。保存すると「取得済み」に見えてしまう。"""
+    empty = "<html><body><table><tr><th>馬番</th><th>馬名</th></tr></table></body></html>"
+
+    class F(FakeFetcher):
+        def shutuba_html(self, race_id):
+            return SHUTUBA if race_id == "202405050812" else empty
+
+    conn = db.connect(":memory:")
+    n = fetch_entries(conn, F(["202405050812", "202405050811"]), "2024-11-24", now=dt.datetime(2024, 11, 23))
+    assert n == 1 and conn.execute("SELECT COUNT(*) FROM entry_races").fetchone()[0] == 1
+    assert "確定していません" in capsys.readouterr().out

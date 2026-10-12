@@ -96,3 +96,5 @@ def test_cli_bets_runs_end_to_end(tmp_path, monkeypatch, capsys):
     assert "混ぜ方" in out and ("見送り" in out or "期待回収率" in out)
     with pytest.raises(SystemExit):
         cli.main(["bets", "--date", "2030-01-05", "--race-id", "nope", "--db", str(path)])
+    with pytest.raises(SystemExit, match="出馬表がありません"):  # トレースバックではなくメッセージだけで終わる
+        cli.main(["bets", "--date", "2031-01-05", "--race-id", "nope", "--db", str(path)])
