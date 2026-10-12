@@ -14,6 +14,7 @@ import pandas as pd
 
 from . import db
 from .cli import collect_day, daterange
+from .parse import VENUES
 
 def summary(conn: sqlite3.Connection) -> dict:
     """取得済みデータの件数と期間。"""
@@ -134,14 +135,53 @@ def race_entries(conn: sqlite3.Connection, race_id: str, prediction: pd.DataFram
     )
     if prediction is not None:
         cols = ["number", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
+        cols += ["mark"] if "mark" in prediction else []
         df = df.merge(prediction.loc[prediction["race_id"] == race_id, cols], on="number", how="left")
     return df
 
 
-def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None) -> int:
+def race_choices(conn: sqlite3.Connection, date: str, listed_ids=()) -> pd.DataFrame:
+    """1レースだけ取得・予想するときの選択肢。取得済みのレースと、レース一覧で知ったレースを合わせる。
+
+    出馬表を取る前は名前がわからないので、競馬場とレース番号は race_id(年・場・回・日・R)から読む。
+    """
+    fetched = set(day_races(conn, date)["race_id"])
+    ids = sorted(fetched | set(listed_ids), key=lambda r: (r[4:6], r[10:12]))
+    return pd.DataFrame(
+        [{"race_id": r, "venue": VENUES.get(r[4:6], r[4:6]), "round": int(r[10:12]), "fetched": r in fetched}
+         for r in ids],
+        columns=["race_id", "venue", "round", "fetched"],
+    )
+
+
+def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None, race_ids: list[str] | None = None) -> int:
     from .predict import fetch_entries
 
-    return fetch_entries(conn, fetcher, date.isoformat(), on_race=on_race)
+    return fetch_entries(conn, fetcher, date.isoformat(), on_race=on_race, race_ids=race_ids)
+
+
+MARKS = ["◎", "○", "▲"]
+
+
+def add_marks(table: pd.DataFrame) -> pd.DataFrame:
+    """予想印(mark 列)を付ける。予想の中身には手を入れず、出た勝率と期待値から決める。
+
+    レースごとに、勝率の高い順に ◎ ○ ▲、続く 2 頭に △(9 頭立て以下は 1 頭)。
+    勝率はオッズ込みを使い、そのレースにオッズがなければ能力のみを使う。
+    印のない馬のうち、能力のみの期待値がいちばん高く 1 以上の馬に ☆(穴)。
+    """
+    out = table.copy()
+    out["mark"] = ""
+    for _, g in out.groupby("race_id", sort=False):
+        p = "p_win_market" if g["p_win_market"].notna().all() else "p_win_ability"
+        ranked = g[p].dropna().sort_values(ascending=False, kind="stable").index
+        n_marked = len(MARKS) + (2 if len(g) >= 10 else 1)
+        top = list(ranked[:n_marked])
+        out.loc[top, "mark"] = (MARKS + ["△", "△"])[:len(top)]
+        rest = g.drop(top)["ev_ability"].dropna()
+        if not rest.empty and rest.max() >= 1:
+            out.loc[rest.idxmax(), "mark"] = "☆"
+    return out
 
 
 def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:

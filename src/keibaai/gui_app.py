@@ -240,6 +240,7 @@ def page_train() -> None:
 
 # ---------------------------------------------------------------- 予想
 PRED_COLUMNS = {
+    "mark": st.column_config.TextColumn("印", width="small"),
     "number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", "jockey": "騎手",
     "popularity": st.column_config.NumberColumn("人気", format="%d"),
     "win_odds": st.column_config.NumberColumn("単勝", format="%.1f"),
@@ -256,9 +257,12 @@ ENTRY_COLUMNS = {
 }
 
 
+SCOPES = ["その日の全レース", "1レースだけ"]
+
+
 def page_predict() -> None:
     header("Predict", "予想",
-           "これから走るレースの出馬表とオッズを取得し、各馬の勝率と期待値を表示します。")
+           "これから走るレースの出馬表とオッズを取得し、各馬の勝率・期待値と予想印を表示します。")
     today = dt.date.today()
     conn = connection()
     with st.container(border=True):
@@ -269,36 +273,29 @@ def page_predict() -> None:
                        f"(オッズあり {info['with_odds']} 頭) ・ 取得 {info['fetched_at']}")
         else:
             st.caption(":material/info: この日の出馬表はまだ取得していません")
-        c1, c2 = st.columns(2)
-        fetch = c1.button("出馬表とオッズを取得", icon=":material/download:", width="stretch")
-        predict = c2.button("予想する", type="primary", icon=":material/insights:", width="stretch",
-                            disabled=info["races"] == 0)
+        single = st.segmented_control("範囲", SCOPES, default=SCOPES[0], key="pred_scope",
+                                      width="stretch") == SCOPES[1]
+        if not single:
+            c1, c2 = st.columns(2)
+            fetch = c1.button("全レースの出馬表とオッズを取得", icon=":material/download:", width="stretch")
+            predict = c2.button("予想する", type="primary", icon=":material/insights:", width="stretch",
+                                disabled=info["races"] == 0)
+
+    picked = None
+    if single:
+        picked, fetch, predict = single_race_controls(conn, date)
+        if picked is None:
+            return
     st.caption(":material/info: 取得には1レースあたり数秒かかります。オッズは発売開始後に出ます。"
                "オッズが更新されたら、もう一度取得してください。")
 
     if fetch:
-        with st.status("取得しています…", expanded=True) as status:
-            bar = st.progress(0.0)
-            log = LogBox()
-
-            def on_race(i, n, race_id):
-                bar.progress(i / n if n else 1.0, f"{i + 1}/{n} レース")
-
-            try:
-                with contextlib.redirect_stdout(log):
-                    n = gui.fetch_entries_for(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), date, on_race)
-            except Exception as e:
-                status.update(label="取得が止まりました", state="error")
-                st.error(str(e))
-            else:
-                bar.progress(1.0, "完了")
-                status.update(label=f"完了しました。{n} レースの出馬表を保存しました", state="complete")
-                st.rerun() if n else None
+        fetch_entries(conn, date, None if picked is None else [picked["race_id"]])
 
     if predict:
         try:
             with st.spinner("学習して予想しています(数分かかります)"):
-                st.session_state["prediction"] = (date, gui.predict_table(conn, date))
+                st.session_state["prediction"] = (date, gui.add_marks(gui.predict_table(conn, date)))
         except ValueError as e:
             st.error(str(e))
 
@@ -308,6 +305,16 @@ def page_predict() -> None:
         if when != date:
             st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
             table = None
+    if table is not None and picked is not None and picked["race_id"] not in set(table["race_id"]):
+        table = None  # 予想のあとで取得したレースは、もう一度「予想する」まで予想がない
+
+    if picked is not None:
+        if picked["fetched"]:
+            st.subheader("出馬表", anchor=False)
+            with st.container(border=True):
+                race_detail(conn, gui.day_races(conn, date.isoformat()).set_index("race_id").loc[picked["race_id"]],
+                            picked["race_id"], table)
+        return
 
     if table is not None:
         st.subheader("期待値の高い馬", anchor=False)
@@ -315,7 +322,8 @@ def page_predict() -> None:
         top = table.dropna(subset=[key]).nlargest(8, key)
         with st.container(border=True):
             st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
-                ["race", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]],
+                ["race", "mark", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market",
+                 "ev_ability", "ev_market"]].style.map(mark_style, subset=["mark"]),
                 hide_index=True, width="stretch", column_config={**PRED_COLUMNS, "race": "レース"})
             st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
                        "過去のレースでの検証はこれからで、今は参考表示です。")
@@ -323,7 +331,63 @@ def page_predict() -> None:
     races = gui.day_races(conn, date.isoformat())
     if not races.empty:
         st.subheader("出馬表" if table is None else "レース別", anchor=False)
-        race_board(conn, races, table, key=date.isoformat())
+        race, box = race_picker(races, key=f"board_{date}")
+        with box:
+            race_detail(conn, race, race["race_id"], table)
+
+
+def single_race_controls(conn, date: dt.date):
+    """1レースだけのとき: レースを選ぶ欄と、そのレースの取得・予想ボタン。選んだレースと押されたボタンを返す。"""
+    listed = st.session_state.setdefault("race_lists", {}).get(date.isoformat(), [])
+    choices = gui.race_choices(conn, date.isoformat(), listed)
+    if choices.empty:
+        with st.container(border=True):
+            st.caption(":material/info: この日のレース一覧をまだ読み込んでいません。")
+            if st.button("レース一覧を読み込む", icon=":material/list:", type="primary"):
+                with st.spinner("レース一覧を読み込んでいます"):
+                    try:
+                        ids = Fetcher(cache_dir=st.session_state["cache_dir"]).race_ids_on(date.strftime("%Y%m%d"))
+                    except Exception as e:
+                        st.error(str(e))
+                        return None, False, False
+                if not ids:
+                    st.warning("この日のレースは見つかりませんでした。")
+                    return None, False, False
+                st.session_state["race_lists"][date.isoformat()] = ids
+                st.rerun()
+        return None, False, False
+    picked, box = race_picker(choices, key=f"pick_{date}")
+    with box:
+        if picked["fetched"]:
+            st.caption(f":material/check_circle: {picked['venue']}{picked['round']}R の出馬表は取得済みです")
+        else:
+            st.caption(f":material/info: {picked['venue']}{picked['round']}R の出馬表はまだ取得していません")
+        c1, c2 = st.columns(2)
+        fetch = c1.button("このレースの出馬表とオッズを取得", icon=":material/download:", width="stretch")
+        predict = c2.button("このレースを予想", type="primary", icon=":material/insights:", width="stretch",
+                            disabled=not picked["fetched"])
+    return picked, fetch, predict
+
+
+def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
+    with st.status("取得しています…", expanded=True) as status:
+        bar = st.progress(0.0)
+        log = LogBox()
+
+        def on_race(i, n, race_id):
+            bar.progress(i / n if n else 1.0, f"{i + 1}/{n} レース")
+
+        try:
+            with contextlib.redirect_stdout(log):
+                n = gui.fetch_entries_for(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), date, on_race,
+                                          race_ids)
+        except Exception as e:
+            status.update(label="取得が止まりました", state="error")
+            st.error(str(e))
+        else:
+            bar.progress(1.0, "完了")
+            status.update(label=f"完了しました。{n} レースの出馬表を保存しました", state="complete")
+            st.rerun() if n else None
 
 
 # 枠番の色(JRA の帽子の色)
@@ -337,31 +401,56 @@ def bracket_color(b) -> str:
     return f"background-color: {bg}; color: {fg}; text-align: center" if bg else ""
 
 
-def race_board(conn, races, prediction, key: str) -> None:
-    """競馬場のタブと 1R〜12R のボタンでレースを選び、その出馬表を出す(netkeiba のレース一覧に近い形)。"""
+def mark_style(m) -> str:
+    return "font-weight: 700; text-align: center" if m else ""
+
+
+def race_picker(races, key: str):
+    """競馬場のタブと 1R〜12R のボタンでレースを選ぶ(netkeiba のレース一覧に近い形)。
+
+    選んだレースの行と、ボタンの下に続きを書ける枠を返す。
+    """
     venues = list(dict.fromkeys(races["venue"]))
     with st.container(key="venue_tabs"):
         venue = st.segmented_control("競馬場", venues, default=venues[0], key=f"venue_{key}",
                                      label_visibility="collapsed", width="stretch") or venues[0]
     here = races[races["venue"] == venue]
     rounds = here["round"].astype(int).tolist()
-    with st.container(border=True, key="race_board"):
-        with st.container(key="round_grid"):
-            rnd = st.segmented_control("レース", rounds, default=rounds[0], format_func=lambda r: f"{r}R",
-                                       key=f"round_{key}_{venue}", label_visibility="collapsed",
-                                       width="stretch") or rounds[0]
-        race = here[here["round"] == rnd].iloc[0]
-        meta = [f"{race.course_type or ''}{race.distance}m" if race.distance else None, race.ground,
-                f"{race.start_time} 発走" if race.start_time else None, f"{race.runners}頭"]
-        st.html(f'<div class="kb-race-head"><span class="kb-race-no">{rnd}R</span>'
-                f'<span class="kb-race-name">{html.escape(race["name"] or "")}</span></div>'
-                f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
-        cols = {**ENTRY_COLUMNS, **(PRED_COLUMNS if prediction is not None else {})}
-        one = gui.race_entries(conn, race["race_id"], prediction)
-        st.dataframe(one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"]),
-                     hide_index=True, width="stretch", column_config=cols)
-        if prediction is None:
-            st.caption(":material/info: 「予想する」を押すと、勝率と期待値の列が加わります。")
+    box = st.container(border=True, key="race_board")
+    with box, st.container(key="round_grid"):
+        rnd = st.segmented_control("レース", rounds, default=rounds[0], format_func=lambda r: f"{r}R",
+                                   key=f"round_{key}_{venue}", label_visibility="collapsed",
+                                   width="stretch") or rounds[0]
+    return here[here["round"] == rnd].iloc[0], box
+
+
+def race_detail(conn, race, race_id: str, prediction) -> None:
+    """レース名・条件と出馬表。予想があれば印・勝率・期待値も出す。"""
+    meta = [f"{race.course_type or ''}{race.distance}m" if race.distance else None, race.ground,
+            f"{race.start_time} 発走" if race.start_time else None, f"{race.runners}頭"]
+    st.html(f'<div class="kb-race-head"><span class="kb-race-no">{int(race["round"])}R</span>'
+            f'<span class="kb-race-name">{html.escape(race["name"] or "")}</span></div>'
+            f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
+    one = gui.race_entries(conn, race_id, prediction)
+    if "mark" in one:
+        marked = one[one["mark"] != ""].sort_values("mark", key=lambda m: m.map(MARK_ORDER.get))
+        st.html('<div class="kb-marks">' + "".join(
+            f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(h))}</span>'
+            for m, n, h in zip(marked["mark"], marked["number"], marked["horse_name"])) + "</div>")
+    cols = {**({"mark": PRED_COLUMNS["mark"]} if "mark" in one else {}), **ENTRY_COLUMNS,
+            **(PRED_COLUMNS if prediction is not None else {})}
+    styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
+    if "mark" in one:
+        styled = styled.map(mark_style, subset=["mark"])
+    st.dataframe(styled, hide_index=True, width="stretch", column_config=cols)
+    if prediction is None:
+        st.caption(":material/info: 「予想する」を押すと、予想印と勝率・期待値の列が加わります。")
+    else:
+        st.caption("印は勝率の高い順に ◎ ○ ▲ △(オッズがあればオッズ込み、なければ能力のみの勝率)。"
+                   "☆ は印のない馬のうち能力の期待値がいちばん高く、1 を超える穴馬です。")
+
+
+MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
 
 
 # ---------------------------------------------------------------- 設定

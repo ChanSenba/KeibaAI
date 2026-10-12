@@ -155,6 +155,20 @@ h1 { font-size: var(--kb-h1) !important; }
 .kb-race-name { font-size: clamp(1.1rem, 0.95rem + 0.6vw, 1.35rem); font-weight: 700; }
 .kb-race-meta { font-size: 0.9rem; color: var(--kb-muted); }
 
+/* 予想印の並び(◎ 7 馬名 ○ 10 馬名 …)。入りきらなければ折り返す */
+.kb-marks { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; }
+.kb-mark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--kb-line);
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.kb-mark b { color: var(--kb-accent); }
+
 /* ---- 押したときの反応とフォーカス表示 ---- */
 :is(.stButton, .stPageLink) :is(button, a):active,
 [data-variant="segmented_control"]:active {
