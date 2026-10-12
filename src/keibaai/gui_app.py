@@ -504,19 +504,44 @@ def _factor_values(db_path: str, date: str, stamp: str):
 def _factor_config(cols) -> dict:
     out = {}
     for col, label in cols:
+        info, good = factor_view.COLUMN_INFO.get(col, (None, None))
+        help_ = f"{info}({factor_view.GOOD_LABEL[good]}。上位の馬に色がつきます)" if good else info
         if col.endswith("_rate") or col.endswith("_top3_rate"):
-            out[col] = st.column_config.NumberColumn(label, format="percent")
+            out[col] = st.column_config.NumberColumn(label, format="percent", help=help_)
         elif col in ("early_pos_rel_3", "inner_pos", "weight_ratio", "l3f_rank_3", "track_front_bias", "track_inner_bias",
                      "jockey_roi", "pace_diff_3", "prev_pace_diff", "l3f_vs_lap_3", "time_diff_5", "avg_finish_5",
                      "bw_vs_avg", "weight_change", "win_odds"):
-            out[col] = st.column_config.NumberColumn(label, format="%.2f")
+            out[col] = st.column_config.NumberColumn(label, format="%.2f", help=help_)
         elif col in ("jockey_rank", "jockey_wins_year", "pair_n", "tj_n", "n_front_runners", "number", "bracket", "age",
                      "popularity", "body_weight", "body_weight_diff", "days_since_last", "distance_change", "class_change",
                      "prev_pop_gap"):
-            out[col] = st.column_config.NumberColumn(label, format="%d")
+            out[col] = st.column_config.NumberColumn(label, format="%d", help=help_)
         else:
-            out[col] = st.column_config.TextColumn(label)
+            out[col] = st.column_config.TextColumn(label, help=help_)
     return out
+
+
+def _factor_table(one, cols):
+    """各列の良い値の上位の馬に色をつける。1位は濃く、ほかは薄く。"""
+    def paint(col):
+        good = factor_view.COLUMN_INFO.get(col.name, (None, None))[1]
+        rank = factor_view.top_rank(col, good)
+        return ["" if r != r else "background-color: rgba(46, 158, 91, 0.45); font-weight: 700" if r == 1
+                else "background-color: rgba(46, 158, 91, 0.2)" for r in rank]
+    return one[[c for c, _ in cols]].style.apply(paint)
+
+
+def _factor_legend(cols) -> str:
+    """表の下に出す、各列の見方。"""
+    items = []
+    for col, label in cols:
+        info, good = factor_view.COLUMN_INFO.get(col, (None, None))
+        if not info:
+            continue
+        tag = (f'<span class="kb-fl-good">{factor_view.GOOD_LABEL[good]}</span>' if good
+               else '<span class="kb-fl-none">良し悪しなし</span>')
+        items.append(f"<li><b>{html.escape(label)}</b>{tag}<span>{html.escape(info)}</span></li>")
+    return '<ul class="kb-factor-legend">' + "".join(items) + "</ul>"
 
 
 def page_factors() -> None:
@@ -561,8 +586,10 @@ def page_factors() -> None:
                 cols.insert(2, ("jockey", "騎手"))
             cols = list(dict.fromkeys(c for c in cols if c[0] in one))
             cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols)}
-            st.dataframe(one[[c for c, _ in cols]], hide_index=True, width="stretch", column_config=cfg)
-            st.caption(section["note"])
+            st.dataframe(_factor_table(one, cols), hide_index=True, width="stretch", column_config=cfg)
+            st.caption(":material/palette: 緑の色は、その列で良い値の上位の馬です(いちばん良い馬は濃い緑)。"
+                       "良し悪しのない列には色をつけません。" + section["note"])
+            st.html(_factor_legend(cols[2:]))
 
 
 # ---------------------------------------------------------------- 買い方(1レース)
