@@ -82,6 +82,18 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
+def blend_for_day(conn: sqlite3.Connection, date: str, valid_months: int = 12):
+    """date の予想に使う、モデルとオッズの混ぜ方。date の直前 valid_months か月の結果で決める(それ以後は使わない)。"""
+    from .blend import fit_blend
+    from .model import evaluate
+
+    df, _ = day_frame(conn, date)
+    done = df[df["finish"].notna()]
+    valid_from = pd.Timestamp(date) - pd.DateOffset(months=valid_months)
+    _, valid = evaluate(done, str(valid_from.date()), use_market=False)
+    return fit_blend(valid)
+
+
 def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.DataFrame:
     """date(YYYY-MM-DD)の各馬の勝率(能力のみ / オッズ込み)と期待値(勝率×単勝オッズ)を返す。
 

@@ -544,6 +544,80 @@ def page_factors() -> None:
             st.caption(section["note"])
 
 
+# ---------------------------------------------------------------- 買い方(1レース)
+KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全部(攻めすぎ注意)": 1.0}
+
+
+def page_bets() -> None:
+    header("Bets", "買い方",
+           "指定した1レースについて、予想の確率と当日のオッズから、期待値の高い券種・買い目と金額の配分を出します。")
+    conn = connection()
+    if "prediction" not in st.session_state:
+        with st.container(border=True):
+            st.markdown("#### 先に予想が必要です")
+            st.caption("「予想」ページで日付を選び、出馬表とオッズを取得して「予想する」を押してから、ここに戻ってください。")
+        return
+    date, table = st.session_state["prediction"]
+    races = gui.day_races(conn, date.isoformat())
+    races = races[races["race_id"].isin(set(table["race_id"]))]
+    if races.empty:
+        st.info("予想のあるレースがありません。")
+        return
+    st.caption(f":material/event: {date:%Y/%m/%d} の予想を使います。")
+    race, box = race_picker(races, key=f"bets_{date}")
+    with box:
+        race_head(race)
+    c1, c2, c3 = st.columns(3)
+    bankroll = c1.number_input("使える資金(円)", 10_000, 10_000_000, 100_000, 10_000, help="配分を決める元になる資金です")
+    cap = c2.number_input("このレースの上限(円)", 100, 1_000_000, 10_000, 1_000)
+    kelly = KELLY_CHOICES[c3.selectbox("賭け方の強さ", list(KELLY_CHOICES), help="資金が長い目で最も増える配分(ケリー基準)を、どれだけ抑えるか")]
+    st.caption(":material/info: 全券種のオッズを取るので、6回アクセスします(30秒ほど)。初回は、混ぜ方を決めるのに数分かかります。")
+    if st.button("買い方を出す", type="primary", icon=":material/calculate:"):
+        try:
+            blends = st.session_state.setdefault("blends", {})
+            if date not in blends:
+                with st.spinner("モデルとオッズの混ぜ方を決めています(数分かかります)"):
+                    blends[date] = gui.blend_for(conn, date)
+            bar = st.progress(0.0, text="オッズを取得しています")
+            odds = gui.fetch_bet_odds(Fetcher(cache_dir=st.session_state["cache_dir"]), race["race_id"],
+                                      on_type=lambda i, n, t: bar.progress(i / n, text=f"オッズを取得しています({i + 1}/{n})"))
+            bar.empty()
+            plan, mixed = gui.bet_plan_for(table, race["race_id"], odds, blends[date], bankroll, cap, kelly)
+            st.session_state["bet_plan"] = (race["race_id"], plan, blends[date])
+        except (ValueError, RuntimeError) as e:
+            st.error(str(e))
+    if "bet_plan" not in st.session_state or st.session_state["bet_plan"][0] != race["race_id"]:
+        return
+    _, plan, blend = st.session_state["bet_plan"]
+    if not plan.bets:
+        st.warning(plan.note, icon=":material/block:")
+        if plan.top_ev:
+            st.caption("参考: 期待値の高かった買い目(どれも1未満)")
+            st.dataframe(gui.plan_table(plan.top_ev).drop(columns=["金額", "的中時の払戻"]), hide_index=True,
+                         width="stretch", column_config=BET_COLUMNS)
+        return
+    pct = lambda x: f"{x:.0%}"
+    stats = [("合計金額", f"{plan.total:,}円"), ("どれか的中", pct(plan.hit_prob)),
+             ("期待回収率", pct(plan.expected_return)), ("期待収支", f"{plan.expected_profit:+,.0f}円"),
+             ("全部外れたとき", f"{plan.worst:,}円")]
+    st.html('<div class="kb-stats">' + "".join(
+        f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
+    st.dataframe(gui.plan_table(plan.bets), hide_index=True, width="stretch", column_config=BET_COLUMNS)
+    st.caption("期待値 = 的中確率 × 当日オッズ。モデルの勝率とオッズの確率を混ぜた確率"
+               f"(モデル {blend.a:.2f}・オッズ {blend.b:.2f} の重み)から、1〜3着の組み合わせの確率をハーヴィルの式で出しています。"
+               "複勝とワイドは、幅のあるオッズの下限で計算しています。期待回収率は予想が当たっている前提の数字で、"
+               "実際の結果を保証するものではありません。")
+
+
+BET_COLUMNS = {
+    "オッズ": st.column_config.NumberColumn("オッズ", format="%.1f"),
+    "的中確率": st.column_config.NumberColumn("的中確率", format="percent"),
+    "期待値": st.column_config.NumberColumn("期待値", format="%.2f"),
+    "金額": st.column_config.NumberColumn("金額(円)", format="%d"),
+    "的中時の払戻": st.column_config.NumberColumn("的中時の払戻(円)", format="%d"),
+}
+
+
 # ---------------------------------------------------------------- 回顧
 def page_review() -> None:
     from keibaai import weekly
@@ -653,6 +727,7 @@ PAGES = {
     "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
     "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
+    "bets": st.Page(page_bets, title="買い方", icon=":material/calculate:", url_path="bets"),
     "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
     "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),

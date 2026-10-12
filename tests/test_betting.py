@@ -84,3 +84,20 @@ def test_unknown_numbers_and_missing_odds_are_ignored():
     odds = {"単勝": {(9,): 3.0, (1,): None}, "複勝": {(1,): 1.5}}  # 4頭立てには複勝がない
     cands, *_ = bt.candidates(NUMS, P, odds, ev_min=0.0)
     assert cands == []
+
+
+def test_henery_moves_place_probability_from_favourites_to_longshots():
+    order, prob = bt.harville_outcomes(P, bt.GAMMA_2ND, bt.GAMMA_3RD)
+    _, plain = bt.harville_outcomes(P)
+    assert np.isclose(prob.sum(), 1) and (prob > 0).all()
+    favs = bt.hits(order, "三連複", (0, 1, 2), 4)
+    longshot = bt.hits(order, "三連複", (0, 1, 3), 4)
+    assert prob[favs].sum() < plain[favs].sum() and prob[longshot].sum() > plain[longshot].sum()
+    win = bt.hits(order, "単勝", (0,), 4)
+    assert np.isclose(prob[win].sum(), 0.4)  # 1着の確率は勝率のまま
+
+
+def test_gamma_one_is_plain_harville():
+    a = bt.harville_outcomes(P)[1]
+    b = bt.harville_outcomes(P, 1.0, 1.0)[1]
+    assert np.allclose(a, b)

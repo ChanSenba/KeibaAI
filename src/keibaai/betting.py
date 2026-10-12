@@ -1,6 +1,6 @@
 """1レースの買い方を決める: 各馬の勝率と当日オッズから、期待値の高い券種・買い目と、その金額配分を出す。
 
-1. 勝率から、1〜3着の並び(3頭の順列)の確率をハーヴィルの式で作る。
+1. 勝率から、1〜3着の並び(3頭の順列)の確率を、ハーヴィルの式(人気馬の2〜3着を少し抑えたヘネリー版)で作る。
 2. 並びごとに、的中する買い目(単勝・複勝・馬連・ワイド・馬単・三連複・三連単)が決まる。
 3. 買い目の期待値 = 的中確率 × 当日オッズ。1を超えるものだけを候補にする。
 4. 候補の中から、資金が長い目で最も増える配分(ケリー基準)を求め、半分に抑えて100円単位にする。
@@ -24,10 +24,18 @@ def place_slots(n: int) -> int:
     return 3 if n >= 8 else 2 if n >= 5 else 0
 
 
-def harville_outcomes(p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+# 2着・3着を決めるときの勝率のべき乗(ヘネリー)。1ならハーヴィルそのまま。
+# ハーヴィルは、人気馬が2〜3着に来る確率を多く、人気薄を少なく見積もる傾向があると言われる。
+# 1より小さくすると、人気馬の2〜3着が減り、人気薄の2〜3着が増える。
+# 値は文献のもので、JRA の払戻で確かめたものではない。
+GAMMA_2ND, GAMMA_3RD = 0.81, 0.65
+
+
+def harville_outcomes(p: np.ndarray, g2: float = 1.0, g3: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
     """勝率 p(合計1)から、1〜3着の並び(a, b, c)ごとの確率を返す。
 
-    (並びの配列 shape=(m,3), 確率 shape=(m,))。馬が2頭なら3着はなく、2着までの並びを返す。
+    1着は勝率どおり。2着は残りの馬から p**g2 に比例、3着は残りから p**g3 に比例して決まる(g=1 でハーヴィル)。
+    (並びの配列 shape=(m,3), 確率 shape=(m,))。
     """
     p = np.asarray(p, dtype=float)
     n = len(p)
@@ -36,7 +44,8 @@ def harville_outcomes(p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     a, b, c = np.meshgrid(np.arange(n), np.arange(n), np.arange(n), indexing="ij")
     ok = (a != b) & (b != c) & (a != c)
     a, b, c = a[ok], b[ok], c[ok]
-    prob = p[a] * p[b] / (1 - p[a]) * p[c] / (1 - p[a] - p[b])
+    q2, q3 = p ** g2, p ** g3
+    prob = p[a] * q2[b] / (q2.sum() - q2[a]) * q3[c] / (q3.sum() - q3[a] - q3[b])
     return np.stack([a, b, c], axis=1), prob
 
 
@@ -93,14 +102,14 @@ def _combos(kind: str, n: int):
 
 
 def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
-               ev_min: float = 1.0) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
+               ev_min: float = 1.0, g2: float = 1.0, g3: float = 1.0) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
     """オッズのある全買い目の期待値を出し、ev_min 以上を候補にして返す。
 
     戻り値: (候補, 並び(m,3), 並びの確率(m,), 候補×並びの的中表(候補数, m))。
     numbers は馬番、p はその勝率(合計1)。odds[券種][馬番の組] = 倍率。
     """
     n = len(numbers)
-    order, prob = harville_outcomes(p)
+    order, prob = harville_outcomes(p, g2, g3)
     idx = {num: i for i, num in enumerate(numbers)}
     out, rows = [], []
     for kind in KINDS:
@@ -154,13 +163,13 @@ class Plan:
 
 def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
               bankroll: int = 100_000, cap: int = 10_000, kelly_scale: float = 0.5, ev_min: float = 1.0,
-              max_candidates: int = 300) -> Plan:
+              max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD) -> Plan:
     """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。"""
     p = np.asarray(p, dtype=float)
     p = p / p.sum()
-    bets, order, prob, hit = candidates(numbers, p, odds, ev_min)
+    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3)
     if not bets:
-        all_bets, *_ = candidates(numbers, p, odds, ev_min=0.0)
+        all_bets, *_ = candidates(numbers, p, odds, 0.0, g2, g3)
         top = sorted(all_bets, key=lambda b: -b.ev)[:5]
         return Plan([], note="見送り: 期待値が1を超える買い目がありません", top_ev=top)
     keep = np.argsort([-b.ev for b in bets])[:max_candidates]

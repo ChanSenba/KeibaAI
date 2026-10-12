@@ -16,7 +16,7 @@ RACE_URL = "https://db.netkeiba.com/race/{race_id}/"
 RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={date}"
 PEDIGREE_URL = "https://db.netkeiba.com/horse/ped/{horse_id}/"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
-ODDS_URL = "https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={race_id}&type=1&action=init"
+ODDS_URL = "https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={race_id}&type={odds_type}&action=init"
 MIN_INTERVAL_SEC = 3.0  # サーバーに負荷をかけないための下限
 JITTER_SEC = 2.0  # 3〜5秒の間でばらつかせ、アクセスが一定の拍で集中しないようにする
 
@@ -108,9 +108,10 @@ class Fetcher:
             raise PageUnavailable(f"出馬表のないページです: {race_id}")
         return html
 
-    def odds_json(self, race_id: str) -> str:
-        """単勝オッズ(JSON)。発売前は空に近い応答になる。これもキャッシュしない。"""
-        return self._get(ODDS_URL.format(race_id=race_id), encoding="utf-8")
+    def odds_json(self, race_id: str, odds_type: int = 1) -> str:
+        """オッズ(JSON)。type=1 は単勝・複勝、4 馬連、5 ワイド、6 馬単、7 三連複、8 三連単。
+        発売前は空に近い応答になる。これもキャッシュしない。"""
+        return self._get(ODDS_URL.format(race_id=race_id, odds_type=odds_type), encoding="utf-8")
 
     def discard(self, race_id: str) -> None:
         (self.cache_dir / "race" / f"{race_id}.html").unlink(missing_ok=True)

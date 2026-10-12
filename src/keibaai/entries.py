@@ -158,6 +158,43 @@ def parse_odds_json(text: str) -> dict[int, tuple[float | None, int | None]]:
     return out
 
 
+# オッズ API の type 番号 → 入っている券種。3(枠連)は枠番の組なので扱わない
+BET_ODDS_TYPES = {1: ("単勝", "複勝"), 4: ("馬連",), 5: ("ワイド",), 6: ("馬単",), 7: ("三連複",), 8: ("三連単",)}
+
+
+def _odds_number(text) -> float | None:
+    """'2,528.6' のようにカンマ入りで来る。取れない・0以下は None。"""
+    try:
+        v = float(str(text).replace(",", ""))
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+def parse_bet_odds(text: str, odds_type: int) -> dict[str, dict[tuple[int, ...], float]]:
+    """api_get_jra_odds.html?type=N の返り値から {券種: {馬番の組: オッズ}} を作る。
+
+    data.odds["<type>"]["0102"] = ["334.6", "0.0", "50"](組は2桁ずつの連結)。type=1 だけ "1"(単勝)と "2"(複勝)が入る。
+    複勝とワイドは [下限, 上限, 人気] で、安全側に下限を使う。馬単と三連単の組は着順どおり。
+    発売前などで取れないときは空の辞書を返す。
+    """
+    kinds = BET_ODDS_TYPES[odds_type]
+    try:
+        odds = json.loads(text)["data"]["odds"]
+    except (ValueError, KeyError, TypeError):
+        return {}
+    out: dict[str, dict[tuple[int, ...], float]] = {}
+    for sub, kind in zip(("1", "2") if odds_type == 1 else (str(odds_type),), kinds):
+        table = {}
+        for key, v in (odds.get(sub) or {}).items():
+            o = _odds_number(v[0]) if v else None
+            if o is not None and len(key) % 2 == 0:
+                table[tuple(int(key[i:i + 2]) for i in range(0, len(key), 2))] = o
+        if table:
+            out[kind] = table
+    return out
+
+
 def apply_odds(parsed: ParsedEntries, odds: dict[int, tuple[float | None, int | None]]) -> None:
     for e in parsed.entries:
         if e.number in odds:
