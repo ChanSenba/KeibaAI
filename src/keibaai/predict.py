@@ -12,6 +12,7 @@ from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
 from .features import BASE_FEATURES, CATEGORICAL, MARKET_FEATURES, build_features, load_results
 from .factors import COLUMN, FACTORS, predict_factors
+from .jvtraining import add_jv_features
 from .model import PARAMS, normalize_within_race
 
 
@@ -49,7 +50,7 @@ def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime
 
 
 def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
-    return pd.read_sql_query(
+    df = pd.read_sql_query(
         """
         SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground,
                p.sire_id, p.damsire_id, t.rank AS train_rank, t.critic AS train_critic
@@ -59,6 +60,7 @@ def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
         """,
         conn, params=(date,),
     )
+    return add_jv_features(conn, df)
 
 
 def _fit(train: pd.DataFrame, features: list[str], rounds: int):

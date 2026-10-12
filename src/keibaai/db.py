@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS training (
 );
 -- 調教ページを読んだレース(表がなかったレースも入れて、取り直さないようにする)
 CREATE TABLE IF NOT EXISTS training_fetched (race_id TEXT PRIMARY KEY, n_horses INTEGER, fetched_at TEXT);
+-- JRA-VAN Data Lab の調教タイム(坂路 slope・ウッド wood)。馬の番号は netkeiba の馬 ID と同じ。秒単位
+CREATE TABLE IF NOT EXISTS jv_training (
+    horse_id TEXT NOT NULL, date TEXT NOT NULL, time TEXT NOT NULL, kind TEXT NOT NULL,
+    center TEXT, course TEXT, turn TEXT, f4 REAL, f3 REAL, f2 REAL, l1 REAL,
+    PRIMARY KEY (horse_id, date, time, kind)
+);
 CREATE INDEX IF NOT EXISTS idx_results_horse ON results(horse_id);
 CREATE INDEX IF NOT EXISTS idx_races_date ON races(date);
 """

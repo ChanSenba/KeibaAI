@@ -102,6 +102,13 @@ def main(argv=None) -> None:
     tr_.add_argument("--limit", type=int, default=0, help="このレース数で止める(0なら全部)。まず試すとき用")
     tr_.add_argument("--date", help="YYYY-MM-DD。出馬表を取った日のレースだけ取り直す(発走前の予想用)")
     tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
+    jv_ = sub.add_parser("jv", help="JRA-VAN の調教タイム(坂路・ウッド)を取り込む。32bit Python で JV-Link から書き出し、DB に入れる")
+    jv_.add_argument("--db", default="data/keiba.db")
+    jv_.add_argument("--raw", default="data/jv_raw", help="書き出し先(生データ)")
+    jv_.add_argument("--from", dest="from_date", default="20230901", help="取得を始める日 YYYYMMDD")
+    jv_.add_argument("--option", type=int, default=4, help="JVOpen のオプション(4=セットアップ、1=通常の差分)")
+    jv_.add_argument("--python32", default=r"C:\Python311-32\jvenv\Scripts\python.exe", help="pywin32 を入れた32bit Python")
+    jv_.add_argument("--import-only", action="store_true", help="JV-Link は呼ばず、書き出し済みの生データだけ取り込む")
     bp = sub.add_parser("bets", help="1レースの買い方(券種と金額配分)を出す。先に entries で出馬表を取得しておく")
     bp.add_argument("--date", required=True, help="YYYY-MM-DD")
     bp.add_argument("--race-id", required=True, help="対象レースの race_id(12桁)")
@@ -176,6 +183,23 @@ def main(argv=None) -> None:
         print(f"血統が未取得の馬: 全部で{total}頭。今回は{todo}頭(1頭 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
         n = collect_pedigrees(conn, Fetcher(cache_dir=args.cache), args.limit)
         print(f"done: {n} horses")
+        return
+    if args.cmd == "jv":
+        import os
+        import subprocess
+        from pathlib import Path
+
+        from .jvtraining import import_raw
+
+        if not args.import_only:
+            src = str(Path(__file__).resolve().parent.parent)
+            env = {**os.environ, "PYTHONPATH": src}
+            cmd = [args.python32, "-m", "keibaai.jvexport", "--from", args.from_date, "--out", args.raw,
+                   "--option", str(args.option)]
+            if subprocess.run(cmd, env=env).returncode:
+                raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
+        n = import_raw(db.connect(args.db), args.raw)
+        print(f"done: {n} 件を取り込みました")
         return
     if args.cmd == "training":
         from .training import collect_training, fetch_entry_training, pending_race_ids, reparse_training

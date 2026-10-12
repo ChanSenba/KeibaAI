@@ -5,8 +5,7 @@ JV-Link から読んだレコードを1行1レコードのテキストに書き�
 
     C:\\Python311-32\\jvenv\\Scripts\\python.exe -m keibaai.jvexport --from 20231001 --out data\\jv_raw
 
-出力は <out>\\<データ種別>.txt。1行は「ファイル名<タブ>レコード」。追記なので、途中で止めても続きから足せる
-(続きは --from に最後の日付を渡す)。利用キーはこのスクリプトでは扱わない(JVLink設定で入れたものを JV-Link が使う)。
+出力は <out>\\<データ種別>.txt。1行は「ファイル名<タブ>レコード」。実行のたびに書き直す(取り込みは上書きなので、重ねて取り込んでも増えない)。利用キーはこのスクリプトでは扱わない(JVLink設定で入れたものを JV-Link が使う)。
 """
 from __future__ import annotations
 
@@ -20,8 +19,11 @@ BUFFER = 110000
 
 
 def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
-    """1種類のデータを読んで out に追記する。書いたレコード数を返す。"""
+    """1種類のデータを読んで out に書き出す。書いたレコード数を返す。"""
     ret = jv.JVOpen(spec, f"{from_date}000000", option, 0, 0, "")
+    if isinstance(ret, tuple) and ret[0] == -2:  # 最初の1回だけ失敗することがあった。もう一度だけ試す
+        jv.JVClose()
+        ret = jv.JVOpen(spec, f"{from_date}000000", option, 0, 0, "")
     code = ret[0] if isinstance(ret, tuple) else ret
     print(f"{spec}: JVOpen -> {ret}", flush=True)
     if code < 0:
@@ -30,7 +32,7 @@ def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
             return 0
         raise SystemExit(f"{spec}: JVOpen が失敗しました({code})")
     n = 0
-    with out.open("a", encoding="utf-8", newline="\n") as f:
+    with out.open("w", encoding="utf-8", newline="\n") as f:
         while True:
             r, buff, _size, fname = jv.JVRead("", BUFFER, "")
             if r == 0:  # 全部読んだ
@@ -55,7 +57,7 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="JV-Link から調教の生データを書き出す(32bit Python 用)")
     ap.add_argument("--from", dest="from_date", required=True, help="取得を始める日 YYYYMMDD")
     ap.add_argument("--out", default="data/jv_raw", help="出力先フォルダ")
-    ap.add_argument("--option", type=int, default=1, help="JVOpen のオプション(1=通常、3=今週、4=セットアップ(ダイアログなし))")
+    ap.add_argument("--option", type=int, default=4, help="JVOpen のオプション(1=通常の差分、4=セットアップ(ダイアログなし))")
     ap.add_argument("--specs", nargs="+", default=list(SPECS))
     args = ap.parse_args(argv)
     import win32com.client as w  # 32bit 側にだけ入れる
