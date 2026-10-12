@@ -99,6 +99,7 @@ def test_class_and_early_position_parsers():
     assert parse_class("第44回ジャパンC(GI)") == 8 and parse_class("京都記念(GII)") == 7
     assert parse_class("1勝クラス") == 2 and np.isnan(parse_class(None))
     assert parse_early_position("13-12-12-7") == 13 and np.isnan(parse_early_position(""))
+    assert np.isnan(parse_early_position(float("nan"))) and np.isnan(parse_early_position(None))
 
 
 def test_new_features_are_past_only(df):
@@ -106,3 +107,11 @@ def test_new_features_are_past_only(df):
     first = df.groupby("horse_id").head(1)
     assert first["distance_change"].isna().all() and first["jockey_changed"].isna().all()
     assert first["early_pos_rel_3"].isna().all()
+
+
+def test_build_features_with_mixed_null_passing():
+    """passing が NULL の行と値ありの行が混ざっても落ちない(pandas は NULL を NaN にする)。"""
+    conn = synthetic_db(n_days=3)
+    conn.execute("UPDATE results SET passing = '3-3-2-1' WHERE number % 2 = 0")  # 残りは NULL
+    out = build_features(load_results(conn))
+    assert out["early_pos_rel_3"].notna().any()

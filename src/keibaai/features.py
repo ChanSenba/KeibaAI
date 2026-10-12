@@ -55,7 +55,7 @@ def parse_class(name: str | None) -> float:
 
 def parse_early_position(passing: str | None) -> float:
     """通過順位('13-12-12-7')の最初の数字。取れなければ NaN。"""
-    m = re.match(r"\s*(\d+)", passing or "")
+    m = re.match(r"\s*(\d+)", passing if isinstance(passing, str) else "")  # DB の NULL は NaN(float) で来る
     return float(m.group(1)) if m else float("nan")
 
 
