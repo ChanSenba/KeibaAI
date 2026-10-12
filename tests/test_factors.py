@@ -67,3 +67,19 @@ def test_predict_factors_sum_to_one_per_race(df):
     p = factors.predict_factors(train, target, rounds=30)
     assert list(p.columns) == list(factors.FACTORS)
     assert np.allclose(p["馬の質"].groupby(target["race_id"]).sum(), 1.0)
+
+
+def test_cli_commands_return_without_falling_through(tmp_path, capsys):
+    """表示だけのコマンドが、最後に collect の処理まで進んで落ちないこと(factors で起きた不具合の再発防止)。"""
+    import sqlite3
+
+    from keibaai import cli
+
+    path = tmp_path / "k.db"
+    dst = sqlite3.connect(path)
+    synthetic_db(n_days=30, races_per_day=3).backup(dst)
+    dst.close()
+    for cmd in ("factors", "backtest", "train"):
+        cli.main([cmd, "--db", str(path), "--test-from", "2025-06-01"])
+    out = capsys.readouterr().out
+    assert "全馬が同じ勝率" in out and "単勝を毎回" in out and "モデル" in out
