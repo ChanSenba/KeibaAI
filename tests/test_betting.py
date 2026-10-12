@@ -101,3 +101,19 @@ def test_gamma_one_is_plain_harville():
     a = bt.harville_outcomes(P)[1]
     b = bt.harville_outcomes(P, 1.0, 1.0)[1]
     assert np.allclose(a, b)
+
+
+def test_min_hit_drops_longshots_with_high_ev():
+    # 単勝4番: 的中確率0.1・EV 1.5(大穴)、単勝1番: 的中確率0.4・EV 1.2
+    odds = {"単勝": {(1,): 3.0, (4,): 15.0}}
+    cands, *_ = bt.candidates(NUMS, P, odds, min_hit=0.0)
+    assert {c.numbers for c in cands} == {(1,), (4,)}
+    cands, *_ = bt.candidates(NUMS, P, odds, min_hit=0.2)
+    assert [c.numbers for c in cands] == [(1,)]
+
+
+def test_plan_default_ignores_tiny_probability_bets():
+    p = np.array([0.5, 0.3, 0.18, 0.02])
+    odds = {"単勝": {(4,): 60.0}}  # EV 1.2 だが的中確率は2%
+    plan = bt.make_plan(NUMS, p, odds)
+    assert plan.bets == [] and "的中確率" in plan.note
