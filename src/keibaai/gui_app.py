@@ -573,9 +573,13 @@ def page_factors() -> None:
         st.caption(f":material/check_circle: 取得済み {info['races']} レース・{info['horses']} 頭")
     races = gui.day_races(conn, date.isoformat())
     race, box = race_picker(races, key=f"factor_{date}")
+    # 血統を取得している間も、500頭ふえるごとにだけ計算し直す(開くたびに全履歴の特徴量を作り直さないため)
+    ped_bucket = conn.execute("SELECT COUNT(*) FROM pedigree").fetchone()[0] // 500
+    if st.button("最新のデータで計算し直す", icon=":material/refresh:", help="血統などを取得したあと、すぐ反映したいときに押します"):
+        _factor_values.clear()
     try:
-        with st.spinner("ファクターを計算しています"):
-            values = _factor_values(st.session_state["db_path"], date.isoformat(), str(info["fetched_at"]))
+        with st.spinner("ファクターを計算しています(同じ日は2回目から速くなります)"):
+            values = _factor_values(st.session_state["db_path"], date.isoformat(), f"{info['fetched_at']}/{ped_bucket}")
     except ValueError as e:
         st.error(str(e))
         return
