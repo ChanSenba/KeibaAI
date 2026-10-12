@@ -136,7 +136,7 @@ def race_entries(conn: sqlite3.Connection, race_id: str, prediction: pd.DataFram
     if prediction is not None:
         cols = ["number", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
         cols += [c for c in ("p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree") if c in prediction]
-        cols += ["mark"] if "mark" in prediction else []
+        cols += [c for c in ("mark", "star") if c in prediction]
         df = df.merge(prediction.loc[prediction["race_id"] == race_id, cols], on="number", how="left")
     return df
 
@@ -185,6 +185,8 @@ def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_
 
 
 MARKS = ["◎", "○", "▲"]
+# ★の基準: 能力モデルの期待値、勝率、オッズ。過去の検証(2025年以降)では、この基準の馬を単勝で買っても回収率は76〜84%
+STAR_EV, STAR_P, STAR_ODDS = 1.1, 0.03, 30.0
 
 
 def add_marks(table: pd.DataFrame) -> pd.DataFrame:
@@ -193,9 +195,12 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     レースごとに、勝率の高い順に ◎ ○ ▲、続く 2 頭に △(9 頭立て以下は 1 頭)。
     勝率はオッズ込みを使い、そのレースにオッズがなければ能力のみを使う。
     印のない馬のうち、能力のみの期待値がいちばん高く 1 以上の馬に ☆(穴)。
+    別の star 列に、モデルがオッズより高く評価している馬(能力の期待値・勝率・オッズが基準以上)へ ★。
     """
     out = table.copy()
     out["mark"] = ""
+    out["star"] = ((out["ev_ability"] >= STAR_EV) & (out["p_win_ability"] >= STAR_P)
+                   & (out["win_odds"] <= STAR_ODDS)).map({True: "★", False: ""})
     for _, g in out.groupby("race_id", sort=False):
         p = "p_win_market" if g["p_win_market"].notna().all() else "p_win_ability"
         ranked = g[p].dropna().sort_values(ascending=False, kind="stable").index

@@ -118,7 +118,13 @@ def test_add_marks_by_win_probability():
         "p_win_market": [0.05, 0.3, 0.2, 0.1, 0.08, 0.07, 0.06, 0.06, 0.04, 0.04] + [None] * 5,
         "p_win_ability": [0.1] * 10 + [0.1, 0.4, 0.3, 0.15, 0.05],
         "ev_ability": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 2.5, 0.9] + [0.2, 0.5, 0.5, 0.5, 0.4],
+        "win_odds": [10.0] * 8 + [25.0, 60.0] + [5.0] * 5,
     })
+    star = gui.add_marks(t).set_index(["race_id", "number"])["star"]
+    assert star["A", 9] == "★" and star["A", 10] == ""  # 期待値0.9は基準未満
+    t.loc[8, "win_odds"] = 40.0
+    assert gui.add_marks(t).set_index(["race_id", "number"])["star"]["A", 9] == ""  # 30倍を超える
+    t.loc[8, "win_odds"] = 25.0
     m = gui.add_marks(t).set_index(["race_id", "number"])["mark"]
     assert [m["A", i] for i in (2, 3, 4, 5, 6)] == ["◎", "○", "▲", "△", "△"]
     assert m["A", 9] == "☆" and m["A", 1] == ""
