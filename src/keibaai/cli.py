@@ -75,7 +75,20 @@ def main(argv=None) -> None:
     r = sub.add_parser("reparse", help="キャッシュ済みページを解析し直してDBを更新（通信なし）")
     r.add_argument("--db", default="data/keiba.db")
     r.add_argument("--cache", default="data/cache")
+    t = sub.add_parser("train", help="特徴量を作ってLightGBMで学習し、時系列で評価する")
+    t.add_argument("--db", default="data/keiba.db")
+    t.add_argument("--test-from", required=True, help="この日付以降を評価用にする YYYY-MM-DD")
     args = p.parse_args(argv)
+
+    if args.cmd == "train":
+        from .features import build_features, load_results
+        from .model import baseline_favorite, evaluate, format_report
+
+        df = build_features(load_results(db.connect(args.db)))
+        r_abil, test = evaluate(df, args.test_from, use_market=False)
+        r_mkt, _ = evaluate(df, args.test_from, use_market=True)
+        print(format_report([baseline_favorite(test), r_abil, r_mkt]))
+        return
 
     if args.cmd == "reparse":
         ok, bad = reparse_cache(db.connect(args.db), args.cache)
