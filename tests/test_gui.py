@@ -137,3 +137,15 @@ def test_backtest_run_returns_table_and_curves():
     n_races, table, settled = gui.backtest_run(conn, "2025-09-01", False, 1.0, None, 100)
     assert n_races > 0 and len(table) == 4 and set(settled) == set(table["rule"])
     assert settled[table["rule"].iloc[1]]["balance"].iloc[-1] == table["profit"].iloc[1]
+
+
+def test_race_head_html_survives_missing_fields():
+    import pandas as pd
+
+    full = pd.Series({"round": 11, "name": "スワンS", "course_type": "芝", "distance": 1400, "ground": "良",
+                      "start_time": "15:45", "runners": 18})
+    assert "スワンS" in gui.race_head_html(full) and "芝1400m ・ 良 ・ 15:45 発走 ・ 18頭" in gui.race_head_html(full)
+    empty = pd.Series({"round": 1, "name": float("nan"), "course_type": None, "distance": float("nan"),
+                       "ground": float("nan"), "start_time": float("nan"), "runners": float("nan")})
+    out = gui.race_head_html(empty)
+    assert "1R" in out and "nan" not in out and "None" not in out
