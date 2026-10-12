@@ -19,6 +19,10 @@ class PageUnavailable(ValueError):
     """結果表のないページ(中止・未開催・制限ページなど)。キャッシュしない。"""
 
 
+class ResultNotPublished(PageUnavailable):
+    """結果がまだ掲載されていない(日付が1970年の空ひな形)。アクセス制限とは区別する。"""
+
+
 class Fetcher:
     def __init__(self, cache_dir: str | Path = "data/cache", min_interval: float = MIN_INTERVAL_SEC,
                  session: requests.Session | None = None, sleep=time.sleep, clock=time.monotonic):
@@ -52,6 +56,8 @@ class Fetcher:
             return path.read_text(encoding="utf-8")
         html = self._get(RACE_URL.format(race_id=race_id), encoding="euc-jp")
         if "race_table_01" not in html:
+            if "1970年" in html:
+                raise ResultNotPublished(f"結果が未掲載です: {race_id}")
             raise PageUnavailable(f"結果表のないページです: {race_id}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(html, encoding="utf-8")

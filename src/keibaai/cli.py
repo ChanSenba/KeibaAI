@@ -5,7 +5,7 @@ import datetime as dt
 from pathlib import Path
 
 from . import db
-from .fetch import Fetcher, PageUnavailable
+from .fetch import Fetcher, ResultNotPublished
 from .parse import parse_race
 
 
@@ -24,7 +24,11 @@ def collect_day(conn, fetcher: Fetcher, date: str, failures: list[str] | None = 
             continue
         try:
             db.save_race(conn, parse_race(fetcher.race_html(race_id), race_id))
-        except ValueError as e:  # PageUnavailable を含む
+        except ResultNotPublished as e:  # その日はまだ掲載前。残りは飛ばし、失敗には数えない
+            fetcher.discard(race_id)
+            print(f"skip rest of {date}: {e}")
+            break
+        except ValueError as e:  # 結果表のないページなど
             fetcher.discard(race_id)  # 壊れたキャッシュを残さない
             failures.append(race_id)
             print(f"skip {race_id}: {e}")

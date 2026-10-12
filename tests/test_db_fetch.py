@@ -119,3 +119,33 @@ def test_reparse_cache_updates_db_and_skips_bad(tmp_path):
     conn = db.connect(":memory:")
     assert cli.reparse_cache(conn, tmp_path) == (1, 1)
     assert db.has_race(conn, "202405050812")
+
+
+def test_unpublished_day_is_skipped_without_counting_failures(tmp_path):
+    from keibaai import cli
+    from keibaai.fetch import ResultNotPublished
+
+    class FakeFetcher:
+        def race_ids_on(self, date):
+            return [f"20260505040{i}" for i in range(1, 13)]
+
+        def race_html(self, race_id):
+            raise ResultNotPublished(race_id)
+
+        def discard(self, race_id):
+            pass
+
+    failures = []
+    assert cli.collect_day(db.connect(":memory:"), FakeFetcher(), "20261010", failures) == 0
+    assert failures == []  # 連続失敗に数えない
+
+
+def test_1970_template_page_is_detected(tmp_path):
+    import pytest
+
+    from keibaai.fetch import ResultNotPublished
+
+    f = Fetcher(tmp_path, session=FakeSession([FakeResp(200, "<html>1970年1月01日</html>")]),
+                sleep=lambda s: None, clock=lambda: 0.0)
+    with pytest.raises(ResultNotPublished):
+        f.race_html("202605040301")
