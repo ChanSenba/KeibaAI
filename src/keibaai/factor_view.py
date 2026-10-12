@@ -167,6 +167,19 @@ def top_rank(values: pd.Series, good: str | None, n: int = 5) -> pd.Series:
     return rank.where(rank <= n)
 
 
+# 「総合」タブ用。各区分から、予想に効きやすい数値を抜き出したもの(見出しは区分名つき)
+SUMMARY: dict = {
+    "note": "各区分から重要な数値を1〜2個ずつ抜き出した表です。色は、その列で良い値の上位の馬。"
+            "血統・ラップは取得した馬だけ値が入ります。くわしい数値は、各区分のタブで見られます。",
+    "cols": [("style", "脚質"), ("avg_finish_5", "5走の平均着順"), ("time_diff_5", "タイム差(5走平均)"),
+             ("l3f_rank_3", "上がり順位(3走)"), ("rec_dist", "同じ距離帯"), ("rec_ground", "同じ馬場状態"),
+             ("rotation", "ローテーション"), ("jockey_rank", "騎手リーディング"),
+             ("jockey_ct_top3_rate", "騎手の3着内率"), ("pair_top3_rate", "この馬との3着内率"),
+             ("class_change", "クラス変化"), ("prev_pop_gap", "前走の人気 − 着順"),
+             ("sire_ctdist_top3_rate", "父産駒・芝ダ×距離帯"), ("l3f_vs_lap_3", "上がり−場の後半3F"),
+             ("popularity", "人気"), ("win_odds", "単勝オッズ")],
+}
+
 STYLES = ["逃げ", "先行", "差し", "追込"]
 
 
