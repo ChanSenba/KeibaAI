@@ -103,6 +103,8 @@ def _combos(kind: str, n: int):
 
 # 的中確率がこれ未満の買い目は候補にしない。確率が小さいほど推定の誤差が大きく、大穴の期待値は過大に出やすい
 MIN_HIT = 0.03
+# 資金が少なくて100円ずつにするときの歯止め: 1レースに使う資金の割合と、買い目の期待値の下限
+SMALL_SHARE, SMALL_EV_MIN = 0.3, 1.05
 
 
 def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
@@ -197,11 +199,13 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
     note = ""
     if not chosen and equal_stake <= 0 and cap >= UNIT:
         # 資金が少なく、ケリーの配分がどれも100円に満たないときは、期待値の高い買い目から100円ずつ、上限まで買う
-        n = min(len(bets), cap // UNIT)
+        # ただし 1レースに使うのは資金の3割まで(最低1点)、期待値が1.05に満たない買い目は入れない
+        worth = sum(1 for b in bets if b.ev >= SMALL_EV_MIN)
+        n = max(1, min(worth, cap // UNIT, int(bankroll * SMALL_SHARE) // UNIT))
         stakes = np.zeros(len(bets), dtype=int)
         stakes[:n] = UNIT  # bets は期待値の高い順
         chosen = list(range(n))
-        note = "資金が少ないため、ケリー基準の配分は100円に満たず、期待値の高い買い目から100円ずつにしています(配分より多めに張っています)"
+        note = "資金が少ないため、ケリー基準の配分は100円に満たず、期待値の高い買い目から100円ずつにしています(配分より多めに張っています。資金の3割まで)"
     if not chosen:
         return Plan([], note="見送り: 期待値は1を超えますが、優位が小さいか資金が少なく、100円に満たない配分でした",
                     top_ev=sorted(bets, key=lambda b: -b.ev)[:5])
