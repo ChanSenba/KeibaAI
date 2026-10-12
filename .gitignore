@@ -3,7 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 # 取得データは利用規約上、公開しない
-data/
+/data/
 *.db
 *.sqlite
 *.egg-info/

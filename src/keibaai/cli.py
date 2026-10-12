@@ -130,9 +130,9 @@ def main(argv=None) -> None:
         from .pedigree import collect_pedigrees, pending_horse_ids
 
         conn = db.connect(args.db)
-        todo = len(pending_horse_ids(conn))
-        todo = min(todo, args.limit) if args.limit else todo
-        print(f"血統が未取得の馬: {todo}頭(1頭 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
+        total = len(pending_horse_ids(conn))
+        todo = min(total, args.limit) if args.limit else total
+        print(f"血統が未取得の馬: 全部で{total}頭。今回は{todo}頭(1頭 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
         n = collect_pedigrees(conn, Fetcher(cache_dir=args.cache), args.limit)
         print(f"done: {n} horses")
         return
