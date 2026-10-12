@@ -160,6 +160,18 @@ def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None, race_ids: list
     return fetch_entries(conn, fetcher, date.isoformat(), on_race=on_race, race_ids=race_ids)
 
 
+def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_min: float,
+                 max_odds: float | None, stake: int):
+    """(レース数, まとめの表, ルールごとの精算済み買い目)。学習は test_from より前だけを使う。"""
+    from . import backtest as bt
+    from .features import build_features, load_results
+
+    test = bt.predict_test(build_features(load_results(conn)), test_from, use_market)
+    rules = [("favorite", {}), ("top1", {}), ("ev", {"ev_min": ev_min, "max_odds": max_odds}), ("all", {})]
+    table, settled = bt.run_rules(test, rules, stake)
+    return int(test["race_id"].nunique()), table, settled
+
+
 MARKS = ["◎", "○", "▲"]
 
 
