@@ -73,3 +73,26 @@ def test_bet_plan_for_without_win_odds_explains():
     pred = pd.DataFrame({"race_id": ["r1"] * 3, "number": [1, 2, 3], "p_win_ability": [0.5, 0.3, 0.2]})
     with pytest.raises(ValueError, match="単勝オッズ"):
         gui.bet_plan_for(pred, "r1", {}, Blend(0.0, 1.0, 0, 0))
+
+
+def test_cli_bets_runs_end_to_end(tmp_path, monkeypatch, capsys):
+    from keibaai import cli, db
+    from keibaai.blend import Blend
+    from test_entries import _entries_for_future
+    from test_model import synthetic_db
+
+    path = tmp_path / "k.db"
+    conn = synthetic_db(n_days=40)
+    _entries_for_future(conn, "2030-01-05")
+    disk = db.connect(path)
+    conn.backup(disk)
+    disk.close()
+    monkeypatch.setattr(cli, "Fetcher", lambda cache_dir: object())
+    monkeypatch.setattr(gui, "fetch_bet_odds", lambda f, race_id, on_type=None: {
+        "単勝": {(i + 1,): 2.0 + i for i in range(10)}, "馬連": {(1, 2): 2.0}})
+    monkeypatch.setattr("keibaai.predict.blend_for_day", lambda conn, date: Blend(0.0, 1.0, 0, 0))
+    cli.main(["bets", "--date", "2030-01-05", "--race-id", "202609990101", "--db", str(path)])
+    out = capsys.readouterr().out
+    assert "混ぜ方" in out and ("見送り" in out or "期待回収率" in out)
+    with pytest.raises(SystemExit):
+        cli.main(["bets", "--date", "2030-01-05", "--race-id", "nope", "--db", str(path)])
