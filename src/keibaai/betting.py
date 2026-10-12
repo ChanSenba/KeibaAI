@@ -169,8 +169,11 @@ class Plan:
 def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
               bankroll: int = 100_000, cap: int = 10_000, kelly_scale: float = 0.5, ev_min: float = 1.0,
               max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD,
-              min_hit: float = MIN_HIT) -> Plan:
-    """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。"""
+              min_hit: float = MIN_HIT, equal_stake: int = 0) -> Plan:
+    """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。
+
+    equal_stake が正のときは配分をせず、候補を期待値の高い順に、1点 equal_stake 円ずつ上限まで買う。
+    """
     cap = min(cap, bankroll)
     p = np.asarray(p, dtype=float)
     p = p / p.sum()
@@ -181,13 +184,18 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
         return Plan([], note=f"見送り: 期待値が1を超え、的中確率が{min_hit:.0%}以上の買い目がありません", top_ev=top)
     keep = np.argsort([-b.ev for b in bets])[:max_candidates]
     bets, hit = [bets[i] for i in keep], hit[keep]
-    f = kelly_fractions(prob, hit, np.array([b.odds for b in bets])) * kelly_scale
-    stakes = np.floor(f * bankroll / UNIT).astype(int) * UNIT
+    if equal_stake > 0:
+        unit = max(UNIT, equal_stake // UNIT * UNIT)
+        stakes = np.zeros(len(bets), dtype=int)
+        stakes[:min(len(bets), cap // unit)] = unit  # bets は期待値の高い順
+    else:
+        f = kelly_fractions(prob, hit, np.array([b.odds for b in bets])) * kelly_scale
+        stakes = np.floor(f * bankroll / UNIT).astype(int) * UNIT
     if stakes.sum() > cap:  # 上限を超えるときは、比率を保って縮める
         stakes = (np.floor(stakes * (cap / stakes.sum()) / UNIT) * UNIT).astype(int)
     chosen = [i for i, s in enumerate(stakes) if s >= UNIT]
     if not chosen:
-        return Plan([], note="見送り: 期待値は1を超えますが、優位が小さく、100円に満たない配分でした",
+        return Plan([], note="見送り: 期待値は1を超えますが、優位が小さいか資金が少なく、100円に満たない配分でした",
                     top_ev=sorted(bets, key=lambda b: -b.ev)[:5])
     for i in chosen:
         bets[i].stake = int(stakes[i])

@@ -560,6 +560,7 @@ def page_factors() -> None:
 
 
 # ---------------------------------------------------------------- 買い方(1レース)
+ALLOCATIONS = ["ケリー基準で配分", "配分なし(同額)"]
 KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全部(攻めすぎ注意)": 1.0}
 
 
@@ -599,12 +600,21 @@ def page_bets() -> None:
         with box:
             race_head(race)
     c1, c2, c3 = st.columns(3)
+    mode = st.segmented_control("資金配分", ALLOCATIONS, default=ALLOCATIONS[0], key="bets_alloc", width="stretch",
+                                help="ケリー基準は、期待値の高い買い目ほど多く張る配分。配分なしは、期待値の高い順に、どの買い目も同じ金額ずつ買う") or ALLOCATIONS[0]
+    equal = mode == ALLOCATIONS[1]
     bankroll = c1.number_input("使える資金(円)", 100, 10_000_000, 100_000, 100,
                                help="配分を決める元になる資金です。全レースのときは、1日で使う合計の上限になります")
     cap = c2.number_input("1レースの上限(円)", 100, 1_000_000, 10_000, 100,
                           help="1つのレースに使う金額の上限。全レースのときは、残りの資金をレース数で割った額も超えません")
-    kelly = KELLY_CHOICES[c3.selectbox("賭け方の強さ", list(KELLY_CHOICES),
-                                       help="資金が長い目で最も増える配分(ケリー基準)を、どれだけ抑えるか")]
+    if equal:
+        stake = c3.number_input("1点の金額(円)", 100, 1_000_000, 100, 100,
+                                help="どの買い目にも同じ金額を張る。上限まで、期待値の高い買い目から買う")
+        kelly = 0.5
+    else:
+        stake = 0
+        kelly = KELLY_CHOICES[c3.selectbox("賭け方の強さ", list(KELLY_CHOICES),
+                                           help="資金が長い目で最も増える配分(ケリー基準)を、どれだけ抑えるか")]
     n = 1 if single else len(races)
     st.caption(f":material/info: 1レースごとに全券種のオッズを取るので、6回アクセスします(30秒ほど)。"
                f"{'' if single else f'全{n}レースで約{n * 30 // 60 + 1}分かかります。'}初回は、混ぜ方を決めるのに数分かかります。")
@@ -615,7 +625,7 @@ def page_bets() -> None:
                 with st.spinner("モデルとオッズの混ぜ方を決めています(数分かかります)"):
                     blends[date] = gui.blend_for(conn, date)
             targets = races if single is False else races[races["race_id"] == race["race_id"]]
-            plans = plan_races(table, targets, blends[date], bankroll, cap, kelly)
+            plans = plan_races(table, targets, blends[date], bankroll, cap, kelly, stake)
             st.session_state["bet_plans"] = (date, single, plans, blends[date])
         except (ValueError, RuntimeError) as e:
             st.error(str(e))
@@ -631,7 +641,7 @@ def page_bets() -> None:
     show_day_plans(races, plans, blend)
 
 
-def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float) -> dict:
+def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equal_stake: int = 0) -> dict:
     """レースごとの買い方を出す。{race_id: (買い方 または 理由の文字列, レース名)}。
 
     複数レースのときは、残りの資金をレース数で割った額を1レースの上限にして、合計が資金を超えないようにする。
@@ -650,7 +660,8 @@ def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float) -> 
         share = max(betting.UNIT, remaining // (len(rows) - i) // betting.UNIT * betting.UNIT)
         try:
             odds = gui.fetch_bet_odds(fetcher, r.race_id)
-            plan, _ = gui.bet_plan_for(table, r.race_id, odds, blend, bankroll, min(cap, share, remaining), kelly)
+            plan, _ = gui.bet_plan_for(table, r.race_id, odds, blend, bankroll, min(cap, share, remaining), kelly,
+                                     equal_stake)
         except (ValueError, RuntimeError) as e:
             out[r.race_id] = (str(e), label)
             continue

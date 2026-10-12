@@ -227,7 +227,7 @@ def fetch_bet_odds(fetcher, race_id: str, on_type=None) -> dict:
 
 
 def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
-                 cap: int = 10_000, kelly_scale: float = 0.5):
+                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0):
     """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
 
     勝率は、能力のモデルの勝率とオッズの確率を blend の重みで混ぜたもの。
@@ -242,7 +242,8 @@ def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bank
     if one["win_odds"].notna().sum() < 3:
         raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
     mixed = apply_blend(one, blend)
-    plan = make_plan([int(n) for n in mixed["number"]], mixed["p_win"].to_numpy(), odds, bankroll, cap, kelly_scale)
+    plan = make_plan([int(n) for n in mixed["number"]], mixed["p_win"].to_numpy(), odds, bankroll, cap, kelly_scale,
+                     equal_stake=equal_stake)
     return plan, mixed
 
 
