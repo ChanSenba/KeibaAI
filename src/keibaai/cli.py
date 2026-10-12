@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+from pathlib import Path
 
 from . import db
 from .fetch import Fetcher, PageUnavailable
@@ -39,6 +40,19 @@ def collect_day(conn, fetcher: Fetcher, date: str, failures: list[str] | None = 
     return n
 
 
+def reparse_cache(conn, cache_dir: str | Path) -> tuple[int, int]:
+    """キャッシュ済みページを解析し直して DB を更新する(通信しない)。(成功, 失敗) を返す。"""
+    ok = bad = 0
+    for path in sorted((Path(cache_dir) / "race").glob("*.html")):
+        try:
+            db.save_race(conn, parse_race(path.read_text(encoding="utf-8"), path.stem))
+            ok += 1
+        except ValueError as e:
+            bad += 1
+            print(f"skip {path.stem}: {e}")
+    return ok, bad
+
+
 def daterange(start: dt.date, end: dt.date):
     d = start
     while d <= end:
@@ -54,7 +68,15 @@ def main(argv=None) -> None:
     c.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD")
     c.add_argument("--db", default="data/keiba.db")
     c.add_argument("--cache", default="data/cache")
+    r = sub.add_parser("reparse", help="キャッシュ済みページを解析し直してDBを更新（通信なし）")
+    r.add_argument("--db", default="data/keiba.db")
+    r.add_argument("--cache", default="data/cache")
     args = p.parse_args(argv)
+
+    if args.cmd == "reparse":
+        ok, bad = reparse_cache(db.connect(args.db), args.cache)
+        print(f"done: {ok} races reparsed, {bad} skipped")
+        return
 
     conn = db.connect(args.db)
     fetcher = Fetcher(cache_dir=args.cache)

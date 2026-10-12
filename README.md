@@ -12,6 +12,9 @@ keibaai collect --from 2024-11-23 --to 2024-11-24
 pytest
 ```
 
+結果が掲載されるのは開催の数日後です。直近のレースは「skip」と表示されて飛ばされ、後日の再実行で取得されます。
+コードを直したあとは、通信せずに保存済みページから DB を更新できます：`keibaai reparse`
+
 取得したページは `data/cache/`、結果は `data/keiba.db`（SQLite）に保存されます。
 
 ## netkeiba 利用上の注意

@@ -52,3 +52,9 @@ def test_steeplechase_course_text():
     html = HTML.replace("芝左2400m", "障芝ダート2910m")
     race = parse_race(html, "202408060704").race
     assert (race.course_type, race.direction, race.distance) == ("障", None, 2910)
+
+
+@pytest.mark.parametrize("text,dist", [("障芝外-内3170m", 3170), ("障芝内-外3330m", 3330), ("芝右外2周3200m", None)])
+def test_course_variants(text, dist):
+    race = parse_race(HTML.replace("芝左2400m", text), "202408060704").race
+    assert race.distance == (dist or 3200) and race.course_type in ("障", "芝")

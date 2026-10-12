@@ -108,3 +108,14 @@ def test_collect_day_skips_bad_race_and_aborts_on_streak(tmp_path):
     ids = [f"20240505080{i}" for i in range(1, 7)]
     with pytest.raises(RuntimeError):
         cli.collect_day(conn, FakeFetcher(ids, bad=ids), "20241124", [])
+
+
+def test_reparse_cache_updates_db_and_skips_bad(tmp_path):
+    from keibaai import cli
+
+    (tmp_path / "race").mkdir()
+    (tmp_path / "race" / "202405050812.html").write_text(HTML, encoding="utf-8")
+    (tmp_path / "race" / "202605040301.html").write_text("<html></html>", encoding="utf-8")
+    conn = db.connect(":memory:")
+    assert cli.reparse_cache(conn, tmp_path) == (1, 1)
+    assert db.has_race(conn, "202405050812")
