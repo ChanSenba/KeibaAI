@@ -521,14 +521,22 @@ def _factor_config(cols) -> dict:
     return out
 
 
-def _factor_table(one, cols):
-    """各列の良い値の上位の馬に色をつける。1位は濃く、ほかは薄く。"""
+OVERALL_COLUMNS = ["mark", "star", "p_win_market", "p_win_ability", "ev_market", "ev_ability"]
+OVERALL_HIGH = {"p_win_market", "p_win_ability", "ev_market", "ev_ability"}
+
+
+def _factor_table(one, cols, extra=None):
+    """各列の良い値の上位の馬に色をつける。1位は濃く、ほかは薄く。extra の列(予想の勝率・期待値)は馬名の右に入れる。"""
+    df = one[[c for c, _ in cols]]
+    if extra is not None:
+        df = pd.concat([df.iloc[:, :2], extra, df.iloc[:, 2:]], axis=1)
+
     def paint(col):
-        good = factor_view.COLUMN_INFO.get(col.name, (None, None))[1]
+        good = "high" if col.name in OVERALL_HIGH else factor_view.COLUMN_INFO.get(col.name, (None, None))[1]
         rank = factor_view.top_rank(col, good)
         return ["" if r != r else "background-color: rgba(46, 158, 91, 0.45); font-weight: 700" if r == 1
                 else "background-color: rgba(46, 158, 91, 0.2)" for r in rank]
-    return one[[c for c, _ in cols]].style.apply(paint)
+    return df.style.apply(paint)
 
 
 def _factor_legend(cols) -> str:
@@ -577,7 +585,21 @@ def page_factors() -> None:
         cols = [("number", "馬番"), ("horse_name", "馬名")] + factor_view.SUMMARY["cols"]
         cols = [c for c in cols if c[0] in one]
         cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols)}
-        st.dataframe(_factor_table(one, cols), hide_index=True, width="stretch", column_config=cfg)
+        extra = None
+        pred = st.session_state.get("prediction")
+        if pred is not None and pred[0] == date:
+            got = pred[1].loc[pred[1]["race_id"] == race["race_id"], ["number", *OVERALL_COLUMNS]]
+            got = got.dropna(axis=1, how="all")
+            if len(got.columns) > 1:
+                extra = one[["number"]].merge(got, on="number", how="left").drop(columns=["number"])
+                extra.index = one.index
+                cfg.update({c: PRED_COLUMNS[c] for c in extra.columns})
+        st.dataframe(_factor_table(one, cols, extra), hide_index=True, width="stretch", column_config=cfg)
+        if extra is None:
+            st.caption(":material/info: 「予想」ページでこの日を「予想する」と、表の左に、各列を総合した勝率・期待値・印が加わります。")
+        else:
+            st.caption(":material/calculate: 左の勝率・期待値・印は、これらの数値を含むモデルが総合して出した値です"
+                       "(期待値 = 勝率 × 単勝オッズ)。色は、勝率・期待値が高い上位の馬です。")
         st.caption(":material/palette: " + factor_view.SUMMARY["note"])
         st.html(_factor_legend(cols[2:]))
     for tab, section, st_ in zip(tabs[1:], factor_view.SECTIONS, status):
