@@ -101,9 +101,14 @@ def _combos(kind: str, n: int):
     return list(itertools.permutations(range(n), 3))
 
 
+# 的中確率がこれ未満の買い目は候補にしない。確率が小さいほど推定の誤差が大きく、大穴の期待値は過大に出やすい
+MIN_HIT = 0.03
+
+
 def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
-               ev_min: float = 1.0, g2: float = 1.0, g3: float = 1.0) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
-    """オッズのある全買い目の期待値を出し、ev_min 以上を候補にして返す。
+               ev_min: float = 1.0, g2: float = 1.0, g3: float = 1.0,
+               min_hit: float = 0.0) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
+    """オッズのある全買い目の期待値を出し、ev_min 以上で的中確率が min_hit 以上のものを候補にして返す。
 
     戻り値: (候補, 並び(m,3), 並びの確率(m,), 候補×並びの的中表(候補数, m))。
     numbers は馬番、p はその勝率(合計1)。odds[券種][馬番の組] = 倍率。
@@ -121,7 +126,7 @@ def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int
             pr = float(prob[h].sum())
             if kind == "複勝" and place_slots(n) == 0:
                 continue
-            if pr * o >= ev_min:
+            if pr * o >= ev_min and pr >= min_hit:
                 out.append(Bet(kind, tuple(key), float(o), pr, pr * o))
                 rows.append(h)
     hit = np.array(rows, dtype=bool) if rows else np.zeros((0, len(prob)), dtype=bool)
@@ -163,15 +168,16 @@ class Plan:
 
 def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
               bankroll: int = 100_000, cap: int = 10_000, kelly_scale: float = 0.5, ev_min: float = 1.0,
-              max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD) -> Plan:
+              max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD,
+              min_hit: float = MIN_HIT) -> Plan:
     """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。"""
     p = np.asarray(p, dtype=float)
     p = p / p.sum()
-    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3)
+    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3, min_hit)
     if not bets:
         all_bets, *_ = candidates(numbers, p, odds, 0.0, g2, g3)
         top = sorted(all_bets, key=lambda b: -b.ev)[:5]
-        return Plan([], note="見送り: 期待値が1を超える買い目がありません", top_ev=top)
+        return Plan([], note=f"見送り: 期待値が1を超え、的中確率が{min_hit:.0%}以上の買い目がありません", top_ev=top)
     keep = np.argsort([-b.ev for b in bets])[:max_candidates]
     bets, hit = [bets[i] for i in keep], hit[keep]
     f = kelly_fractions(prob, hit, np.array([b.odds for b in bets])) * kelly_scale
