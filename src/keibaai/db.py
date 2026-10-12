@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS entries (
     body_weight INTEGER, body_weight_diff INTEGER, win_odds REAL, popularity INTEGER,
     PRIMARY KEY (race_id, number)
 );
+-- 発走前に出した予想をそのまま残す(あとから結果と照合する)。レースが終わってからは書き換えない
+CREATE TABLE IF NOT EXISTS predictions (
+    race_id TEXT NOT NULL, number INTEGER NOT NULL, saved_at TEXT,
+    date TEXT, venue TEXT, round INTEGER, race_name TEXT, horse_name TEXT, jockey TEXT,
+    win_odds REAL, popularity INTEGER, mark TEXT,
+    p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL,
+    PRIMARY KEY (race_id, number)
+);
 CREATE INDEX IF NOT EXISTS idx_results_horse ON results(horse_id);
 CREATE INDEX IF NOT EXISTS idx_races_date ON races(date);
 """

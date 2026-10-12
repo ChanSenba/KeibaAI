@@ -95,6 +95,11 @@ def main(argv=None) -> None:
     fa = sub.add_parser("factors", help="要素(馬の質・騎手と厩舎・展開と馬場)ごとの予想の当たりやすさを比べる")
     fa.add_argument("--test-from", required=True, help="この日以後で評価する(YYYY-MM-DD)")
     fa.add_argument("--db", default="data/keiba.db")
+    wk = sub.add_parser("weekly", help="毎週の処理: 前の週の予想を結果と照合して回顧を書き、今週末の予想を保存する")
+    wk.add_argument("--db", default="data/keiba.db")
+    wk.add_argument("--cache", default="data/cache")
+    wk.add_argument("--reviews", default="data/reviews", help="回顧のファイルを置くフォルダ")
+    wk.add_argument("--today", help="今日の日付(YYYY-MM-DD)。試すとき用")
     bt = sub.add_parser("backtest", help="過去のレースで単勝の買い方ルールを再現し、回収率などを表示")
     bt.add_argument("--test-from", required=True, help="この日以後を買う期間にする(YYYY-MM-DD)")
     bt.add_argument("--db", default="data/keiba.db")
@@ -107,13 +112,22 @@ def main(argv=None) -> None:
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
-    if args.cmd in ("entries", "collect"):
+    if args.cmd in ("entries", "collect", "weekly"):
         warn_if_race_time()
     if args.cmd == "entries":
         from .predict import fetch_entries
 
         n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
+        return
+    if args.cmd == "weekly":
+        from .weekly import run_weekly
+
+        today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+        out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews)
+        print(f"reviewed: {', '.join(out['reviewed']) or 'なし'}")
+        for d, n in out["forecast"].items():
+            print(f"forecast {d}: {n}頭" if n else f"forecast {d}: 出馬表がまだありません")
         return
     if args.cmd == "factors":
         from .factors import evaluate_factors, format_factor_report
