@@ -63,3 +63,13 @@ def test_run_rules_on_model_output(test_df):
     assert table.set_index("rule").loc["◎(勝率1位)", "n_bets"] == n_races
     series = bt.balance_by_date(settled["◎(勝率1位)"])
     assert series.index.is_monotonic_increasing and series.iloc[-1] == table.set_index("rule").loc["◎(勝率1位)", "profit"]
+
+
+def test_min_p_drops_low_probability_horses():
+    import pandas as pd
+    from keibaai.backtest import select_bets
+
+    test = pd.DataFrame({"date": ["2026-01-01"] * 2, "race_id": ["a", "a"], "number": [1, 2],
+                         "p_win": [0.02, 0.4], "win_odds": [100.0, 3.0], "popularity": [9, 1]})
+    assert len(select_bets(test, "ev", 1.0)) == 2
+    assert select_bets(test, "ev", 1.0, min_p=0.03)["number"].tolist() == [2]

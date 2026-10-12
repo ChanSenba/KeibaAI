@@ -45,7 +45,8 @@ def with_ev(test: pd.DataFrame) -> pd.DataFrame:
     return t
 
 
-def select_bets(test: pd.DataFrame, rule: str, ev_min: float = 1.0, max_odds: float | None = None) -> pd.DataFrame:
+def select_bets(test: pd.DataFrame, rule: str, ev_min: float = 1.0, max_odds: float | None = None,
+                min_p: float = 0.0) -> pd.DataFrame:
     t = with_ev(test)
     if rule == "ev":
         bets = t[t["ev"] >= ev_min]
@@ -59,6 +60,8 @@ def select_bets(test: pd.DataFrame, rule: str, ev_min: float = 1.0, max_odds: fl
         raise ValueError(f"知らないルールです: {rule}")
     if max_odds is not None:
         bets = bets[bets["win_odds"] <= max_odds]
+    if min_p > 0:
+        bets = bets[bets["p_win"] >= min_p]
     return bets.sort_values(["date", "race_id", "number"]).reset_index(drop=True)
 
 
@@ -120,6 +123,8 @@ def run_rules(test: pd.DataFrame, rules: list[tuple[str, dict]], stake: int = 10
         label = f"期待値≧{kw['ev_min']:g}" if rule == "ev" else SHORT[rule]
         if kw.get("max_odds"):
             label += f"[〜{kw['max_odds']:g}倍]"
+        if kw.get("min_p"):
+            label += f"[勝率{kw['min_p']:.0%}〜]"
         s = settle(select_bets(test, rule, **kw), stake)
         settled[label] = s
         rows.append(asdict(summarize(label, s)))
@@ -129,6 +134,11 @@ def run_rules(test: pd.DataFrame, rules: list[tuple[str, dict]], stake: int = 10
 DEFAULT_RULES = [("favorite", {}), ("top1", {}), ("ev", {"ev_min": 1.0}), ("ev", {"ev_min": 1.2}),
                  ("ev", {"ev_min": 1.5}), ("all", {})]
 
+# ★(期待値の印)の基準を決めるための組み合わせ: 期待値 × 勝率の下限 × オッズの上限
+GRID_RULES = [("favorite", {}), ("all", {})] + [
+    ("ev", {"ev_min": e, "min_p": p, "max_odds": o})
+    for e in (1.0, 1.1, 1.2, 1.5) for p in (0.0, 0.03, 0.05) for o in (None, 50.0)]
+
 COLUMNS = {
     "rule": "ルール", "n_bets": "買い目数", "n_hits": "的中", "hit_rate": "的中率", "stake": "投資(円)",
     "payout": "払戻(円)", "profit": "収支(円)", "roi": "回収率(%)", "roi_low": "回収率 下限", "roi_high": "回収率 上限",
@@ -137,9 +147,9 @@ COLUMNS = {
 
 
 def format_summary(table: pd.DataFrame) -> str:
-    lines = [f"{'ルール':<18}{'買い目':>7}{'的中率':>8}{'収支(円)':>11}{'回収率':>8}{'95%区間':>16}{'最大落ち込み':>12}"]
+    lines = [f"{'ルール':<34}{'買い目':>7}{'的中率':>8}{'収支(円)':>11}{'回収率':>8}{'95%区間':>16}{'最大落ち込み':>12}"]
     for r in table.itertuples():
-        lines.append(f"{r.rule:<18}{r.n_bets:>7}{r.hit_rate:>8.1%}{r.profit:>11,}{r.roi:>7.1f}%"
+        lines.append(f"{r.rule:<34}{r.n_bets:>7}{r.hit_rate:>8.1%}{r.profit:>11,}{r.roi:>7.1f}%"
                      f"{f'{r.roi_low:.0f}〜{r.roi_high:.0f}%':>16}{r.max_drawdown:>12,}")
     return "\n".join(lines)
 

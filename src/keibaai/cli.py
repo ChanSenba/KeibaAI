@@ -120,6 +120,8 @@ def main(argv=None) -> None:
     bt.add_argument("--blend", action="store_true",
                     help="モデルの勝率とオッズの確率を混ぜた勝率を使う(混ぜ方は評価開始日の前の1年で決める)")
     bt.add_argument("--max-odds", type=float, help="これを超えるオッズの馬は買わない")
+    bt.add_argument("--min-p", type=float, default=0.0, help="これ未満の勝率の馬は買わない(例: 0.03)")
+    bt.add_argument("--grid", action="store_true", help="期待値 × 勝率の下限 × オッズの上限の組み合わせを一度に試す")
     bt.add_argument("--stake", type=int, default=100, help="1点の金額(円)")
     pr = sub.add_parser("predict", help="指定日の各馬の勝率と期待値を表示(先に entries で出馬表を取得)")
     pr.add_argument("--date", required=True, help="YYYY-MM-DD")
@@ -198,8 +200,12 @@ def main(argv=None) -> None:
             print(blend_summary(test, blend))
         else:
             test = predict_test(feats, args.test_from, args.market)
-        rules = DEFAULT_RULES if not args.ev else [("favorite", {}), ("top1", {})] + [
-            ("ev", {"ev_min": e, "max_odds": args.max_odds}) for e in args.ev] + [("all", {})]
+        if args.grid:
+            from .backtest import GRID_RULES
+            rules = GRID_RULES
+        else:
+            rules = DEFAULT_RULES if not args.ev else [("favorite", {}), ("top1", {})] + [
+                ("ev", {"ev_min": e, "max_odds": args.max_odds, "min_p": args.min_p}) for e in args.ev] + [("all", {})]
         table, _ = run_rules(test, rules, args.stake)
         print(f"{args.test_from} 以後 {test['race_id'].nunique()} レース / 単勝を毎回 {args.stake} 円")
         print(format_summary(table))
