@@ -117,6 +117,8 @@ def test_predict_day_gives_probabilities_and_expected_value():
     assert np.isclose(out["p_win_ability"].sum(), 1.0) and np.isclose(out["p_win_market"].sum(), 1.0)
     assert np.allclose(out["ev_market"], out["p_win_market"] * out["win_odds"])
     assert out["ev_ability"].notna().all()
+    for col in ("p_win_quality", "p_win_human", "p_win_track"):  # 要素ごとの勝率
+        assert np.isclose(out[col].sum(), 1.0)
     assert (out["venue"] + out["round"].astype(int).astype(str) + "R").iloc[0] == "東京1R"  # 画面で使う形
 
 

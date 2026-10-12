@@ -92,6 +92,9 @@ def main(argv=None) -> None:
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
     e.add_argument("--cache", default="data/cache")
+    fa = sub.add_parser("factors", help="要素(馬の質・騎手と厩舎・展開と馬場)ごとの予想の当たりやすさを比べる")
+    fa.add_argument("--test-from", required=True, help="この日以後で評価する(YYYY-MM-DD)")
+    fa.add_argument("--db", default="data/keiba.db")
     wk = sub.add_parser("weekly", help="毎週の処理: 前の週の予想を結果と照合して回顧を書き、今週末の予想を保存する")
     wk.add_argument("--db", default="data/keiba.db")
     wk.add_argument("--cache", default="data/cache")
@@ -117,6 +120,21 @@ def main(argv=None) -> None:
         n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
         return
+    if args.cmd == "weekly":
+        from .weekly import run_weekly
+
+        today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+        out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews)
+        print(f"reviewed: {', '.join(out['reviewed']) or 'なし'}")
+        for d, n in out["forecast"].items():
+            print(f"forecast {d}: {n}頭" if n else f"forecast {d}: 出馬表がまだありません")
+        return
+    if args.cmd == "factors":
+        from .factors import evaluate_factors, format_factor_report
+        from .features import build_features, load_results
+
+        reports, uniform = evaluate_factors(build_features(load_results(db.connect(args.db))), args.test_from)
+        print(format_factor_report(reports, uniform))
     if args.cmd == "backtest":
         from .backtest import DEFAULT_RULES, format_summary, predict_test, run_rules
         from .features import build_features, load_results
@@ -135,7 +153,8 @@ def main(argv=None) -> None:
         show = out.rename(columns={"venue": "場", "round": "R", "number": "番", "horse_name": "馬名",
                                    "win_odds": "オッズ", "p_win_ability": "勝率(能力)",
                                    "p_win_market": "勝率(オッズ込)", "ev_ability": "期待値(能力)",
-                                   "ev_market": "期待値(オッズ込)"})
+                                   "ev_market": "期待値(オッズ込)", "p_win_quality": "馬の質",
+                                   "p_win_human": "騎手厩舎", "p_win_track": "展開馬場"})
         print(show.drop(columns=["race_id", "date", "race_name", "jockey", "popularity"]).to_string(
             index=False, float_format=lambda x: f"{x:.2f}"))
         return

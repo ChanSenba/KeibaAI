@@ -89,3 +89,20 @@ def test_run_weekly_reviews_then_forecasts(tmp_path, monkeypatch):
     assert list(out["forecast"]) == ["2025-03-08", "2025-03-09"]
     out = weekly.run_weekly(conn, FakeFetcher(), dt.date(2025, 3, 4), tmp_path / "r", now=dt.datetime(2025, 3, 4, 21))
     assert out["reviewed"] == []  # 済んだ日は飛ばす
+
+
+def test_weekly_command_runs_run_weekly(tmp_path, monkeypatch, capsys):
+    from keibaai import cli
+
+    seen = {}
+
+    def fake(conn, fetcher, today, reviews_dir):
+        seen.update(today=today, reviews=str(reviews_dir))
+        return {"reviewed": ["2025-03-01"], "forecast": {"2025-03-08": 0, "2025-03-09": 12}}
+
+    monkeypatch.setattr(weekly, "run_weekly", fake)
+    cli.main(["weekly", "--db", str(tmp_path / "k.db"), "--cache", str(tmp_path / "c"),
+              "--reviews", str(tmp_path / "r"), "--today", "2025-03-03"])
+    out = capsys.readouterr().out
+    assert seen["today"] == dt.date(2025, 3, 3) and "reviewed: 2025-03-01" in out
+    assert "forecast 2025-03-08: 出馬表がまだありません" in out and "forecast 2025-03-09: 12頭" in out
