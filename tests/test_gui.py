@@ -124,3 +124,10 @@ def test_add_marks_by_win_probability():
     assert m["A", 9] == "☆" and m["A", 1] == ""
     # オッズのないレースは能力の勝率で。9 頭以下は △ が 1 頭、期待値 1 以上がいなければ ☆ なし
     assert [m["B", i] for i in (2, 3, 4, 1)] == ["◎", "○", "▲", "△"] and m["B", 5] == ""
+
+
+def test_backtest_run_returns_table_and_curves():
+    conn = synthetic_db(n_days=60, races_per_day=4)
+    n_races, table, settled = gui.backtest_run(conn, "2025-09-01", False, 1.0, None, 100)
+    assert n_races > 0 and len(table) == 4 and set(settled) == set(table["rule"])
+    assert settled[table["rule"].iloc[1]]["balance"].iloc[-1] == table["profit"].iloc[1]

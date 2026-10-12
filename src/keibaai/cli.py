@@ -95,6 +95,13 @@ def main(argv=None) -> None:
     fa = sub.add_parser("factors", help="要素(馬の質・騎手と厩舎・展開と馬場)ごとの予想の当たりやすさを比べる")
     fa.add_argument("--test-from", required=True, help="この日以後で評価する(YYYY-MM-DD)")
     fa.add_argument("--db", default="data/keiba.db")
+    bt = sub.add_parser("backtest", help="過去のレースで単勝の買い方ルールを再現し、回収率などを表示")
+    bt.add_argument("--test-from", required=True, help="この日以後を買う期間にする(YYYY-MM-DD)")
+    bt.add_argument("--db", default="data/keiba.db")
+    bt.add_argument("--market", action="store_true", help="オッズを入力に含めたモデルの勝率を使う")
+    bt.add_argument("--ev", type=float, nargs="*", help="期待値の基準(複数可)。省略すると 1.0 / 1.2 / 1.5")
+    bt.add_argument("--max-odds", type=float, help="これを超えるオッズの馬は買わない")
+    bt.add_argument("--stake", type=int, default=100, help="1点の金額(円)")
     pr = sub.add_parser("predict", help="指定日の各馬の勝率と期待値を表示(先に entries で出馬表を取得)")
     pr.add_argument("--date", required=True, help="YYYY-MM-DD")
     pr.add_argument("--db", default="data/keiba.db")
@@ -114,6 +121,16 @@ def main(argv=None) -> None:
 
         reports, uniform = evaluate_factors(build_features(load_results(db.connect(args.db))), args.test_from)
         print(format_factor_report(reports, uniform))
+    if args.cmd == "backtest":
+        from .backtest import DEFAULT_RULES, format_summary, predict_test, run_rules
+        from .features import build_features, load_results
+
+        test = predict_test(build_features(load_results(db.connect(args.db))), args.test_from, args.market)
+        rules = DEFAULT_RULES if not args.ev else [("favorite", {}), ("top1", {})] + [
+            ("ev", {"ev_min": e, "max_odds": args.max_odds}) for e in args.ev] + [("all", {})]
+        table, _ = run_rules(test, rules, args.stake)
+        print(f"{args.test_from} 以後 {test['race_id'].nunique()} レース / 単勝を毎回 {args.stake} 円")
+        print(format_summary(table))
         return
     if args.cmd == "predict":
         from .predict import predict_day
