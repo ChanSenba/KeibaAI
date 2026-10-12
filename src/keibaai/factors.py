@@ -11,19 +11,25 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import BASE_FEATURES, BIAS_FEATURES, CATEGORICAL
+from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL, FORM_FEATURES,
+                       HUMAN_EXTRA, PACE_FEATURES, ROTATION_FEATURES)
 from .model import PARAMS, auc, logloss, normalize_within_race
 
 FACTORS: dict[str, list[str]] = {
-    "馬の質": ["age", "weight_carried", "body_weight", "body_weight_diff", "days_since_last", "n_prev", "prev_finish",
-              "avg_finish_3", "avg_finish_5", "win_rate", "top3_rate", "avg_last3f_3", "same_dist_top3_rate",
-              "race_class", "class_change", "distance_change", "distance", "course_type", "ground"],
-    "騎手・厩舎": ["jockey_changed", "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate"],
+    "馬の質": ["age", "weight_carried", "body_weight", "body_weight_diff", "n_prev", "prev_finish",
+              "avg_finish_3", "avg_finish_5", "win_rate", "top3_rate", "avg_last3f_3",
+              "race_class", "class_change", "distance", "course_type", "ground", *FORM_FEATURES],
+    "適性": ["distance", "course_type", "venue", "ground", "distance_change", "same_dist_top3_rate", *APTITUDE_FEATURES],
+    "ローテーション": ["age", "n_prev", "days_since_last", *ROTATION_FEATURES],
+    "騎手・厩舎": ["jockey_changed", "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate",
+               *HUMAN_EXTRA],
     "展開・馬場": ["number", "bracket", "field_size", "distance", "course_type", "venue", "ground", "early_pos_rel_3",
-                 *BIAS_FEATURES],
+                 *BIAS_FEATURES, *PACE_FEATURES],
 }
-OVERALL = {"総合": BASE_FEATURES, "総合+馬場の偏り": BASE_FEATURES + BIAS_FEATURES}
-COLUMN = {"馬の質": "p_win_quality", "騎手・厩舎": "p_win_human", "展開・馬場": "p_win_track"}
+OVERALL = {"総合": BASE_FEATURES, "総合+馬場の偏り": BASE_FEATURES + BIAS_FEATURES,
+           "総合+全要素": BASE_FEATURES + BIAS_FEATURES + ARTICLE_FEATURES}
+COLUMN = {"馬の質": "p_win_quality", "適性": "p_win_fit", "ローテーション": "p_win_rotation",
+          "騎手・厩舎": "p_win_human", "展開・馬場": "p_win_track"}
 
 
 def _fit(train: pd.DataFrame, features: list[str], rounds: int):

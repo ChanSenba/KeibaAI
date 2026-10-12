@@ -48,7 +48,7 @@ def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime
 def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     return pd.read_sql_query(
         """
-        SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.distance, c.ground
+        SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground
         FROM entries e JOIN entry_races c USING (race_id) WHERE c.date = ?
         """,
         conn, params=(date,),
