@@ -99,6 +99,34 @@ def train_reports(conn: sqlite3.Connection, test_from: str) -> pd.DataFrame:
     })
 
 
+def next_race_day(today: dt.date) -> dt.date:
+    """予想の初期日。今日が土日・月曜(祝日開催)ならその日、平日なら次の土曜。"""
+    if today.weekday() >= 5 or today.weekday() == 0:
+        return today
+    return today + dt.timedelta(days=5 - today.weekday())
+
+
+def entries_summary(conn: sqlite3.Connection, date: str) -> dict:
+    """保存済みの出馬表の件数と取得時刻。"""
+    n_races, n_horses, with_odds, fetched = conn.execute(
+        "SELECT COUNT(DISTINCT c.race_id), COUNT(e.number), COUNT(e.win_odds), MAX(c.fetched_at) "
+        "FROM entry_races c LEFT JOIN entries e USING (race_id) WHERE c.date = ?", (date,)
+    ).fetchone()
+    return {"races": n_races, "horses": n_horses, "with_odds": with_odds, "fetched_at": fetched}
+
+
+def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None) -> int:
+    from .predict import fetch_entries
+
+    return fetch_entries(conn, fetcher, date.isoformat(), on_race=on_race)
+
+
+def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
+    from .predict import predict_day
+
+    return predict_day(conn, date.isoformat())
+
+
 def date_bounds(conn: sqlite3.Connection) -> tuple[dt.date | None, dt.date | None]:
     s = summary(conn)
     if not s["first"]:

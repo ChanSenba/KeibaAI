@@ -1,0 +1,96 @@
+"""これから走るレースの出馬表に、勝率と期待値を付ける。"""
+from __future__ import annotations
+
+import datetime as dt
+import sqlite3
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+
+from . import db
+from .entries import apply_odds, parse_odds_json, parse_shutuba
+from .features import BASE_FEATURES, CATEGORICAL, MARKET_FEATURES, build_features, load_results
+from .model import PARAMS, normalize_within_race
+
+
+def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,
+                  on_race=None) -> int:
+    """date(YYYY-MM-DD)の出馬表と単勝オッズを取得して保存し、保存したレース数を返す。
+
+    出馬表が出ていないレースは飛ばす。オッズが取れないときは出馬表だけ保存する。
+    """
+    stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    ids = fetcher.race_ids_on(date.replace("-", ""))
+    n = 0
+    for i, race_id in enumerate(ids):
+        if on_race:
+            on_race(i, len(ids), race_id)
+        try:
+            parsed = parse_shutuba(fetcher.shutuba_html(race_id), race_id)
+        except ValueError as e:
+            print(f"skip {race_id}: {e}")
+            continue
+        if not parsed.race.date:
+            parsed.race.date = date
+        try:
+            apply_odds(parsed, parse_odds_json(fetcher.odds_json(race_id)))
+        except Exception as e:  # オッズが取れなくても出馬表は使える
+            print(f"odds {race_id}: {e}")
+        db.save_entries(conn, parsed, stamp)
+        n += 1
+        print(f"saved {race_id} ({len(parsed.entries)}頭)")
+    return n
+
+
+def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
+    return pd.read_sql_query(
+        """
+        SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.distance, c.ground
+        FROM entries e JOIN entry_races c USING (race_id) WHERE c.date = ?
+        """,
+        conn, params=(date,),
+    )
+
+
+def _fit(train: pd.DataFrame, features: list[str], rounds: int):
+    cats = [c for c in CATEGORICAL if c in features]
+    return lgb.train(PARAMS, lgb.Dataset(train[features], train["win"], categorical_feature=cats), rounds)
+
+
+def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.DataFrame:
+    """date(YYYY-MM-DD)の各馬の勝率(能力のみ / オッズ込み)と期待値(勝率×単勝オッズ)を返す。
+
+    学習には、その日より前の結果だけを使う。期待値は 1 を超えると、予測どおりなら長い目で得になる目安。
+    """
+    entries = load_entries(conn, date)
+    if entries.empty:
+        raise ValueError(f"{date} の出馬表がありません。先に出馬表を取得してください")
+    hist = load_results(conn)
+    hist = hist[hist["date"] < pd.Timestamp(date)]
+    if hist.empty:
+        raise ValueError("学習に使える過去の結果がありません")
+
+    entries = entries.copy()
+    for c in ("win_odds", "popularity", "weight_carried", "body_weight", "body_weight_diff", "distance"):
+        entries[c] = pd.to_numeric(entries[c], errors="coerce")  # 空は None(object)で来るので数値にそろえる
+    entries["date"] = pd.Timestamp(date)
+    entries["finish"] = np.nan  # これから走るので結果はない
+    df = build_features(pd.concat([hist, entries], ignore_index=True))
+    is_entry = df["finish"].isna()
+    train, target = df[~is_entry], df[is_entry].copy()
+
+    ability = _fit(train, BASE_FEATURES, rounds)
+    market = _fit(train, BASE_FEATURES + MARKET_FEATURES, rounds)
+    target["p_win_ability"] = normalize_within_race(target, ability.predict(target[BASE_FEATURES]))
+    pm = market.predict(target[BASE_FEATURES + MARKET_FEATURES])
+    target["p_win_market"] = np.where(target["win_odds"].notna(), pm, np.nan)
+    ok = target["p_win_market"].notna()
+    target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())
+    target["ev_ability"] = target["p_win_ability"] * target["win_odds"]
+    target["ev_market"] = target["p_win_market"] * target["win_odds"]
+    cols = ["race_id", "date", "venue", "round", "race_name", "number", "horse_name", "jockey", "win_odds",
+            "popularity", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
+    out = target[cols].copy()
+    out["venue"] = out["venue"].astype(str)  # 特徴量用の category のままだと画面側で文字連結ができない
+    return out.sort_values(["venue", "round", "number"]).reset_index(drop=True)

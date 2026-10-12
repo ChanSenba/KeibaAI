@@ -78,7 +78,32 @@ def main(argv=None) -> None:
     t = sub.add_parser("train", help="特徴量を作ってLightGBMで学習し、時系列で評価する")
     t.add_argument("--db", default="data/keiba.db")
     t.add_argument("--test-from", required=True, help="この日付以降を評価用にする YYYY-MM-DD")
+    e = sub.add_parser("entries", help="指定日の出馬表と単勝オッズを取得して保存")
+    e.add_argument("--date", required=True, help="YYYY-MM-DD")
+    e.add_argument("--db", default="data/keiba.db")
+    e.add_argument("--cache", default="data/cache")
+    pr = sub.add_parser("predict", help="指定日の各馬の勝率と期待値を表示(先に entries で出馬表を取得)")
+    pr.add_argument("--date", required=True, help="YYYY-MM-DD")
+    pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
+
+    if args.cmd == "entries":
+        from .predict import fetch_entries
+
+        n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
+        print(f"done: {n} races")
+        return
+    if args.cmd == "predict":
+        from .predict import predict_day
+
+        out = predict_day(db.connect(args.db), args.date)
+        show = out.rename(columns={"venue": "場", "round": "R", "number": "番", "horse_name": "馬名",
+                                   "win_odds": "オッズ", "p_win_ability": "勝率(能力)",
+                                   "p_win_market": "勝率(オッズ込)", "ev_ability": "期待値(能力)",
+                                   "ev_market": "期待値(オッズ込)"})
+        print(show.drop(columns=["race_id", "date", "race_name", "jockey", "popularity"]).to_string(
+            index=False, float_format=lambda x: f"{x:.2f}"))
+        return
 
     if args.cmd == "train":
         from .features import build_features, load_results
