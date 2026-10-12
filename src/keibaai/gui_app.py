@@ -244,6 +244,10 @@ PRED_COLUMNS = {
     "mark": st.column_config.TextColumn(
         "印", width="small",
         help="◎○▲△は勝率の高い順(オッズがあればオッズ込み、なければ能力のみ)。☆は印のない馬のうち、能力の期待値がいちばん高く1を超える穴馬"),
+    "star": st.column_config.TextColumn(
+        "★", width="small",
+        help="モデルがオッズより高く評価している馬(能力の期待値1.1以上・勝率3%以上・単勝30倍以内)。"
+             "過去の検証(2025年以降)では、これらの馬を単勝で買った回収率は76〜84%で、買えば得になる印ではありません"),
     "number": st.column_config.NumberColumn("馬番", format="%d", help="馬番(ゼッケンの番号)"),
     "horse_name": st.column_config.TextColumn("馬名"),
     "jockey": st.column_config.TextColumn("騎手"),
@@ -349,7 +353,7 @@ def page_predict() -> None:
         top = table.dropna(subset=[key]).nlargest(8, key)
         with st.container(border=True):
             st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
-                ["race", "mark", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market",
+                ["race", "mark", "star", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market",
                  "ev_ability", "ev_market"]].style.map(mark_style, subset=["mark"]),
                 hide_index=True, width="stretch", column_config={
                     **PRED_COLUMNS, "race": st.column_config.TextColumn("レース", help="競馬場とレース番号")})
@@ -470,7 +474,7 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(h))}</span>'
             for m, n, h in zip(marked["mark"], marked["number"], marked["horse_name"])) + "</div>")
-    cols = {**({"mark": PRED_COLUMNS["mark"]} if "mark" in one else {}), **ENTRY_COLUMNS,
+    cols = {**({"mark": PRED_COLUMNS["mark"], "star": PRED_COLUMNS["star"]} if "mark" in one else {}), **ENTRY_COLUMNS,
             **(PRED_COLUMNS if prediction is not None else {})}
     styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
     if "mark" in one:
@@ -480,7 +484,9 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
         st.caption(":material/info: 「予想する」を押すと、予想印と勝率・期待値の列が加わります。")
     else:
         st.caption("印は勝率の高い順に ◎ ○ ▲ △(オッズがあればオッズ込み、なければ能力のみの勝率)。"
-                   "☆ は印のない馬のうち能力の期待値がいちばん高く、1 を超える穴馬です。")
+                   "☆ は印のない馬のうち能力の期待値がいちばん高く、1 を超える穴馬です。"
+                   "★ はモデルがオッズより高く評価している馬(期待値1.1以上・勝率3%以上・30倍以内)で、"
+                   "過去の検証では単勝の回収率は76〜84%でした。買えば得になる印ではありません。")
 
 
 MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
@@ -724,6 +730,8 @@ def show_plan(got, blend) -> None:
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
     st.dataframe(gui.plan_table(plan.bets), hide_index=True, width="stretch", column_config=BET_COLUMNS)
+    if plan.note:
+        st.caption(f":material/info: {plan.note}")
     st.caption("期待値 = 的中確率 × 当日オッズ。モデルの勝率とオッズの確率を混ぜた確率"
                f"(モデル {blend.a:.2f}・オッズ {blend.b:.2f} の重み)から、1〜3着の組み合わせの確率をハーヴィルの式で出しています。"
                "複勝とワイドは、幅のあるオッズの下限で計算しています。期待回収率は予想が当たっている前提の数字で、"

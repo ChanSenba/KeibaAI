@@ -131,3 +131,10 @@ def test_equal_stake_buys_same_amount_on_each_bet_up_to_cap():
     assert [b.stake for b in plan.bets] == [300, 300] and plan.total == 600
     small = bt.make_plan(NUMS, P, odds, bankroll=100_000, cap=300, equal_stake=300)
     assert [b.numbers for b in small.bets] == [(2,)]  # 上限に収まる1点だけ。期待値の高い方
+
+
+def test_small_bankroll_still_gets_100_yen_bets():
+    odds = {"単勝": {(1,): 3.0, (2,): 4.5}}  # EV 1.2, 1.35
+    plan = bt.make_plan(NUMS, P, odds, bankroll=1000, cap=10_000)
+    assert plan.bets and all(b.stake >= 100 for b in plan.bets) and plan.total <= 1000
+    assert plan.note

@@ -194,6 +194,14 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
     if stakes.sum() > cap:  # 上限を超えるときは、比率を保って縮める
         stakes = (np.floor(stakes * (cap / stakes.sum()) / UNIT) * UNIT).astype(int)
     chosen = [i for i, s in enumerate(stakes) if s >= UNIT]
+    note = ""
+    if not chosen and equal_stake <= 0 and cap >= UNIT:
+        # 資金が少なく、ケリーの配分がどれも100円に満たないときは、期待値の高い買い目から100円ずつ、上限まで買う
+        n = min(len(bets), cap // UNIT)
+        stakes = np.zeros(len(bets), dtype=int)
+        stakes[:n] = UNIT  # bets は期待値の高い順
+        chosen = list(range(n))
+        note = "資金が少ないため、ケリー基準の配分は100円に満たず、期待値の高い買い目から100円ずつにしています(配分より多めに張っています)"
     if not chosen:
         return Plan([], note="見送り: 期待値は1を超えますが、優位が小さいか資金が少なく、100円に満たない配分でした",
                     top_ev=sorted(bets, key=lambda b: -b.ev)[:5])
@@ -204,4 +212,4 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
     hit_any = prob[np.any(hit[chosen], axis=0)].sum()
     exp_ret = sum(b.stake * b.ev for b in final) / total
     return Plan(final, total=total, hit_prob=float(hit_any), expected_return=float(exp_ret),
-                expected_profit=float(sum(b.stake * (b.ev - 1) for b in final)), worst=-total)
+                expected_profit=float(sum(b.stake * (b.ev - 1) for b in final)), worst=-total, note=note)
