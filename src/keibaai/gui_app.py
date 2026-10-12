@@ -5,13 +5,50 @@ import contextlib
 import datetime as dt
 from pathlib import Path
 
+import altair as alt
 import streamlit as st
 
 from keibaai import db, gui
 from keibaai.cli import reparse_cache
 from keibaai.fetch import Fetcher
 
-st.set_page_config(page_title="KeibaAI", page_icon="🏇", layout="wide")
+st.set_page_config(page_title="KeibaAI", page_icon=":material/insights:", layout="wide")
+st.logo(str(Path(__file__).with_name("logo.svg")), size="large")
+
+# 幅の広い画面では中央寄せ、狭い画面(スマホ)では余白を詰める
+st.html("""
+<style>
+[data-testid="stMainBlockContainer"] { max-width: 1120px; padding-top: 4.5rem; padding-bottom: 4rem; }
+@media (max-width: 640px) {
+  [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; padding-top: 4rem; }
+  h1 { font-size: 1.75rem !important; }
+  /* 件数カードはスマホでも 2 列に並べる */
+  .st-key-kpis [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .75rem; }
+  .st-key-kpis [data-testid="stColumn"] { flex: 1 1 calc(50% - .75rem) !important; min-width: calc(50% - .75rem) !important; }
+  .st-key-kpis [data-testid="stMetricValue"] { font-size: 1.6rem; }
+}
+.kb-eyebrow { font-size: .78rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--primary-color, #1F7A4D); margin-bottom: -.4rem; }
+.kb-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin-top: .25rem; }
+.kb-stat-label { font-size: .8rem; opacity: .7; }
+.kb-stat-value { font-size: 1.45rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.kb-lead { color: rgba(128,128,128,.95); margin-top: -.3rem; margin-bottom: 1.2rem; line-height: 1.7; }
+</style>
+""")
+
+if "db_path" not in st.session_state:
+    st.session_state["db_path"] = "data/keiba.db"
+    st.session_state["cache_dir"] = "data/cache"
+
+
+def header(eyebrow: str, title: str, lead: str) -> None:
+    st.html(f'<div class="kb-eyebrow">{eyebrow}</div>')
+    st.title(title, anchor=False)
+    st.html(f'<div class="kb-lead">{lead}</div>')
+
+
+def connection():
+    return db.connect(st.session_state["db_path"])
 
 
 class LogBox:
@@ -26,107 +63,184 @@ class LogBox:
         for line in s.splitlines():
             if line.strip():
                 self.lines.append(line)
-        self.box.code("\n".join(self.lines[-self.max_lines:]) or " ", language=None)
+        if self.lines:
+            self.box.code("\n".join(self.lines[-self.max_lines:]), language=None, height=220)
         return len(s)
 
     def flush(self) -> None:
         pass
 
 
-with st.sidebar:
-    st.title("🏇 KeibaAI")
-    page = st.radio("メニュー", ["データ確認", "データ取得", "再解析", "学習・評価"], label_visibility="collapsed")
-    st.divider()
-    db_path = st.text_input("DB ファイル", "data/keiba.db")
-    cache_dir = st.text_input("キャッシュフォルダ", "data/cache")
-    st.caption(f"作業フォルダ: {Path.cwd()}")
+def bar_chart(df, x: str, y: str, horizontal: bool = False):
+    enc = dict(
+        x=alt.X(f"{y}:Q", title=None) if horizontal else alt.X(f"{x}:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap="greedy", labelSeparation=12)),
+        y=alt.Y(f"{x}:N", title=None, sort="-x") if horizontal else alt.Y(f"{y}:Q", title=None),
+        tooltip=[alt.Tooltip(f"{x}:N", title=""), alt.Tooltip(f"{y}:Q", title="レース数")],
+    )
+    mark = alt.Chart(df).mark_bar(cornerRadiusEnd=4) if horizontal else alt.Chart(df).mark_bar(
+        cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+    return mark.encode(**enc).properties(height=260, padding={"left": 8, "top": 6, "right": 6, "bottom": 0})
 
-conn = db.connect(db_path)
 
-
-if page == "データ確認":
-    st.header("取得済みデータ")
+# ---------------------------------------------------------------- データ確認
+def page_overview() -> None:
+    header("Overview", "取得済みデータ", "DB に入っているレース結果の量と期間です。")
+    conn = connection()
     s = gui.summary(conn)
-    c1, c2, c3 = st.columns([1, 1, 2])
-    c1.metric("レース数", f"{s['races']:,}")
-    c2.metric("出走データ数", f"{s['results']:,}")
-    c3.metric("期間", f"{s['first']} 〜 {s['last']}" if s["first"] else "なし")
     if s["races"] == 0:
-        st.info("まだデータがありません。左の「データ取得」から期間を指定して取得してください。")
-    else:
-        left, right = st.columns([2, 1])
-        with left:
-            st.subheader("月別レース数")
-            st.bar_chart(gui.races_by_month(conn), x="month", y="races", x_label="", y_label="レース数")
-        with right:
-            st.subheader("競馬場別")
-            st.dataframe(gui.races_by_venue(conn), hide_index=True, width="stretch",
-                         column_config={"venue": "競馬場", "races": "レース数"})
-        st.subheader("最近のレース")
-        st.dataframe(gui.recent_races(conn), hide_index=True, width="stretch", column_config={
-            "date": "日付", "venue": "競馬場", "round": "R", "name": "レース名", "course_type": "芝/ダ",
-            "distance": "距離", "ground": "馬場", "runners": "頭数"})
+        with st.container(border=True):
+            st.markdown("#### まだデータがありません")
+            st.write("「取得」で期間を選んで取得すると、ここに件数とグラフが出ます。")
+            st.page_link(PAGES["collect"], label="取得へ", icon=":material/arrow_forward:")
+        return
+
+    monthly = gui.races_by_month(conn)
+    cols = st.container(key="kpis").columns(4)
+    cols[0].metric("レース", f"{s['races']:,}", border=True, height="stretch")
+    cols[1].metric("出走", f"{s['results']:,}", border=True, height="stretch")
+    cols[2].metric("馬", f"{s['horses']:,}", border=True, height="stretch")
+    first, last = dt.date.fromisoformat(s["first"]), dt.date.fromisoformat(s["last"])
+    cols[3].metric("期間", f"{(last - first).days // 30 + 1} か月", border=True,
+                   delta=f"{first:%Y/%m} – {last:%Y/%m}", delta_color="off", delta_arrow="off",
+                   height="stretch")
+
+    left, right = st.columns([3, 2], gap="medium")
+    with left.container(border=True):
+        st.markdown("##### 月別レース数")
+        st.altair_chart(bar_chart(monthly, "month", "races"), width="stretch")
+    with right.container(border=True):
+        st.markdown("##### 競馬場別")
+        st.altair_chart(bar_chart(gui.races_by_venue(conn), "venue", "races", horizontal=True), width="stretch")
+
+    with st.container(border=True):
+        st.markdown("##### 最近のレース")
+        st.dataframe(gui.recent_races(conn), hide_index=True, width="stretch", height=380, column_config={
+            "date": st.column_config.DateColumn("日付", format="YYYY/MM/DD"), "venue": "競馬場",
+            "round": st.column_config.NumberColumn("R", format="%dR"), "name": "レース名", "course_type": "芝/ダ",
+            "distance": st.column_config.NumberColumn("距離", format="%dm"), "ground": "馬場", "runners": "頭数"})
 
 
-elif page == "データ取得":
-    st.header("データ取得")
-    st.write("期間内の土日・月曜の JRA レース結果を netkeiba から取得して DB に保存します。"
-             "取得済みのレースは飛ばすので、同じ期間を何度実行しても大丈夫です。")
+# ---------------------------------------------------------------- データ取得
+def _apply_preset() -> None:
+    name = st.session_state.get("preset")
+    if name:
+        st.session_state["start"], st.session_state["end"] = gui.preset_range(name, dt.date.today())
+
+
+def page_collect() -> None:
+    header("Collect", "データ取得",
+           "選んだ期間の土日・月曜の JRA レース結果を netkeiba から取得します。"
+           "取得済みのレースは飛ばすので、同じ期間を何度実行しても大丈夫です。")
     today = dt.date.today()
-    c1, c2 = st.columns(2)
-    start = c1.date_input("開始日", today - dt.timedelta(days=14), format="YYYY-MM-DD")
-    end = c2.date_input("終了日", today, format="YYYY-MM-DD")
-    days = gui.race_days(start, end) if start <= end else []
-    st.caption(f"対象日 {len(days)} 日。1ページごとに3秒以上あけるため、1日(約36レース)でおよそ2分かかります。")
-    st.warning("取得中にほかのボタンやメニューを押すと取得が止まります(それまでに取得した分は保存済みです)。")
-    if st.button("取得開始", type="primary", disabled=not days):
-        bar = st.progress(0.0, "準備中")
-        log = LogBox()
+    st.session_state.setdefault("start", gui.preset_range("先週末", today)[0])
+    st.session_state.setdefault("end", gui.preset_range("先週末", today)[1])
 
-        def on_day(i, n, d):
-            bar.progress(i / n if n else 1.0, f"{d} を取得中 ({i + 1}/{n} 日目)" if d else "完了")
+    with st.container(border=True):
+        st.segmented_control("よく使う期間", gui.PRESETS, key="preset", on_change=_apply_preset)
+        c1, c2 = st.columns(2)
+        start = c1.date_input("開始日", key="start", format="YYYY/MM/DD", max_value=today)
+        end = c2.date_input("終了日", key="end", format="YYYY/MM/DD", max_value=today)
+        days = gui.race_days(start, end) if start <= end else []
+        if start > end:
+            st.error("終了日が開始日より前になっています。")
+        else:
+            st.caption(f":material/event: 対象 {len(days)} 日 ・ :material/schedule: 最大で約 {len(days) * 2} 分"
+                       "(サーバーに負荷をかけないよう 1 ページごとに 3 秒以上あけます)")
+        run = st.button("取得を開始", type="primary", icon=":material/download:", disabled=not days, width="stretch")
 
-        try:
+    st.caption(":material/info: 取得中に別の画面へ移ったりボタンを押したりすると止まります。"
+               "それまでに取得した分は保存されています。")
+
+    if run:
+        conn = connection()
+        with st.status("取得しています…", expanded=True) as status:
+            bar = st.progress(0.0)
+            log = LogBox()
+
+            def on_day(i, n, d):
+                bar.progress(i / n if n else 1.0, f"{d:%Y/%m/%d} ({i + 1}/{n} 日目)" if d else "完了")
+
+            try:
+                with contextlib.redirect_stdout(log):
+                    total = gui.collect(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), start, end, on_day)
+            except Exception as e:  # 連続失敗(アクセス制限の可能性)や通信エラー。途中までの分は保存済み
+                status.update(label="取得が止まりました", state="error")
+                st.error(str(e))
+            else:
+                status.update(label=f"完了しました。新しく {total} レースを保存しました", state="complete")
+
+
+# ---------------------------------------------------------------- 再解析
+def page_reparse() -> None:
+    header("Reparse", "再解析",
+           "保存済みのページを解析し直して DB を更新します。通信はしません。プログラムを更新したあとに実行してください。")
+    n_cached = len(list((Path(st.session_state["cache_dir"]) / "race").glob("*.html")))
+    with st.container(border=True):
+        st.metric("保存済みページ", f"{n_cached:,}")
+        run = st.button("再解析を実行", type="primary", icon=":material/refresh:", disabled=n_cached == 0,
+                        width="stretch")
+    if run:
+        with st.status("解析しています…", expanded=False) as status:
+            log = LogBox()
             with contextlib.redirect_stdout(log):
-                total = gui.collect(conn, Fetcher(cache_dir=cache_dir), start, end, on_day)
-            st.success(f"完了: {total} レースを新しく保存しました。")
-        except RuntimeError as e:
-            st.error(str(e))
-        except Exception as e:  # 通信エラーなど。途中までの分は保存されている
-            st.error(f"取得が止まりました: {e}")
+                ok, bad = reparse_cache(connection(), st.session_state["cache_dir"])
+            status.update(label=f"完了しました。{ok:,} レースを更新、{bad:,} 件は飛ばしました",
+                          state="complete", expanded=bad > 0)
 
 
-elif page == "再解析":
-    st.header("再解析(通信なし)")
-    st.write("保存済みのページ(キャッシュ)を解析し直して DB を更新します。"
-             "プログラムを更新したあとに実行してください。")
-    n_cached = len(list((Path(cache_dir) / "race").glob("*.html")))
-    st.caption(f"キャッシュ済みページ: {n_cached:,} 件")
-    if st.button("再解析を実行", type="primary", disabled=n_cached == 0):
-        log = LogBox()
-        with st.spinner("解析中"), contextlib.redirect_stdout(log):
-            ok, bad = reparse_cache(conn, cache_dir)
-        st.success(f"完了: {ok} レースを更新、{bad} 件は飛ばしました。")
+# ---------------------------------------------------------------- 学習・評価
+MODEL_NOTES = {
+    "基準": "オッズだけで予測。的中・回収率は毎回1番人気を単勝で買った場合",
+    "オッズなし": "馬・騎手・調教師の過去成績とレース条件だけで予測",
+    "オッズあり": "上の情報に単勝オッズ・人気を加えて予測",
+}
 
 
-elif page == "学習・評価":
-    st.header("学習・評価")
+def _note(name: str) -> str:
+    return next((v for k, v in MODEL_NOTES.items() if name.startswith(k)), "")
+
+
+def page_train() -> None:
+    header("Model", "学習・評価", "評価開始日より前のレースで学習し、それ以後のレースで成績を確かめます。")
+    conn = connection()
     first, last = gui.date_bounds(conn)
     if first is None:
-        st.info("まだデータがありません。先に「データ取得」をしてください。")
-        st.stop()
-    st.write(f"取得済み期間 {first} 〜 {last} を、評価開始日より前(学習用)と以後(評価用)に分けて学習します。")
-    default = max(first, last - dt.timedelta(days=90))
-    test_from = st.date_input("評価開始日", default, min_value=first, max_value=last, format="YYYY-MM-DD")
-    if st.button("学習して評価", type="primary"):
+        with st.container(border=True):
+            st.markdown("#### まだデータがありません")
+            st.page_link(PAGES["collect"], label="取得へ", icon=":material/arrow_forward:")
+        return
+
+    with st.container(border=True):
+        c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
+        test_from = c1.date_input("評価開始日", max(first, last - dt.timedelta(days=90)), min_value=first,
+                                  max_value=last, format="YYYY/MM/DD",
+                                  help=f"取得済み期間は {first:%Y/%m/%d} – {last:%Y/%m/%d} です")
+        run = c2.button("学習して評価", type="primary", icon=":material/model_training:", width="stretch")
+    if run:
         try:
-            with st.spinner("学習中(データ量によって数分かかります)"):
+            with st.spinner("学習しています(データ量によって数分かかります)"):
                 st.session_state["report"] = (test_from, gui.train_reports(conn, test_from.isoformat()))
         except ValueError as e:
             st.error(str(e))
-    if "report" in st.session_state:
-        when, report = st.session_state["report"]
-        st.subheader(f"評価結果(評価開始日 {when})")
+
+    if "report" not in st.session_state:
+        return
+    when, report = st.session_state["report"]
+    st.subheader("評価結果", anchor=False)
+    st.caption(f"{when:%Y/%m/%d} 以降の {int(report['レース数'].iloc[0]):,} レースで評価")
+    best_roi = report["単勝回収率(%)"].max()
+    for i, (col, (_, r)) in enumerate(zip(st.columns(len(report), gap="small"), report.iterrows())):
+        with col.container(border=True, height="stretch", key=f"model-{i}"):
+            badge = " :green-badge[回収率 最高]" if r["単勝回収率(%)"] == best_roi else ""
+            st.markdown(f"**{r['モデル']}**{badge}")
+            st.caption(_note(r["モデル"]))
+            auc = "—" if r["勝AUC"] != r["勝AUC"] else f"{r['勝AUC']:.3f}"
+            stats = [("1番手的中", f"{r['1番手的中']:.1%}"), ("単勝回収率", f"{r['単勝回収率(%)']:.1f}%"), ("勝AUC", auc)]
+            st.html('<div class="kb-stats">' + "".join(
+                f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>'
+                for k, v in stats) + "</div>")
+
+    with st.expander("すべての指標", icon=":material/table:"):
         st.dataframe(report, hide_index=True, width="stretch", column_config={
             "勝LogLoss": st.column_config.NumberColumn(format="%.4f"),
             "勝AUC": st.column_config.NumberColumn(format="%.3f"),
@@ -134,9 +248,26 @@ elif page == "学習・評価":
             "1番手的中": st.column_config.NumberColumn(format="percent"),
             "単勝回収率(%)": st.column_config.NumberColumn(format="%.1f"),
         })
-        st.markdown(
-            "- **基準**: オッズだけで予測した場合(的中・回収率は毎回1番人気を単勝で買った場合)\n"
-            "- **オッズなし**: 馬・騎手・調教師の過去成績とレース条件だけで予測\n"
-            "- **オッズあり**: 上に単勝オッズ・人気を加えたもの\n\n"
-            "勝AUC は 0.5 が当てずっぽうで、高いほどよい。単勝の控除率は約20%なので、回収率が100%を超えるのは簡単ではありません。"
-        )
+        st.caption("勝AUC は 0.5 が当てずっぽうで、高いほどよい指標です。単勝の控除率は約 20% なので、"
+                   "回収率が 100% を超えるのは簡単ではありません。")
+
+
+# ---------------------------------------------------------------- 設定
+def page_settings() -> None:
+    header("Settings", "設定", "データの保存場所です。ふつうは変更不要です。")
+    with st.container(border=True):
+        # 入力欄の状態は画面を移ると消えるので、確定した値を別のキーに写しておく
+        for key, label in [("db_path", "DB ファイル"), ("cache_dir", "保存済みページのフォルダ")]:
+            st.text_input(label, st.session_state[key], key=f"_{key}",
+                          on_change=lambda k=key: st.session_state.update({k: st.session_state[f"_{k}"]}))
+        st.caption(f":material/folder: 作業フォルダ: `{Path.cwd()}`")
+
+
+PAGES = {
+    "overview": st.Page(page_overview, title="データ", icon=":material/dashboard:", default=True),
+    "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
+    "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
+    "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
+    "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),
+}
+st.navigation(list(PAGES.values()), position="top").run()

@@ -9,7 +9,7 @@ from test_model import synthetic_db
 def test_summary_and_tables():
     conn = synthetic_db(n_days=3, races_per_day=2)
     s = gui.summary(conn)
-    assert s["races"] == 6 and s["results"] == 60
+    assert s["races"] == 6 and s["results"] == 60 and 20 <= s["horses"] <= 60
     assert s["first"] == "2025-01-04" and s["last"] == "2025-01-18"
     assert gui.races_by_month(conn)["races"].sum() == 6
     assert gui.recent_races(conn, limit=3)["runners"].tolist() == [10, 10, 10]
@@ -54,3 +54,13 @@ def test_train_reports_table():
     report = gui.train_reports(conn, "2026-07-01")
     assert report["モデル"].tolist()[0] .startswith("基準")
     assert len(report) == 3
+
+
+def test_preset_range():
+    mon = dt.date(2024, 11, 25)
+    assert gui.preset_range("先週末", mon) == (dt.date(2024, 11, 23), dt.date(2024, 11, 25))
+    wed = dt.date(2024, 11, 27)
+    assert gui.preset_range("先週末", wed) == (dt.date(2024, 11, 23), dt.date(2024, 11, 25))
+    sat = dt.date(2024, 11, 30)  # 当日はまだ結果が出ていないので前の週末
+    assert gui.preset_range("先週末", sat) == (dt.date(2024, 11, 23), dt.date(2024, 11, 25))
+    assert gui.preset_range("今年", wed) == (dt.date(2024, 1, 1), wed)
