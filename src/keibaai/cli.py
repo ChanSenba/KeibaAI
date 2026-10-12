@@ -92,12 +92,17 @@ def main(argv=None) -> None:
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
     e.add_argument("--cache", default="data/cache")
+    wk = sub.add_parser("weekly", help="毎週の処理: 前の週の予想を結果と照合して回顧を書き、今週末の予想を保存する")
+    wk.add_argument("--db", default="data/keiba.db")
+    wk.add_argument("--cache", default="data/cache")
+    wk.add_argument("--reviews", default="data/reviews", help="回顧のファイルを置くフォルダ")
+    wk.add_argument("--today", help="今日の日付(YYYY-MM-DD)。試すとき用")
     pr = sub.add_parser("predict", help="指定日の各馬の勝率と期待値を表示(先に entries で出馬表を取得)")
     pr.add_argument("--date", required=True, help="YYYY-MM-DD")
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
-    if args.cmd in ("entries", "collect"):
+    if args.cmd in ("entries", "collect", "weekly"):
         warn_if_race_time()
     if args.cmd == "entries":
         from .predict import fetch_entries

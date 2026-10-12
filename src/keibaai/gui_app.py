@@ -453,6 +453,35 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
 MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
 
 
+# ---------------------------------------------------------------- 回顧
+def page_review() -> None:
+    from keibaai import weekly
+
+    header("Review", "回顧", "発走前に保存した予想と、レースの結果を照らし合わせます。毎週の処理(keibaai weekly)で予想が溜まります。")
+    conn = connection()
+    days = gui.review_dates(conn)
+    if not days:
+        with st.container(border=True):
+            st.markdown("#### 保存された予想がまだありません")
+            st.caption("PC で `keibaai weekly` を実行すると、今週末の予想が保存されます。")
+        return
+    day = st.selectbox("開催日", days)
+    r = weekly.review_day(conn, day)
+    if not r.summary["races"]:
+        st.info("この日の結果はまだ取得されていません。取得したあとに表示されます。", icon=":material/hourglass_empty:")
+        return
+    s = r.summary
+    pct = lambda x: "—" if x != x else f"{x:.0f}%"
+    stats = [("予想したレース", f"{s['races']}"), ("◎が1着", f"{s['honmei_wins']}"), ("◎の回収率", pct(s["honmei_roi"])),
+             ("期待値≧1の回収率", pct(s["ev_roi"]))]
+    st.html('<div class="kb-stats">' + "".join(
+        f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
+    st.markdown(weekly.render_markdown(r).replace("# ", "### ", 1))
+    with st.expander("馬ごとの予想と結果", icon=":material/table:"):
+        cols = ["venue", "round", "number", "horse_name", "mark", "p_win_ability", "ev_ability", "popularity", "finish"]
+        st.dataframe(r.horses[cols].sort_values(["venue", "round", "number"]), hide_index=True, width="stretch")
+
+
 # ---------------------------------------------------------------- 設定
 def page_settings() -> None:
     header("Settings", "設定", "データの保存場所です。ふつうは変更不要です。")
@@ -470,6 +499,7 @@ PAGES = {
     "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
+    "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),
     "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),
 }
 st.navigation(list(PAGES.values()), position="top").run()
