@@ -72,12 +72,12 @@ def collect(conn, fetcher, start: dt.date, end: dt.date, on_day=None) -> int:
 def train_reports(conn: sqlite3.Connection, test_from: str) -> pd.DataFrame:
     """CLI の train と同じ3行(基準・オッズなし・オッズあり)を表にして返す。"""
     from .features import build_features, load_results
-    from .model import baseline_favorite, evaluate
+    from .model import baseline_market, evaluate
 
     df = build_features(load_results(conn))
     r_abil, test = evaluate(df, test_from, use_market=False)
     r_mkt, _ = evaluate(df, test_from, use_market=True)
-    rows = [asdict(r) for r in (baseline_favorite(test), r_abil, r_mkt)]
+    rows = [asdict(r) for r in (baseline_market(test), r_abil, r_mkt)]
     return pd.DataFrame(rows).rename(columns={
         "name": "モデル", "n_races": "レース数", "win_logloss": "勝LogLoss", "win_auc": "勝AUC",
         "top3_auc": "複AUC", "top1_hit_rate": "1番手的中", "top1_roi": "単勝回収率(%)",

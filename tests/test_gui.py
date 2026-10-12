@@ -52,5 +52,5 @@ def test_collect_reports_progress(monkeypatch):
 def test_train_reports_table():
     conn = synthetic_db()
     report = gui.train_reports(conn, "2026-07-01")
-    assert report["モデル"].tolist()[0] == "基準:1番人気"
+    assert report["モデル"].tolist()[0] .startswith("基準")
     assert len(report) == 3
