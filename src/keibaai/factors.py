@@ -1,7 +1,7 @@
 """要素ごとの予想。馬の質・騎手と厩舎・展開と馬場を別々のモデルで勝率にし、並べて見られるようにする。
 
 どの要素が当たりに効いているかは、`keibaai factors --test-from <日付>` で確かめられる。
-調教は、まだデータを集めていないので入っていない。血統は `keibaai pedigree` で集めたぶんだけ効く。
+血統は `keibaai pedigree`、調教(追い切りの評価)は `keibaai training` で集めたぶんだけ効く。
 """
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 
 from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL, FORM_FEATURES,
-                       HUMAN_EXTRA, LAP_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, ROTATION_FEATURES)
+                       HUMAN_EXTRA, LAP_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, ROTATION_FEATURES,
+                       TRAINING_FEATURES)
 from .model import PARAMS, auc, logloss, normalize_within_race
 
 FACTORS: dict[str, list[str]] = {
@@ -26,12 +27,13 @@ FACTORS: dict[str, list[str]] = {
     "展開・馬場": ["number", "bracket", "field_size", "distance", "course_type", "venue", "ground", "early_pos_rel_3",
                  *BIAS_FEATURES, *PACE_FEATURES, *LAP_FEATURES],
     "血統": ["distance", "course_type", "venue", "ground", *PEDIGREE_FEATURES],
+    "調教": ["age", "n_prev", "days_since_last", "race_class", *TRAINING_FEATURES],
 }
 OVERALL = {"総合": BASE_FEATURES, "総合+馬場の偏り": BASE_FEATURES + BIAS_FEATURES,
            "総合+全要素": BASE_FEATURES + BIAS_FEATURES + ARTICLE_FEATURES}
 COLUMN = {"馬の質": "p_win_quality", "適性": "p_win_fit", "ローテーション": "p_win_rotation",
           "騎手・厩舎": "p_win_human", "展開・馬場": "p_win_track",
-          "血統": "p_win_pedigree"}
+          "血統": "p_win_pedigree", "調教": "p_win_training"}
 
 
 def _fit(train: pd.DataFrame, features: list[str], rounds: int):

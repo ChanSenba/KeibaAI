@@ -1,7 +1,7 @@
 """予想ファクターを、馬ごとの数字や文字で見られる形にする(画面の「ファクター」ページ用)。
 
 学習はしない。出馬表の各馬について、過去の結果だけから作った値を並べる。
-血統・ラップは取得したぶんだけ、調教はまだ取得していないので「未取得」と表示する。
+血統・ラップ・調教は取得したぶんだけ表示する。
 """
 from __future__ import annotations
 
@@ -53,7 +53,10 @@ SECTIONS: list[dict] = [
      "cols": [("sire", "父"), ("damsire", "母の父"), ("sire_line", "父の系統"), ("sire_top3_rate", "父産駒の3着内率"),
               ("sire_ctdist_top3_rate", "父産駒・芝ダ×距離帯"), ("sire_ground_top3_rate", "父産駒・芝ダ×馬場"),
               ("damsire_top3_rate", "母父産駒の3着内率"), ("damsire_ctdist_top3_rate", "母父産駒・芝ダ×距離帯")]},
-    {"name": "調教", "note": "調教のデータは、まだ取得していません。", "cols": []},
+    {"name": "調教",
+     "note": "netkeiba の最終追い切りの評価(短評とA〜D)。前日の午後に公開されます(keibaai training --date で取り直し)。"
+             "メンバー内の差は、A=4〜D=1 とした点数からレースの平均を引いた値です。タイムは会員限定なので使っていません。",
+     "cols": [("train_critic", "短評"), ("train_rank", "評価"), ("train_rank_vs_field", "メンバー内の差")]},
     {"name": "ラップ・ペース",
      "note": "ペース差 = 前半3F − 後半3F(プラスは後傾=スロー寄り)。RPCI そのものではなく、結果ページのラップからの代用です。",
      "cols": [("prev_pace_diff", "前走のペース差"), ("pace_diff_3", "ペース差(3走平均)"),
@@ -119,6 +122,9 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "damsire_ctdist_top3_rate": ("母の父の産駒の、今回と同じ芝ダ×距離帯での3着内率。高いほど良い", "high"),
     "prev_pace_diff": ("前走の前半3F − 後半3F(秒)。プラスはスロー寄り、マイナスはハイペース寄り", None),
     "pace_diff_3": ("過去3走のペース差の平均。どんなペースを走ってきたか", None),
+    "train_critic": ("最終追い切りの短評(netkeiba)。気配上昇・仕上良好・前走並み など", None),
+    "train_rank": ("最終追い切りの評価。A が最も良く、D に向かって下がる", None),
+    "train_rank_vs_field": ("評価を A=4〜D=1 の点にして、レース平均を引いた値。プラスほどメンバーの中で良い", "high"),
     "l3f_vs_lap_3": ("自分の上がり3F − レース全体の後半3F(3走平均・秒)。マイナスが大きいほど周りより速く上がった", "low"),
 }
 
@@ -293,6 +299,7 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     t["jockey_wins_year"] = t["jockey_wins_year"].fillna(0)  # 今年まだ騎乗がない
     t = t.merge(_pedigree_names(conn, t["horse_id"]), on="horse_id", how="left")
     t["jockey"] = t["jockey"].astype(object)
+    t["train_critic"] = t["train_critic"].astype(object)
     t["venue"] = t["venue"].astype(str)
     keep = ["race_id", "venue", "round", "horse_name", *dict.fromkeys(c for s in SECTIONS for c, _ in s["cols"])]
     return t[[c for c in keep if c in t]].sort_values(["race_id", "number"]).reset_index(drop=True)
@@ -302,13 +309,18 @@ def section_status(conn: sqlite3.Connection) -> list[dict]:
     """各区分のデータが揃っているか。state は ready / partial / missing。"""
     n_horses = conn.execute("SELECT COUNT(DISTINCT horse_id) FROM results").fetchone()[0]
     n_ped = conn.execute("SELECT COUNT(*) FROM pedigree").fetchone()[0]
+    n_races = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
     n_flat = conn.execute("SELECT COUNT(*) FROM races WHERE course_type IN ('芝','ダ')").fetchone()[0]
     n_lap = conn.execute("SELECT COUNT(*) FROM races WHERE course_type IN ('芝','ダ') AND pace_first3f IS NOT NULL").fetchone()[0]
     out = []
     for s in SECTIONS:
         name = s["name"]
         if name == "調教":
-            state, text = "missing", "未取得(調教データを集める処理がまだありません)"
+            n_tr = conn.execute("SELECT COUNT(*) FROM training_fetched WHERE race_id IN (SELECT race_id FROM races)"
+                                ).fetchone()[0]
+            share = n_tr / n_races if n_races else 0
+            state = "ready" if share >= 0.95 else "partial" if n_tr else "missing"
+            text = f"{n_tr:,} / {n_races:,} レース" if n_tr else "未取得(keibaai training で取得)"
         elif name == "血統":
             share = n_ped / n_horses if n_horses else 0
             state = "ready" if share >= 0.95 else "partial" if n_ped else "missing"

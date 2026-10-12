@@ -10,7 +10,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-CATEGORICAL = ["course_type", "venue", "ground", "sex"]
+CATEGORICAL = ["course_type", "venue", "ground", "sex", "train_critic"]
 # 馬の過去成績・騎手/調教師の過去成績・レース条件。オッズは含めない(能力だけで予測するため)
 BASE_FEATURES = [
     "number", "bracket", "weight_carried", "age", "distance", "field_size",
@@ -36,8 +36,11 @@ LAP_FEATURES = ["prev_pace_diff", "pace_diff_3", "l3f_vs_lap_3"]
 # 血統: 父・母の父の産駒が、同じ条件でこれまでどれだけ3着以内に来たか(結果は「そのレースより前」だけ)
 PEDIGREE_FEATURES = ["sire_n", "sire_top3_rate", "sire_ctdist_top3_rate", "sire_ground_top3_rate",
                      "damsire_n", "damsire_top3_rate", "damsire_ctdist_top3_rate"]
+# 調教: 最終追い切りの評価(netkeiba の短評とA〜D)。レース前日に公開されるので、当日の予想にも使える
+TRAINING_FEATURES = ["train_rank_score", "train_rank_vs_field", "train_critic"]
+TRAIN_RANK_SCORE = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "E": 0.0}
 ARTICLE_FEATURES = (APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
-                    + LAP_FEATURES + PEDIGREE_FEATURES)
+                    + LAP_FEATURES + PEDIGREE_FEATURES + TRAINING_FEATURES)
 BIAS_FEATURES = ["track_front_bias", "track_inner_bias"]  # トラックバイアス(下の _track_bias)
 BIAS_WINDOW = "10D"
 
@@ -47,8 +50,9 @@ def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
         """
         SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground,
                c.pace_first3f, c.pace_last3f,
-               p.sire_id, p.damsire_id
+               p.sire_id, p.damsire_id, t.rank AS train_rank, t.critic AS train_critic
         FROM results r JOIN races c USING (race_id) LEFT JOIN pedigree p USING (horse_id)
+        LEFT JOIN training t ON t.race_id = r.race_id AND t.number = r.number AND t.seq = 0
         WHERE r.finish IS NOT NULL AND c.date IS NOT NULL
         """,
         conn,
@@ -213,6 +217,13 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["sire_ground_top3_rate"] = _expanding_rate(df, ["sire_id", "course_type", "ground"], "top3")[1]
     df["damsire_n"], df["damsire_top3_rate"] = _expanding_rate(df, "damsire_id", "top3")
     df["damsire_ctdist_top3_rate"] = _expanding_rate(df, ["damsire_id", "course_type", "dist_bucket_s"], "top3")[1]
+
+    # --- 調教: そのレースの最終追い切りの評価と、メンバー内での差 ---
+    for c in ("train_rank", "train_critic"):
+        if c not in df:
+            df[c] = np.nan
+    df["train_rank_score"] = df["train_rank"].map(TRAIN_RANK_SCORE).astype(float)
+    df["train_rank_vs_field"] = df["train_rank_score"] - df.groupby("race_id")["train_rank_score"].transform("mean")
     return df.drop(columns=["dist_bucket_s", "_ret", "l3f_rank_rel", "time_diff", "pos_gain", "pace_diff", "l3f_vs_lap"])
 
 
