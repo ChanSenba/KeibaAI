@@ -61,10 +61,10 @@ def _fit(train: pd.DataFrame, features: list[str], rounds: int):
     return lgb.train(PARAMS, lgb.Dataset(train[features], train["win"], categorical_feature=cats), rounds)
 
 
-def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.DataFrame:
-    """date(YYYY-MM-DD)の各馬の勝率(能力のみ / オッズ込み)と期待値(勝率×単勝オッズ)を返す。
+def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """その日より前の結果と、その日の出馬表をつないで特徴量を作る。(特徴量の表, 過去の結果) を返す。
 
-    学習には、その日より前の結果だけを使う。期待値は 1 を超えると、予測どおりなら長い目で得になる目安。
+    出馬表の行は finish が空(これから走るので結果がない)。
     """
     entries = load_entries(conn, date)
     if entries.empty:
@@ -79,7 +79,15 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
         entries[c] = pd.to_numeric(entries[c], errors="coerce")  # 空は None(object)で来るので数値にそろえる
     entries["date"] = pd.Timestamp(date)
     entries["finish"] = np.nan  # これから走るので結果はない
-    df = build_features(pd.concat([hist, entries], ignore_index=True))
+    return build_features(pd.concat([hist, entries], ignore_index=True)), hist
+
+
+def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.DataFrame:
+    """date(YYYY-MM-DD)の各馬の勝率(能力のみ / オッズ込み)と期待値(勝率×単勝オッズ)を返す。
+
+    学習には、その日より前の結果だけを使う。期待値は 1 を超えると、予測どおりなら長い目で得になる目安。
+    """
+    df, hist = day_frame(conn, date)
     is_entry = df["finish"].isna()
     train, target = df[~is_entry], df[is_entry].copy()
 

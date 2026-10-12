@@ -10,7 +10,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from keibaai import db, gui
+from keibaai import db, factor_view, gui
 from keibaai.cli import reparse_cache
 from keibaai.fetch import Fetcher
 
@@ -437,13 +437,18 @@ def race_picker(races, key: str):
     return here[here["round"] == rnd].iloc[0], box
 
 
-def race_detail(conn, race, race_id: str, prediction) -> None:
-    """レース名・条件と出馬表。予想があれば印・勝率・期待値も出す。"""
+def race_head(race) -> None:
+    """レース番号・名前・条件の見出し。"""
     meta = [f"{race.course_type or ''}{race.distance}m" if race.distance else None, race.ground,
             f"{race.start_time} 発走" if race.start_time else None, f"{race.runners}頭"]
     st.html(f'<div class="kb-race-head"><span class="kb-race-no">{int(race["round"])}R</span>'
             f'<span class="kb-race-name">{html.escape(race["name"] or "")}</span></div>'
             f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
+
+
+def race_detail(conn, race, race_id: str, prediction) -> None:
+    """レース名・条件と出馬表。予想があれば印・勝率・期待値も出す。"""
+    race_head(race)
     one = gui.race_entries(conn, race_id, prediction)
     if "mark" in one:
         marked = one[one["mark"] != ""].sort_values("mark", key=lambda m: m.map(MARK_ORDER.get))
@@ -464,6 +469,79 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
 
 
 MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
+
+
+# ---------------------------------------------------------------- ファクター
+STATE_ICON = {"ready": ":material/check_circle:", "partial": ":material/timelapse:", "missing": ":material/block:"}
+
+
+@st.cache_data(show_spinner=False)
+def _factor_values(db_path: str, date: str, stamp: str):
+    return factor_view.factor_values(db.connect(db_path), date)
+
+
+def _factor_config(cols) -> dict:
+    out = {}
+    for col, label in cols:
+        if col.endswith("_rate") or col.endswith("_top3_rate"):
+            out[col] = st.column_config.NumberColumn(label, format="percent")
+        elif col in ("early_pos_rel_3", "inner_pos", "weight_ratio", "l3f_rank_3", "track_front_bias", "track_inner_bias",
+                     "jockey_roi", "pace_diff_3", "prev_pace_diff", "l3f_vs_lap_3", "time_diff_5", "avg_finish_5",
+                     "bw_vs_avg", "weight_change", "win_odds"):
+            out[col] = st.column_config.NumberColumn(label, format="%.2f")
+        elif col in ("jockey_rank", "jockey_wins_year", "pair_n", "tj_n", "n_front_runners", "number", "bracket", "age",
+                     "popularity", "body_weight", "body_weight_diff", "days_since_last", "distance_change", "class_change",
+                     "prev_pop_gap"):
+            out[col] = st.column_config.NumberColumn(label, format="%d")
+        else:
+            out[col] = st.column_config.TextColumn(label)
+    return out
+
+
+def page_factors() -> None:
+    header("Factors", "ファクター",
+           "出走馬ごとの予想ファクターを、数字や成績のまま見られます。どれも過去の結果だけから作った値です。")
+    conn = connection()
+    status = factor_view.section_status(conn)
+    st.html('<div class="kb-factor-status">' + "".join(
+        f'<div class="kb-fs kb-fs-{s["state"]}"><b>{html.escape(s["name"])}</b><span>{html.escape(s["text"])}</span></div>'
+        for s in status) + "</div>")
+
+    today = dt.date.today()
+    with st.container(border=True):
+        date = st.date_input("対象日", gui.next_race_day(today), format="YYYY/MM/DD", key="factor_date")
+        info = gui.entries_summary(conn, date.isoformat())
+        if not info["races"]:
+            st.caption(":material/info: この日の出馬表をまだ取得していません。「予想」ページで取得すると、ここで見られます。")
+            return
+        st.caption(f":material/check_circle: 取得済み {info['races']} レース・{info['horses']} 頭")
+    races = gui.day_races(conn, date.isoformat())
+    race, box = race_picker(races, key=f"factor_{date}")
+    try:
+        with st.spinner("ファクターを計算しています"):
+            values = _factor_values(st.session_state["db_path"], date.isoformat(), str(info["fetched_at"]))
+    except ValueError as e:
+        st.error(str(e))
+        return
+    with box:
+        race_head(race)
+    one = values[values["race_id"] == race["race_id"]]
+    tabs = st.tabs([s["name"] for s in status])
+    for tab, section, st_ in zip(tabs, factor_view.SECTIONS, status):
+        with tab:
+            if st_["state"] == "missing":
+                st.warning(st_["text"], icon=":material/block:")
+            elif st_["state"] == "partial":
+                st.info(st_["text"], icon=":material/timelapse:")
+            if not section["cols"]:
+                continue
+            cols = [("number", "馬番"), ("horse_name", "馬名")] + [c for c in section["cols"] if c[0] not in ("number", "jockey")]
+            if section["name"] == "騎手・厩舎":
+                cols.insert(2, ("jockey", "騎手"))
+            cols = list(dict.fromkeys(c for c in cols if c[0] in one))
+            cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols)}
+            st.dataframe(one[[c for c, _ in cols]], hide_index=True, width="stretch", column_config=cfg)
+            st.caption(section["note"])
 
 
 # ---------------------------------------------------------------- 回顧
@@ -575,6 +653,7 @@ PAGES = {
     "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
     "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
+    "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
     "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),
     "backtest": st.Page(page_backtest, title="シミュレーション", icon=":material/payments:", url_path="backtest"),

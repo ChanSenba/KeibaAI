@@ -184,3 +184,12 @@ h1 { font-size: var(--kb-h1) !important; }
   outline-offset: 0.2em;
 }
 button, a, [role="button"] { touch-action: manipulation; }
+
+/* ファクターページ: 各区分のデータの状況 */
+.kb-factor-status { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; }
+.kb-fs { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.55rem 0.75rem; border-radius: 0.5rem;
+  border: 1px solid light-dark(#d9dde3, #3a3f47); border-left-width: 4px; font-size: 0.85rem; }
+.kb-fs span { opacity: 0.75; font-size: 0.78rem; }
+.kb-fs-ready { border-left-color: #2e9e5b; }
+.kb-fs-partial { border-left-color: #d89a1e; }
+.kb-fs-missing { border-left-color: #b9bec6; }
