@@ -15,6 +15,10 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) keibaai-personal-use"
 MIN_INTERVAL_SEC = 3.0  # 規約上、サーバーに負荷をかけないための下限
 
 
+class PageUnavailable(ValueError):
+    """結果表のないページ(中止・未開催・制限ページなど)。キャッシュしない。"""
+
+
 class Fetcher:
     def __init__(self, cache_dir: str | Path = "data/cache", min_interval: float = MIN_INTERVAL_SEC,
                  session: requests.Session | None = None, sleep=time.sleep, clock=time.monotonic):
@@ -47,9 +51,14 @@ class Fetcher:
         if path.exists():
             return path.read_text(encoding="utf-8")
         html = self._get(RACE_URL.format(race_id=race_id), encoding="euc-jp")
+        if "race_table_01" not in html:
+            raise PageUnavailable(f"結果表のないページです: {race_id}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(html, encoding="utf-8")
         return html
+
+    def discard(self, race_id: str) -> None:
+        (self.cache_dir / "race" / f"{race_id}.html").unlink(missing_ok=True)
 
     def race_ids_on(self, date: str) -> list[str]:
         """date: YYYYMMDD。その日の JRA のレース ID を返す。"""

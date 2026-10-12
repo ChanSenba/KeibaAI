@@ -23,7 +23,7 @@ def test_extract_only_jra_ids():
 
 
 class FakeResp:
-    def __init__(self, status=200, text="<html/>"):
+    def __init__(self, status=200, text="<table class=\"race_table_01\"></table>"):
         self.status_code, self.text, self.encoding = status, text, None
 
     def raise_for_status(self):
@@ -53,10 +53,10 @@ def test_cache_prevents_refetch_and_rate_limit(tmp_path):
 
 
 def test_backoff_on_429(tmp_path):
-    sess = FakeSession([FakeResp(429), FakeResp(200, "ok")])
+    sess = FakeSession([FakeResp(429), FakeResp(200, "ok race_table_01")])
     sleeps = []
     f = Fetcher(tmp_path, session=sess, sleep=sleeps.append, clock=lambda: 0.0)
-    assert f.race_html("202405050812") == "ok"
+    assert f.race_html("202405050812") == "ok race_table_01"
     assert 30 in sleeps
 
 
@@ -65,3 +65,46 @@ def test_default_requests_user_agent_is_replaced(tmp_path):
 
     f = Fetcher(tmp_path, session=requests.Session())
     assert "python-requests" not in f.session.headers["User-Agent"]
+
+
+def test_page_without_result_table_is_not_cached(tmp_path):
+    import pytest
+
+    from keibaai.fetch import PageUnavailable
+
+    f = Fetcher(tmp_path, session=FakeSession([FakeResp(200, "<html>blocked</html>")]),
+                sleep=lambda s: None, clock=lambda: 0.0)
+    with pytest.raises(PageUnavailable):
+        f.race_html("202605040301")
+    assert not (tmp_path / "race" / "202605040301.html").exists()
+
+
+def test_collect_day_skips_bad_race_and_aborts_on_streak(tmp_path):
+    import pytest
+
+    from keibaai import cli
+    from keibaai.fetch import PageUnavailable
+
+    class FakeFetcher:
+        def __init__(self, ids, bad):
+            self.ids, self.bad, self.discarded = ids, set(bad), []
+
+        def race_ids_on(self, date):
+            return self.ids
+
+        def race_html(self, race_id):
+            if race_id in self.bad:
+                raise PageUnavailable(race_id)
+            return HTML
+
+        def discard(self, race_id):
+            self.discarded.append(race_id)
+
+    conn = db.connect(":memory:")
+    ff = FakeFetcher(["202405050811", "202405050801", "202405050812"], bad=["202405050801"])
+    assert cli.collect_day(conn, ff, "20241124", []) == 2  # 1件飛ばして続行
+    assert ff.discarded == ["202405050801"]
+
+    ids = [f"20240505080{i}" for i in range(1, 7)]
+    with pytest.raises(RuntimeError):
+        cli.collect_day(conn, FakeFetcher(ids, bad=ids), "20241124", [])
