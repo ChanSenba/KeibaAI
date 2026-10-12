@@ -153,7 +153,7 @@ def main(argv=None) -> None:
         show = out.rename(columns={"venue": "場", "round": "R", "number": "番", "horse_name": "馬名",
                                    "win_odds": "オッズ", "p_win_ability": "勝率(能力)",
                                    "p_win_market": "勝率(オッズ込)", "ev_ability": "期待値(能力)",
-                                   "ev_market": "期待値(オッズ込)", "p_win_quality": "馬の質",
+                                   "ev_market": "期待値(オッズ込)", "p_win_quality": "馬の質", "p_win_fit": "適性", "p_win_rotation": "ローテ",
                                    "p_win_human": "騎手厩舎", "p_win_track": "展開馬場"})
         print(show.drop(columns=["race_id", "date", "race_name", "jockey", "popularity"]).to_string(
             index=False, float_format=lambda x: f"{x:.2f}"))

@@ -135,7 +135,7 @@ def race_entries(conn: sqlite3.Connection, race_id: str, prediction: pd.DataFram
     )
     if prediction is not None:
         cols = ["number", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
-        cols += [c for c in ("p_win_quality", "p_win_human", "p_win_track") if c in prediction]
+        cols += [c for c in ("p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track") if c in prediction]
         cols += ["mark"] if "mark" in prediction else []
         df = df.merge(prediction.loc[prediction["race_id"] == race_id, cols], on="number", how="left")
     return df

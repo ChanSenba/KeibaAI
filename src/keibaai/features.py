@@ -21,6 +21,17 @@ BASE_FEATURES = [
     "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate",
 ]
 MARKET_FEATURES = ["win_odds", "popularity"]
+# 記事(予想ファクター)に沿った特徴量。すべて「そのレースより前」の情報だけで作る
+APTITUDE_FEATURES = ["horse_ct_top3_rate", "horse_venue_top3_rate", "horse_dir_top3_rate", "horse_ground_top3_rate",
+                     "prev_same_ct_finish"]
+FORM_FEATURES = ["l3f_rank_3", "time_diff_5", "pos_gain_3", "bw_vs_avg", "weight_ratio", "weight_change",
+                 "prev_pop_gap", "dist_shorten300", "dist_extend300"]
+ROTATION_FEATURES = ["weeks_since_last", "is_layoff", "runs_since_layoff", "is_renso"]
+HUMAN_EXTRA = ["jockey_ct_top3_rate", "jockey_dist_top3_rate", "jockey_venue_top3_rate", "jockey_roi",
+               "pair_n", "pair_top3_rate", "tj_n", "tj_top3_rate"]
+PACE_FEATURES = ["style_front_rate", "style_closer_rate", "n_front_runners", "front_share", "field_style_mean",
+                 "style_vs_field", "inner_pos"]
+ARTICLE_FEATURES = APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
 BIAS_FEATURES = ["track_front_bias", "track_inner_bias"]  # トラックバイアス(下の _track_bias)
 BIAS_WINDOW = "10D"
 
@@ -28,7 +39,7 @@ BIAS_WINDOW = "10D"
 def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
-        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.distance, c.ground
+        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground
         FROM results r JOIN races c USING (race_id)
         WHERE r.finish IS NOT NULL AND c.date IS NOT NULL
         """,
@@ -55,18 +66,30 @@ def parse_class(name: str | None) -> float:
     return float("nan")
 
 
+def parse_late_position(passing: str | None) -> float:
+    """通過順位('13-12-12-7')の最後の数字(最後のコーナー)。取れなければ NaN。"""
+    m = re.findall(r"\d+", passing if isinstance(passing, str) else "")
+    return float(m[-1]) if m else float("nan")
+
+
 def parse_early_position(passing: str | None) -> float:
     """通過順位('13-12-12-7')の最初の数字。取れなければ NaN。"""
     m = re.match(r"\s*(\d+)", passing if isinstance(passing, str) else "")  # DB の NULL は NaN(float) で来る
     return float(m.group(1)) if m else float("nan")
 
 
-def _expanding_rate(df: pd.DataFrame, key: str, flag: str) -> tuple[pd.Series, pd.Series]:
-    """key ごとの『このレースより前』の出走数と flag 率。同じ日の他レースは含めない。"""
-    day = df.groupby([key, "date"])[flag].agg(["sum", "count"]).reset_index().sort_values([key, "date"])
-    day["cum_sum"] = day.groupby(key)["sum"].cumsum() - day["sum"]
-    day["cum_n"] = day.groupby(key)["count"].cumsum() - day["count"]
-    merged = df[[key, "date"]].merge(day[[key, "date", "cum_sum", "cum_n"]], on=[key, "date"], how="left")
+def _expanding_rate(df: pd.DataFrame, key: str | list[str], flag: str) -> tuple[pd.Series, pd.Series]:
+    """key ごとの『このレースより前』の出走数と flag 率。同じ日の他レースは含めない。
+
+    key は列名のリストでもよい(騎手×コース など)。結果のない行(出馬表)は数えない。
+    """
+    keys = [key] if isinstance(key, str) else list(key)
+    work = df[keys + ["date"]].copy()
+    work["_f"] = df[flag].astype(float).where(df["finish"].notna())
+    day = work.groupby(keys + ["date"], observed=True)["_f"].agg(["sum", "count"]).reset_index().sort_values(keys + ["date"])
+    day["cum_sum"] = day.groupby(keys, observed=True)["sum"].cumsum() - day["sum"]
+    day["cum_n"] = day.groupby(keys, observed=True)["count"].cumsum() - day["count"]
+    merged = df[keys + ["date"]].merge(day[keys + ["date", "cum_sum", "cum_n"]], on=keys + ["date"], how="left")
     n = merged["cum_n"].to_numpy(dtype=float)
     rate = np.where(n > 0, merged["cum_sum"].to_numpy(dtype=float) / np.where(n > 0, n, 1), np.nan)
     return pd.Series(n, index=df.index), pd.Series(rate, index=df.index)
@@ -100,6 +123,73 @@ def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
     if not out:
         return pd.DataFrame(columns=keys + BIAS_FEATURES)
     return pd.concat(out, ignore_index=True)
+
+
+def _prior_mean(series: pd.Series, by: pd.Series, window: int) -> pd.Series:
+    """by ごとに、1つ前までの window 件の平均(今回の値は含めない)。"""
+    shifted = series.groupby(by).shift(1)
+    return shifted.groupby(by).rolling(window, min_periods=1).mean().reset_index(level=0, drop=True)
+
+
+def _article_features(df: pd.DataFrame) -> pd.DataFrame:
+    """記事にあるファクターのうち、結果表だけから作れるもの(適性・内容・ローテーション・騎手・ペース)。"""
+    h = df["horse_id"]
+    g = df.groupby("horse_id", sort=False)
+    for c in ("direction",):
+        if c not in df:
+            df[c] = np.nan
+
+    # --- 適性: 同じ条件での過去の3着以内率(馬) ---
+    for col, key in (("horse_ct_top3_rate", "course_type"), ("horse_venue_top3_rate", "venue"),
+                     ("horse_dir_top3_rate", "direction"), ("horse_ground_top3_rate", "ground")):
+        df[col] = _expanding_rate(df, ["horse_id", key], "top3")[1]
+    same_ct = df.groupby(["horse_id", "course_type"], sort=False)["finish"]
+    df["prev_same_ct_finish"] = same_ct.shift(1)
+
+    # --- 内容: 上がり順位・タイム差・位置取りの上がり(直近の平均) ---
+    df["l3f_rank_rel"] = df.groupby("race_id")["last3f"].rank(method="min") / df["field_size"]
+    df["time_diff"] = df["time_sec"] - df.groupby("race_id")["time_sec"].transform("min")
+    df["pos_gain"] = (df["passing"].map(parse_early_position) - df["passing"].map(parse_late_position)) / df["field_size"]
+    df["l3f_rank_3"] = _prior_mean(df["l3f_rank_rel"], h, 3)
+    df["time_diff_5"] = _prior_mean(df["time_diff"], h, 5)
+    df["pos_gain_3"] = _prior_mean(df["pos_gain"], h, 3)
+    prior_bw = g["body_weight"].shift(1).groupby(h).expanding().mean().reset_index(level=0, drop=True)
+    df["bw_vs_avg"] = df["body_weight"] - prior_bw
+    df["weight_ratio"] = df["weight_carried"] / df["body_weight"]
+    df["weight_change"] = df["weight_carried"] - g["weight_carried"].shift(1)
+    df["prev_pop_gap"] = g["popularity"].shift(1) - g["finish"].shift(1)  # 前走の人気 − 着順(正なら人気以上に走った)
+    df["dist_shorten300"] = (df["distance_change"] <= -300).astype(float).where(df["distance_change"].notna())
+    df["dist_extend300"] = (df["distance_change"] >= 300).astype(float).where(df["distance_change"].notna())
+
+    # --- ローテーション ---
+    df["weeks_since_last"] = df["days_since_last"] / 7
+    df["is_layoff"] = (df["days_since_last"] >= 90).astype(float).where(df["days_since_last"].notna())
+    new_seg = (df["days_since_last"].isna() | (df["days_since_last"] >= 90)).astype(int)
+    seg = new_seg.groupby(h).cumsum()
+    df["runs_since_layoff"] = df.groupby([h, seg]).cumcount() + 1  # 休み明け(または初戦)を1とする
+    df["is_renso"] = (df["days_since_last"] <= 8).astype(float).where(df["days_since_last"].notna())
+
+    # --- 騎手・厩舎(同じ日の他レースは含めない) ---
+    df["dist_bucket_s"] = df["dist_bucket"].astype("float")
+    df["jockey_ct_top3_rate"] = _expanding_rate(df, ["jockey_id", "course_type"], "top3")[1]
+    df["jockey_dist_top3_rate"] = _expanding_rate(df, ["jockey_id", "dist_bucket_s"], "top3")[1]
+    df["jockey_venue_top3_rate"] = _expanding_rate(df, ["jockey_id", "venue"], "top3")[1]
+    df["_ret"] = df["win"] * df["win_odds"]  # 単勝を買い続けたときの払戻(倍)。オッズがなければ NaN
+    df["jockey_roi"] = _expanding_rate(df, "jockey_id", "_ret")[1]
+    df["pair_n"], df["pair_top3_rate"] = _expanding_rate(df, ["horse_id", "jockey_id"], "top3")
+    df["tj_n"], df["tj_top3_rate"] = _expanding_rate(df, ["trainer_id", "jockey_id"], "top3")
+
+    # --- ペース: 出走馬の脚質の組み合わせ(各馬の過去の位置取りだけを使う) ---
+    ep = df["early_pos"]
+    df["style_front_rate"] = _prior_mean((ep <= 0.25).astype(float).where(ep.notna()), h, 5)
+    df["style_closer_rate"] = _prior_mean((ep >= 0.7).astype(float).where(ep.notna()), h, 5)
+    front = (df["early_pos_rel_3"] <= 0.3).astype(float).where(df["early_pos_rel_3"].notna())
+    df["n_front_runners"] = front.groupby(df["race_id"]).transform("sum")
+    df["front_share"] = df["n_front_runners"] / df["field_size"]
+    df["field_style_mean"] = df.groupby("race_id")["early_pos_rel_3"].transform("mean")
+    df["style_vs_field"] = df["early_pos_rel_3"] - df["field_style_mean"]
+    df["inner_pos"] = df["number"] / df["field_size"]
+    return df.drop(columns=["dist_bucket_s", "_ret", "l3f_rank_rel", "time_diff", "pos_gain"])
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -138,6 +228,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     prev_jockey = g["jockey_id"].shift(1)
     df["jockey_changed"] = np.where(prev_jockey.isna(), np.nan, (prev_jockey != df["jockey_id"]).astype(float))
 
+    df = _article_features(df)
     bias = _track_bias(df)
     df = df.merge(bias, on=["venue", "course_type", "date"], how="left")
     for c in BIAS_FEATURES:
