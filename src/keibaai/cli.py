@@ -135,6 +135,7 @@ def main(argv=None) -> None:
 
         reports, uniform = evaluate_factors(build_features(load_results(db.connect(args.db))), args.test_from)
         print(format_factor_report(reports, uniform))
+        return
     if args.cmd == "backtest":
         from .backtest import DEFAULT_RULES, format_summary, predict_test, run_rules
         from .features import build_features, load_results
