@@ -139,7 +139,10 @@ def main(argv=None) -> None:
         from .predict import predict_day, blend_for_day
 
         conn = db.connect(args.db)
-        pred = predict_day(conn, args.date)
+        try:
+            pred = predict_day(conn, args.date)
+        except ValueError as e:
+            raise SystemExit(str(e))
         if args.race_id not in set(pred["race_id"]):
             raise SystemExit(f"{args.race_id} の出馬表がありません。先に entries で取得してください")
         print("モデルとオッズの混ぜ方を決めています(数分かかります)")
