@@ -88,6 +88,14 @@ def test_fetch_entries_skips_bad_race_and_survives_odds_failure():
     assert n == 1 and conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 2
 
 
+def test_fetch_entries_only_given_races():
+    conn = db.connect(":memory:")
+    fetcher = FakeFetcher(["bad", "202405050812"])
+    fetcher.race_ids_on = None  # レース一覧は読みにいかない
+    n = fetch_entries(conn, fetcher, "2024-11-24", now=dt.datetime(2024, 11, 23), race_ids=["202405050812"])
+    assert n == 1
+
+
 def _entries_for_future(conn, date, odds=True):
     """合成データの馬・騎手で、未来の日の出馬表を作る。"""
     conn.execute("INSERT INTO entry_races (race_id, name, date, venue, round, course_type, distance, ground) "

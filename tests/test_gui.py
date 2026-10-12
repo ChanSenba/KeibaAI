@@ -94,3 +94,33 @@ def test_day_races_and_race_entries():
     pred = gui.predict_table(conn, dt.date(2030, 1, 5))
     with_pred = gui.race_entries(conn, "202609990101", pred)
     assert len(with_pred) == 10 and with_pred["ev_market"].notna().all()
+
+
+def test_race_choices_merge_fetched_and_listed():
+    from test_entries import _entries_for_future
+
+    conn = synthetic_db(n_days=3)
+    _entries_for_future(conn, "2030-01-05")
+    ch = gui.race_choices(conn, "2030-01-05", ["202608010111", "202609990101", "202601010102"])
+    # 場コード順(01 札幌 → 08 京都 → 09 阪神)、その中はレース番号順
+    assert ch[["venue", "round", "fetched"]].values.tolist() == [
+        ["札幌", 2, False], ["京都", 11, False], ["阪神", 1, True]]
+    assert ch.set_index("race_id").loc["202609990101", "fetched"]
+    assert gui.race_choices(conn, "2030-01-06").empty
+
+
+def test_add_marks_by_win_probability():
+    import pandas as pd
+
+    t = pd.DataFrame({
+        "race_id": ["A"] * 10 + ["B"] * 5,
+        "number": list(range(1, 11)) + list(range(1, 6)),
+        "p_win_market": [0.05, 0.3, 0.2, 0.1, 0.08, 0.07, 0.06, 0.06, 0.04, 0.04] + [None] * 5,
+        "p_win_ability": [0.1] * 10 + [0.1, 0.4, 0.3, 0.15, 0.05],
+        "ev_ability": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 2.5, 0.9] + [0.2, 0.5, 0.5, 0.5, 0.4],
+    })
+    m = gui.add_marks(t).set_index(["race_id", "number"])["mark"]
+    assert [m["A", i] for i in (2, 3, 4, 5, 6)] == ["◎", "○", "▲", "△", "△"]
+    assert m["A", 9] == "☆" and m["A", 1] == ""
+    # オッズのないレースは能力の勝率で。9 頭以下は △ が 1 頭、期待値 1 以上がいなければ ☆ なし
+    assert [m["B", i] for i in (2, 3, 4, 1)] == ["◎", "○", "▲", "△"] and m["B", 5] == ""

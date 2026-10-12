@@ -15,13 +15,14 @@ from .model import PARAMS, normalize_within_race
 
 
 def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,
-                  on_race=None) -> int:
+                  on_race=None, race_ids: list[str] | None = None) -> int:
     """date(YYYY-MM-DD)の出馬表と単勝オッズを取得して保存し、保存したレース数を返す。
 
-    出馬表が出ていないレースは飛ばす。オッズが取れないときは出馬表だけ保存する。
+    race_ids を渡すとそのレースだけを取る。出馬表が出ていないレースは飛ばす。
+    オッズが取れないときは出馬表だけ保存する。
     """
     stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
-    ids = fetcher.race_ids_on(date.replace("-", ""))
+    ids = race_ids if race_ids is not None else fetcher.race_ids_on(date.replace("-", ""))
     n = 0
     for i, race_id in enumerate(ids):
         if on_race:
