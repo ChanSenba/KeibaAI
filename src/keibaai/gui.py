@@ -15,15 +15,13 @@ import pandas as pd
 from . import db
 from .cli import collect_day, daterange
 
-PORT = 8501
-
-
 def summary(conn: sqlite3.Connection) -> dict:
     """取得済みデータの件数と期間。"""
-    n_races, n_results, first, last = conn.execute(
-        "SELECT (SELECT COUNT(*) FROM races), (SELECT COUNT(*) FROM results), MIN(date), MAX(date) FROM races"
+    n_races, n_results, n_horses, first, last = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM races), (SELECT COUNT(*) FROM results), "
+        "(SELECT COUNT(DISTINCT horse_id) FROM results), MIN(date), MAX(date) FROM races"
     ).fetchone()
-    return {"races": n_races, "results": n_results, "first": first, "last": last}
+    return {"races": n_races, "results": n_results, "horses": n_horses, "first": first, "last": last}
 
 
 def races_by_month(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -48,6 +46,23 @@ def recent_races(conn: sqlite3.Connection, limit: int = 50) -> pd.DataFrame:
         conn,
         params=(limit,),
     )
+
+
+PRESETS = ["先週末", "1か月", "3か月", "今年"]
+
+
+def preset_range(name: str, today: dt.date) -> tuple[dt.date, dt.date]:
+    """取得期間のよく使う選び方。「先週末」は直近の終わった土日(月曜開催を含む)。"""
+    if name == "先週末":
+        sat = today - dt.timedelta(days=(today.weekday() - 5) % 7 or 7)
+        return sat, min(sat + dt.timedelta(days=2), today)
+    if name == "1か月":
+        return today - dt.timedelta(days=30), today
+    if name == "3か月":
+        return today - dt.timedelta(days=91), today
+    if name == "今年":
+        return dt.date(today.year, 1, 1), today
+    raise ValueError(name)
 
 
 def race_days(start: dt.date, end: dt.date) -> list[dt.date]:
@@ -95,10 +110,9 @@ def main() -> None:
     """`keibaai-gui` で Streamlit を起動し、ブラウザを開く。"""
     from streamlit.web import cli as stcli
 
+    # ポートや配色は gui_app.py の隣の .streamlit/config.toml で設定している
     app = Path(__file__).with_name("gui_app.py")
-    sys.argv = ["streamlit", "run", str(app), f"--server.port={PORT}", "--server.address=localhost",
-                "--browser.gatherUsageStats=false", "--server.showEmailPrompt=false",
-                "--client.toolbarMode=minimal"]
+    sys.argv = ["streamlit", "run", str(app)]
     sys.exit(stcli.main())
 
 

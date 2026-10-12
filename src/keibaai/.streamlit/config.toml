@@ -1,0 +1,38 @@
+# keibaai-gui の見た目とサーバー設定。gui_app.py と同じフォルダの .streamlit/ にあると読み込まれる。
+
+[server]
+port = 8501
+address = "localhost"  # この PC からだけ開ける
+showEmailPrompt = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, 'Noto Sans JP', 'Yu Gothic UI', Meiryo, sans-serif"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+baseRadius = "0.75rem"
+buttonRadius = "0.6rem"
+showWidgetBorder = true
+metricValueFontWeight = 600
+
+[theme.light]
+primaryColor = "#1F7A4D"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F4"
+textColor = "#18201B"
+borderColor = "#E2E7E3"
+dataframeHeaderBackgroundColor = "#F4F6F4"
+chartCategoricalColors = ["#1F7A4D", "#C28A2C", "#3A6EA5", "#B5523B", "#6B5BA8"]
+
+[theme.dark]
+primaryColor = "#4FC48A"
+backgroundColor = "#0E1311"
+secondaryBackgroundColor = "#171E1A"
+textColor = "#E4EAE6"
+borderColor = "#27302B"
+dataframeHeaderBackgroundColor = "#171E1A"
+chartCategoricalColors = ["#4FC48A", "#E0AE57", "#6FA3DB", "#E07A62", "#9C8FE0"]
