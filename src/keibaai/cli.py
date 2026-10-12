@@ -5,7 +5,9 @@ import datetime as dt
 from pathlib import Path
 
 from . import db
-from .fetch import Fetcher, ResultNotPublished
+import sys
+
+from .fetch import Fetcher, ResultNotPublished, is_race_time
 from .parse import parse_race
 
 
@@ -64,6 +66,14 @@ def daterange(start: dt.date, end: dt.date):
         d += dt.timedelta(days=1)
 
 
+def warn_if_race_time(now: dt.datetime | None = None) -> bool:
+    """土日の日中は一般の利用者が多いので、夜間や平日に回すよう促す(止めはしない)。"""
+    hit = is_race_time(now or dt.datetime.now())
+    if hit:
+        print("注意: 土日の日中は netkeiba が混み合う時間帯です。平日や夜間に実行するのがおすすめです。", file=sys.stderr)
+    return hit
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="keibaai")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -87,6 +97,8 @@ def main(argv=None) -> None:
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
+    if args.cmd in ("entries", "collect"):
+        warn_if_race_time()
     if args.cmd == "entries":
         from .predict import fetch_entries
 

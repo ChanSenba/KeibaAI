@@ -1,6 +1,9 @@
 """netkeiba からの取得。個人利用・低頻度・キャッシュ済みページは再取得しない。"""
 from __future__ import annotations
 
+import datetime as dt
+import os
+import random
 import re
 import time
 from pathlib import Path
@@ -13,8 +16,23 @@ RACE_URL = "https://db.netkeiba.com/race/{race_id}/"
 RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={date}"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
 ODDS_URL = "https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={race_id}&type=1&action=init"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) keibaai-personal-use"
-MIN_INTERVAL_SEC = 3.0  # 規約上、サーバーに負荷をかけないための下限
+MIN_INTERVAL_SEC = 3.0  # サーバーに負荷をかけないための下限
+JITTER_SEC = 2.0  # 3〜5秒の間でばらつかせ、アクセスが一定の拍で集中しないようにする
+
+
+def build_user_agent(contact: str | None = None) -> str:
+    """ブラウザを装わず、何のプログラムかが分かる UA。連絡先は環境変数 KEIBAAI_CONTACT で任意に付けられる。"""
+    contact = contact if contact is not None else os.environ.get("KEIBAAI_CONTACT", "")
+    base = "keibaai/0.1 (personal-use research script"
+    return f"{base}; contact: {contact})" if contact else f"{base})"
+
+
+USER_AGENT = build_user_agent()
+
+
+def is_race_time(now: dt.datetime) -> bool:
+    """土日の日中(JRA の開催時間帯)。一般の利用者が集中するので、収集は避けたい。"""
+    return now.weekday() >= 5 and 9 <= now.hour < 17
 
 
 class PageUnavailable(ValueError):
@@ -27,18 +45,20 @@ class ResultNotPublished(PageUnavailable):
 
 class Fetcher:
     def __init__(self, cache_dir: str | Path = "data/cache", min_interval: float = MIN_INTERVAL_SEC,
-                 session: requests.Session | None = None, sleep=time.sleep, clock=time.monotonic):
+                 session: requests.Session | None = None, sleep=time.sleep, clock=time.monotonic,
+                 jitter: float = JITTER_SEC, rng: random.Random | None = None):
         self.cache_dir = Path(cache_dir)
         self.min_interval = max(min_interval, MIN_INTERVAL_SEC)
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT  # requests 既定の UA は 400 を返される
+        self._jitter, self._rng = max(jitter, 0.0), rng or random.Random()
         self._sleep, self._clock = sleep, clock
         self._last = None
 
     def _get(self, url: str, encoding: str | None = None) -> str:
         for attempt in range(4):
             if self._last is not None:
-                wait = self.min_interval - (self._clock() - self._last)
+                wait = self.min_interval + self._rng.uniform(0, self._jitter) - (self._clock() - self._last)
                 if wait > 0:
                     self._sleep(wait)
             resp = self.session.get(url, timeout=30)
