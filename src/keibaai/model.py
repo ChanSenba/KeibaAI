@@ -71,13 +71,14 @@ def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 3
                   auc(test["top3"].to_numpy(), test["p_top3"].to_numpy()), hit, roi), test
 
 
-def baseline_favorite(test: pd.DataFrame) -> Report:
-    """1番人気を毎回買うだけの基準。"""
-    t = test.dropna(subset=["popularity"])
+def baseline_market(test: pd.DataFrame) -> Report:
+    """人気・オッズだけの基準。確率は 1/単勝オッズ をレース内で正規化したもの。"""
+    t = test.dropna(subset=["popularity", "win_odds"]).copy()
+    p = normalize_within_race(t, (1.0 / t["win_odds"]).to_numpy())
     top = t.loc[t.groupby("race_id")["popularity"].idxmin()]
-    roi = float((top["win"] * top["win_odds"].fillna(0) * 100).sum() / (100 * len(top)) * 100)
-    return Report("基準:1番人気", int(t["race_id"].nunique()), float("nan"), float("nan"), float("nan"),
-                  float(top["win"].mean()), roi)
+    roi = float((top["win"] * top["win_odds"] * 100).sum() / (100 * len(top)) * 100)
+    return Report("基準:オッズ/1番人気", int(t["race_id"].nunique()), logloss(t["win"].to_numpy(), p),
+                  auc(t["win"].to_numpy(), p), float("nan"), float(top["win"].mean()), roi)
 
 
 def format_report(reports: list[Report]) -> str:

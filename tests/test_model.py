@@ -6,7 +6,7 @@ import pytest
 
 from keibaai import db
 from keibaai.features import build_features, load_results
-from keibaai.model import baseline_favorite, evaluate, format_report
+from keibaai.model import baseline_market, evaluate, format_report
 from keibaai.parse import ParsedRace, Race, Result
 
 
@@ -83,10 +83,26 @@ def test_model_beats_chance_and_reports(df):
     assert rep.win_logloss < 0.35  # 10頭立てでの一様予測は約0.325。それ以下ならよい
     sums = test.groupby("race_id")["p_win"].sum()
     assert np.allclose(sums, 1.0)
-    text = format_report([baseline_favorite(test), rep])
-    assert "基準:1番人気" in text and "オッズなし" in text
+    text = format_report([baseline_market(test), rep])
+    assert "基準:オッズ/1番人気" in text and "オッズなし" in text
 
 
 def test_evaluate_rejects_empty_split(df):
     with pytest.raises(ValueError):
         evaluate(df, "2100-01-01", use_market=False)
+
+
+def test_class_and_early_position_parsers():
+    from keibaai.features import parse_class, parse_early_position
+
+    assert parse_class("3歳未勝利") == 1 and parse_class("3歳新馬") == 0
+    assert parse_class("第44回ジャパンC(GI)") == 8 and parse_class("京都記念(GII)") == 7
+    assert parse_class("1勝クラス") == 2 and np.isnan(parse_class(None))
+    assert parse_early_position("13-12-12-7") == 13 and np.isnan(parse_early_position(""))
+
+
+def test_new_features_are_past_only(df):
+    # 初出走では前走との比較は作れない
+    first = df.groupby("horse_id").head(1)
+    assert first["distance_change"].isna().all() and first["jockey_changed"].isna().all()
+    assert first["early_pos_rel_3"].isna().all()
