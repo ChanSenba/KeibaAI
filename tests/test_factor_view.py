@@ -96,6 +96,27 @@ def test_pedigree_names_and_status_follow_what_is_collected(conn):
         conn.commit()
 
 
+def test_training_values_and_status_follow_what_is_collected(conn):
+    race_id = conn.execute("SELECT race_id FROM entry_races WHERE date = ?", (DAY,)).fetchone()[0]
+    past = conn.execute("SELECT race_id FROM races ORDER BY date LIMIT 1").fetchone()[0]
+    rows = [(race_id, 1, 0, "仕上良好", "A"), (race_id, 2, 0, "前走並み", "C"), (race_id, 3, 0, None, None)]
+    conn.executemany("INSERT INTO training (race_id, number, seq, critic, rank) VALUES (?, ?, ?, ?, ?)", rows)
+    conn.execute("INSERT INTO training_fetched VALUES (?, 3, '2030-01-04')", (past,))
+    conn.commit()
+    try:
+        v = fv.factor_values(conn, DAY)
+        r = v[v["race_id"] == race_id].set_index("number")
+        assert (r.loc[1, "train_critic"], r.loc[1, "train_rank"]) == ("仕上良好", "A")
+        # A=4, C=2 の平均 3 との差(評価のない馬は平均に入れない)
+        assert (r.loc[1, "train_rank_vs_field"], r.loc[2, "train_rank_vs_field"]) == (1.0, -1.0)
+        assert r.loc[3, "train_rank_vs_field"] != r.loc[3, "train_rank_vs_field"]
+        assert {s["name"]: s for s in fv.section_status(conn)}["調教"]["state"] == "partial"
+    finally:
+        conn.execute("DELETE FROM training")
+        conn.execute("DELETE FROM training_fetched")
+        conn.commit()
+
+
 def test_no_entries_raises(conn):
     with pytest.raises(ValueError):
         fv.factor_values(conn, "2031-01-01")

@@ -271,6 +271,8 @@ PRED_COLUMNS = {
                                                    help="枠順・脚質・直近の馬場の偏り(先行/内有利)だけで見た勝率"),
     "p_win_pedigree": st.column_config.ProgressColumn("血統", min_value=0, max_value=1, format="percent",
                                                       help="父・母の父の産駒の、同じ条件での過去の成績だけで見た勝率(血統を取得した馬のみ)"),
+    "p_win_training": st.column_config.ProgressColumn("調教", min_value=0, max_value=1, format="percent",
+                                                      help="最終追い切りの評価(短評とA〜D)だけで見た勝率(調教を取得したレースのみ)"),
     "ev_ability": st.column_config.NumberColumn(
         "期待値(能力)", format="%.2f",
         help="勝率(能力) × 単勝オッズ。1を超えると、勝率が正しければ長い目で得になる目安。大穴ほど大きく出やすい"),
