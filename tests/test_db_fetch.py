@@ -149,3 +149,37 @@ def test_1970_template_page_is_detected(tmp_path):
                 sleep=lambda s: None, clock=lambda: 0.0)
     with pytest.raises(ResultNotPublished):
         f.race_html("202605040301")
+
+
+def test_interval_is_3_to_5_seconds_with_jitter(tmp_path):
+    import random
+
+    t = {"now": 0.0}
+    sleeps = []
+    sess = FakeSession([FakeResp() for _ in range(6)])
+    f = Fetcher(tmp_path, session=sess, rng=random.Random(1),
+                sleep=lambda s: (sleeps.append(s), t.update(now=t["now"] + s)), clock=lambda: t["now"])
+    for i in range(6):
+        f.race_html(f"2024050508{i:02d}")
+    assert len(sleeps) == 5
+    assert all(3.0 <= s <= 5.0 for s in sleeps) and len(set(sleeps)) > 1
+
+
+def test_user_agent_is_honest_and_contact_optional(monkeypatch):
+    from keibaai.fetch import build_user_agent
+
+    assert "Mozilla" not in build_user_agent("")
+    assert build_user_agent("me@example.com").endswith("contact: me@example.com)")
+    assert "keibaai" in build_user_agent("")
+
+
+def test_race_time_warning():
+    import datetime as dt
+
+    from keibaai import cli
+    from keibaai.fetch import is_race_time
+
+    assert is_race_time(dt.datetime(2026, 10, 17, 11))  # 土曜の昼
+    assert not is_race_time(dt.datetime(2026, 10, 17, 22))
+    assert not is_race_time(dt.datetime(2026, 10, 14, 11))  # 水曜
+    assert cli.warn_if_race_time(dt.datetime(2026, 10, 18, 10)) is True
