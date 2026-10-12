@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 
 import numpy as np
@@ -16,6 +17,7 @@ BASE_FEATURES = [
     "body_weight", "body_weight_diff", "days_since_last",
     "n_prev", "prev_finish", "avg_finish_3", "avg_finish_5", "win_rate", "top3_rate",
     "avg_last3f_3", "same_dist_top3_rate",
+    "race_class", "class_change", "distance_change", "early_pos_rel_3", "jockey_changed",
     "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate",
 ]
 MARKET_FEATURES = ["win_odds", "popularity"]
@@ -24,7 +26,7 @@ MARKET_FEATURES = ["win_odds", "popularity"]
 def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
-        SELECT r.*, c.date, c.venue, c.round, c.course_type, c.distance, c.ground
+        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.distance, c.ground
         FROM results r JOIN races c USING (race_id)
         WHERE r.finish IS NOT NULL AND c.date IS NOT NULL
         """,
@@ -32,6 +34,29 @@ def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
     )
     df["date"] = pd.to_datetime(df["date"])
     return df
+
+
+_CLASS_PATTERNS = [  # 上から順に判定。値が大きいほど格上
+    (r"新馬", 0), (r"未勝利", 1), (r"1勝|500万", 2), (r"2勝|1000万", 3), (r"3勝|1600万", 4),
+    (r"\(GIII\)|\(G3\)", 6), (r"\(GII\)|\(G2\)", 7), (r"\(GI\)|\(G1\)", 8),
+    (r"\(L\)|リステッド|オープン|OP|\(OP\)", 5),
+]
+
+
+def parse_class(name: str | None) -> float:
+    """レース名から格付けの目安(0=新馬 … 8=G1)を返す。分からなければ NaN。"""
+    if not isinstance(name, str):
+        return float("nan")
+    for pat, rank in _CLASS_PATTERNS:
+        if re.search(pat, name):
+            return float(rank)
+    return float("nan")
+
+
+def parse_early_position(passing: str | None) -> float:
+    """通過順位('13-12-12-7')の最初の数字。取れなければ NaN。"""
+    m = re.match(r"\s*(\d+)", passing or "")
+    return float(m.group(1)) if m else float("nan")
 
 
 def _expanding_rate(df: pd.DataFrame, key: str, flag: str) -> tuple[pd.Series, pd.Series]:
@@ -70,6 +95,16 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     sd = df.groupby(["horse_id", "dist_bucket"], sort=False)
     n_sd = sd.cumcount()
     df["same_dist_top3_rate"] = sd["top3"].cumsum().sub(df["top3"]) / n_sd.replace(0, np.nan)
+
+    # --- クラス・距離・脚質・乗り替わり(いずれも前走との比較は shift で過去だけを使う) ---
+    df["race_class"] = df["race_name"].map(parse_class)
+    df["class_change"] = df["race_class"] - g["race_class"].shift(1)
+    df["distance_change"] = df["distance"] - g["distance"].shift(1)
+    df["early_pos"] = df["passing"].map(parse_early_position) / df["field_size"]
+    ep = g["early_pos"].shift(1)
+    df["early_pos_rel_3"] = ep.groupby(df["horse_id"]).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
+    prev_jockey = g["jockey_id"].shift(1)
+    df["jockey_changed"] = np.where(prev_jockey.isna(), np.nan, (prev_jockey != df["jockey_id"]).astype(float))
 
     # --- 騎手・調教師(前日までの成績) ---
     df["jockey_n"], df["jockey_win_rate"] = _expanding_rate(df, "jockey_id", "win")

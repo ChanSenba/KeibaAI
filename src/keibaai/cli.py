@@ -82,12 +82,12 @@ def main(argv=None) -> None:
 
     if args.cmd == "train":
         from .features import build_features, load_results
-        from .model import baseline_favorite, evaluate, format_report
+        from .model import baseline_market, evaluate, format_report
 
         df = build_features(load_results(db.connect(args.db)))
         r_abil, test = evaluate(df, args.test_from, use_market=False)
         r_mkt, _ = evaluate(df, args.test_from, use_market=True)
-        print(format_report([baseline_favorite(test), r_abil, r_mkt]))
+        print(format_report([baseline_market(test), r_abil, r_mkt]))
         return
 
     if args.cmd == "reparse":
