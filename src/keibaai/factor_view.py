@@ -290,7 +290,8 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
 
     t["style"] = [style_label(a, b) for a, b in zip(t["early_pos_rel_3"], t["pos_gain_3"])]
     t["pace_forecast"] = t.groupby("race_id")["style"].transform(pace_forecast)
-    t = t.join(_records(t, hist)).assign(last5=_last5(t, hist))
+    mine = hist[hist["horse_id"].isin(set(t["horse_id"]))]  # 出走馬の過去だけ。全馬の履歴を分けるのは無駄
+    t = t.join(_records(t, mine)).assign(last5=_last5(t, mine))
     t["rotation"] = [rotation_label(d, r) for d, r in zip(t["days_since_last"], t["runs_since_layoff"])]
     t["jockey_change"] = t["jockey_changed"].map({1.0: "乗り替わり", 0.0: "継続"}).fillna("—")
     t["dist_note"] = np.select([t["dist_shorten300"] == 1, t["dist_extend300"] == 1], ["短縮300m以上", "延長300m以上"], "—")
