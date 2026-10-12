@@ -55,6 +55,16 @@ CREATE TABLE IF NOT EXISTS pedigree (
     sire_id TEXT, sire TEXT, dam_id TEXT, dam TEXT, damsire_id TEXT, damsire TEXT,
     sire_sire_id TEXT, sire_sire TEXT, sire_line TEXT
 );
+-- 調教(追い切り)。1頭に調教が何本もある(seq=0 が最終追い切り)。評価だけのページでは seq=0 の1行で、タイムは空
+CREATE TABLE IF NOT EXISTS training (
+    race_id TEXT NOT NULL, number INTEGER NOT NULL, seq INTEGER NOT NULL,
+    horse_id TEXT, date TEXT, course TEXT, slope INTEGER, ground TEXT, rider TEXT,
+    f6 REAL, f5 REAL, f4 REAL, f3 REAL, f2 REAL, f1 REAL, position INTEGER, load TEXT, partner TEXT,
+    critic TEXT, rank TEXT, review TEXT,
+    PRIMARY KEY (race_id, number, seq)
+);
+-- 調教ページを読んだレース(表がなかったレースも入れて、取り直さないようにする)
+CREATE TABLE IF NOT EXISTS training_fetched (race_id TEXT PRIMARY KEY, n_horses INTEGER, fetched_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_results_horse ON results(horse_id);
 CREATE INDEX IF NOT EXISTS idx_races_date ON races(date);
 """

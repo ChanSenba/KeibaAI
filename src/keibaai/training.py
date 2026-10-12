@@ -2,14 +2,24 @@
 
 1頭ぶんは、見出し行(短評)1行 + 調教1本ごとに1行。新しい調教が上。
 タイムの列(li)は5個固定で、ウッドなどは左から 6F・5F・4F・3F・1F、坂路は 4F・3F・2F・1F(先頭が '-')。
-未ログインで全頭ぶん出るのは評価(短評とA〜D)までで、タイムは一部の馬だけのことがある。
+未ログインで全頭ぶん出るのは、type を付けないページの評価(短評とA〜D)まで。そのページは1頭1行で、
+日付・コース・タイムはない。type=1 のタイムは未ログインだと3頭ぶんしか出ないので、いまは使わない。
+ランクのセルの class は 'Rank_B' のことも 'Rank_気配上昇' のこともあるので、A〜D はセルの文字で読む。
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from bs4 import BeautifulSoup
+
+from . import db
+from .fetch import Fetcher, PageUnavailable
+
+MAX_CONSECUTIVE_FAILURES = 5
 
 
 @dataclass
@@ -103,7 +113,8 @@ def parse_oikiri(html: str, race_id: str) -> list[TrainingRun]:
             load=_text(tr.find("td", class_="TrainingLoad")),
             partner=" / ".join(_text(p) for p in time_td.select(".Comment_Cell p")) or None
             if time_td is not None else None,
-            critic=_text(tr.find("td", class_="Training_Critic")), rank=_text(rank_td),
+            critic=_text(tr.find("td", class_="Training_Critic")),
+            rank=r if (r := _text(rank_td)) in ("A", "B", "C", "D", "E") else None,
             review=review if seq == 0 else None,
             **_times(time_td, slope),
         )
@@ -112,3 +123,76 @@ def parse_oikiri(html: str, race_id: str) -> list[TrainingRun]:
     if not out:
         raise ValueError(f"調教の行がありません: {race_id}")
     return out
+
+
+def save_training(conn: sqlite3.Connection, race_id: str, runs: list[TrainingRun]) -> None:
+    """1レースぶんを置き換えて保存する。runs が空でも「読んだ」印は残す(表のないレースを取り直さないため)。"""
+    with conn:
+        conn.execute("DELETE FROM training WHERE race_id = ?", (race_id,))
+        for r in runs:
+            db._upsert(conn, "training", TrainingRun, r)
+        conn.execute("INSERT OR REPLACE INTO training_fetched VALUES (?, ?, ?)",
+                     (race_id, len({r.number for r in runs}), dt.datetime.now().isoformat(timespec="seconds")))
+
+
+def pending_race_ids(conn: sqlite3.Connection) -> list[str]:
+    """調教をまだ読んでいない、結果のあるレース。新しい順(予想に近い時期のデータから効かせる)。"""
+    rows = conn.execute(
+        "SELECT race_id FROM races WHERE race_id NOT IN (SELECT race_id FROM training_fetched) "
+        "ORDER BY date DESC, race_id").fetchall()
+    return [r[0] for r in rows]
+
+
+def collect_training(conn: sqlite3.Connection, fetcher: Fetcher, limit: int = 0, log=print) -> int:
+    """終わったレースの調教評価を取って保存する。保存したレース数を返す。途中で止めても続きから再開できる。"""
+    ids = pending_race_ids(conn)
+    if limit:
+        ids = ids[:limit]
+    failures = n = 0
+    for race_id in ids:
+        try:
+            runs = parse_oikiri(fetcher.oikiri_html(race_id), race_id)
+        except PageUnavailable as e:  # 表そのものがない(古いレースなど)。読んだ印だけ付けて先へ
+            save_training(conn, race_id, [])
+            failures += 1
+            log(f"skip {race_id}: {e}")
+            if failures >= MAX_CONSECUTIVE_FAILURES:
+                raise RuntimeError(
+                    f"{MAX_CONSECUTIVE_FAILURES}件連続で調教の表がありませんでした。"
+                    "アクセス制限の可能性があるので、時間をおいて再実行してください") from e
+            continue
+        except ValueError as e:  # 表はあるが読めない。壊れたキャッシュを残さず、印も付けない
+            fetcher.discard_oikiri(race_id)
+            log(f"skip {race_id}: {e}")
+            continue
+        failures = 0
+        save_training(conn, race_id, runs)
+        n += 1
+        if n % 50 == 0:
+            log(f"saved {n}/{len(ids)}")
+    return n
+
+
+def fetch_entry_training(conn: sqlite3.Connection, fetcher: Fetcher, date: str, log=print) -> int:
+    """出馬表を取った日のレースの調教評価を取り直す(発走前は更新されるのでキャッシュしない)。"""
+    ids = [r[0] for r in conn.execute("SELECT race_id FROM entry_races WHERE date = ? ORDER BY race_id", (date,))]
+    n = 0
+    for race_id in ids:
+        try:
+            save_training(conn, race_id, parse_oikiri(fetcher.oikiri_html(race_id, cache=False), race_id))
+            n += 1
+        except ValueError as e:
+            log(f"skip {race_id}: {e}")
+    return n
+
+
+def reparse_training(conn: sqlite3.Connection, cache_dir: str | Path) -> tuple[int, int]:
+    ok = bad = 0
+    for path in sorted((Path(cache_dir) / "oikiri").glob("*.html")):
+        try:
+            save_training(conn, path.stem, parse_oikiri(path.read_text(encoding="utf-8"), path.stem))
+            ok += 1
+        except ValueError as e:
+            bad += 1
+            print(f"skip {path.stem}: {e}")
+    return ok, bad

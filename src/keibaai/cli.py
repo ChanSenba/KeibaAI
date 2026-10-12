@@ -96,6 +96,12 @@ def main(argv=None) -> None:
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
     pd_.add_argument("--limit", type=int, default=0, help="この頭数で止める(0なら全部)。まず試すとき用")
+    tr_ = sub.add_parser("training", help="調教の評価(短評とA〜D)を取得して保存する。新しいレースから。途中で止めても続きから")
+    tr_.add_argument("--db", default="data/keiba.db")
+    tr_.add_argument("--cache", default="data/cache")
+    tr_.add_argument("--limit", type=int, default=0, help="このレース数で止める(0なら全部)。まず試すとき用")
+    tr_.add_argument("--date", help="YYYY-MM-DD。出馬表を取った日のレースだけ取り直す(発走前の予想用)")
+    tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
     bp = sub.add_parser("bets", help="1レースの買い方(券種と金額配分)を出す。先に entries で出馬表を取得しておく")
     bp.add_argument("--date", required=True, help="YYYY-MM-DD")
     bp.add_argument("--race-id", required=True, help="対象レースの race_id(12桁)")
@@ -128,7 +134,7 @@ def main(argv=None) -> None:
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
-    if args.cmd in ("entries", "collect", "weekly", "pedigree", "bets"):
+    if args.cmd in ("entries", "collect", "weekly", "pedigree", "bets", "training"):
         warn_if_race_time()
     if args.cmd == "entries":
         from .predict import fetch_entries
@@ -170,6 +176,24 @@ def main(argv=None) -> None:
         print(f"血統が未取得の馬: 全部で{total}頭。今回は{todo}頭(1頭 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
         n = collect_pedigrees(conn, Fetcher(cache_dir=args.cache), args.limit)
         print(f"done: {n} horses")
+        return
+    if args.cmd == "training":
+        from .training import collect_training, fetch_entry_training, pending_race_ids, reparse_training
+
+        conn = db.connect(args.db)
+        if args.reparse:
+            ok, bad = reparse_training(conn, args.cache)
+            print(f"done: {ok} races reparsed, {bad} skipped")
+            return
+        if args.date:
+            n = fetch_entry_training(conn, Fetcher(cache_dir=args.cache), args.date)
+            print(f"done: {n} races")
+            return
+        total = len(pending_race_ids(conn))
+        todo = min(total, args.limit) if args.limit else total
+        print(f"調教が未取得のレース: 全部で{total}。今回は{todo}(1レース 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
+        n = collect_training(conn, Fetcher(cache_dir=args.cache), args.limit)
+        print(f"done: {n} races")
         return
     if args.cmd == "weekly":
         from .weekly import run_weekly

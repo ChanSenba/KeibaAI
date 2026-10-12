@@ -16,6 +16,7 @@ RACE_URL = "https://db.netkeiba.com/race/{race_id}/"
 RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={date}"
 PEDIGREE_URL = "https://db.netkeiba.com/horse/ped/{horse_id}/"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
+OIKIRI_URL = "https://race.netkeiba.com/race/oikiri.html?race_id={race_id}"  # 未ログインで全頭の短評とA〜D評価
 ODDS_URL = "https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={race_id}&type={odds_type}&action=init"
 MIN_INTERVAL_SEC = 3.0  # サーバーに負荷をかけないための下限
 JITTER_SEC = 2.0  # 3〜5秒の間でばらつかせ、アクセスが一定の拍で集中しないようにする
@@ -100,6 +101,22 @@ class Fetcher:
 
     def discard_pedigree(self, horse_id: str) -> None:
         (self.cache_dir / "ped" / f"{horse_id}.html").unlink(missing_ok=True)
+
+    def oikiri_html(self, race_id: str, cache: bool = True) -> str:
+        """調教(追い切り)の評価。終わったレースは変わらないのでキャッシュする。発走前のレースは cache=False で取り直す。"""
+        path = self.cache_dir / "oikiri" / f"{race_id}.html"
+        if cache and path.exists():
+            return path.read_text(encoding="utf-8")
+        html = self._get(OIKIRI_URL.format(race_id=race_id), encoding="utf-8")
+        if "OikiriTable" not in html:
+            raise PageUnavailable(f"調教の表のないページです: {race_id}")
+        if cache:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(html, encoding="utf-8")
+        return html
+
+    def discard_oikiri(self, race_id: str) -> None:
+        (self.cache_dir / "oikiri" / f"{race_id}.html").unlink(missing_ok=True)
 
     def shutuba_html(self, race_id: str) -> str:
         """出馬表。発走前に内容が変わる(取消・馬体重など)ので、キャッシュしない。"""
