@@ -252,6 +252,89 @@ def page_train() -> None:
                    "回収率が 100% を超えるのは簡単ではありません。")
 
 
+# ---------------------------------------------------------------- 予想
+PRED_COLUMNS = {
+    "number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", "jockey": "騎手",
+    "popularity": st.column_config.NumberColumn("人気", format="%d"),
+    "win_odds": st.column_config.NumberColumn("単勝", format="%.1f"),
+    "p_win_ability": st.column_config.ProgressColumn("勝率(能力)", min_value=0, max_value=1, format="percent"),
+    "p_win_market": st.column_config.ProgressColumn("勝率(オッズ込)", min_value=0, max_value=1, format="percent"),
+    "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f"),
+    "ev_market": st.column_config.NumberColumn("期待値(オッズ込)", format="%.2f"),
+}
+
+
+def page_predict() -> None:
+    header("Predict", "予想",
+           "これから走るレースの出馬表とオッズを取得し、各馬の勝率と期待値を表示します。")
+    today = dt.date.today()
+    conn = connection()
+    with st.container(border=True):
+        date = st.date_input("対象日", gui.next_race_day(today), format="YYYY/MM/DD", key="pred_date")
+        info = gui.entries_summary(conn, date.isoformat())
+        if info["races"]:
+            st.caption(f":material/check_circle: 取得済み {info['races']} レース・{info['horses']} 頭"
+                       f"(オッズあり {info['with_odds']} 頭) ・ 取得 {info['fetched_at']}")
+        else:
+            st.caption(":material/info: この日の出馬表はまだ取得していません")
+        c1, c2 = st.columns(2)
+        fetch = c1.button("出馬表とオッズを取得", icon=":material/download:", width="stretch")
+        predict = c2.button("予想する", type="primary", icon=":material/insights:", width="stretch",
+                            disabled=info["races"] == 0)
+    st.caption(":material/info: 取得には1レースあたり数秒かかります。オッズは発売開始後に出ます。"
+               "オッズが更新されたら、もう一度取得してください。")
+
+    if fetch:
+        with st.status("取得しています…", expanded=True) as status:
+            bar = st.progress(0.0)
+            log = LogBox()
+
+            def on_race(i, n, race_id):
+                bar.progress(i / n if n else 1.0, f"{i + 1}/{n} レース")
+
+            try:
+                with contextlib.redirect_stdout(log):
+                    n = gui.fetch_entries_for(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), date, on_race)
+            except Exception as e:
+                status.update(label="取得が止まりました", state="error")
+                st.error(str(e))
+            else:
+                bar.progress(1.0, "完了")
+                status.update(label=f"完了しました。{n} レースの出馬表を保存しました", state="complete")
+                st.rerun() if n else None
+
+    if predict:
+        try:
+            with st.spinner("学習して予想しています(数分かかります)"):
+                st.session_state["prediction"] = (date, gui.predict_table(conn, date))
+        except ValueError as e:
+            st.error(str(e))
+
+    if "prediction" not in st.session_state:
+        return
+    when, table = st.session_state["prediction"]
+    if when != date:
+        st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
+        return
+
+    st.subheader("期待値の高い馬", anchor=False)
+    key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
+    top = table.dropna(subset=[key]).nlargest(8, key)
+    with st.container(border=True):
+        st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
+            ["race", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]],
+            hide_index=True, width="stretch", column_config={**PRED_COLUMNS, "race": "レース"})
+        st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
+                   "過去のレースでの検証はこれからで、今は参考表示です。")
+
+    st.subheader("レース別", anchor=False)
+    races = table.drop_duplicates("race_id")
+    labels = {r.race_id: f"{r.venue}{int(r.round)}R {r.race_name or ''}" for r in races.itertuples()}
+    race_id = st.selectbox("レース", list(labels), format_func=labels.get)
+    one = table[table["race_id"] == race_id].sort_values("number")
+    st.dataframe(one[list(PRED_COLUMNS)], hide_index=True, width="stretch", column_config=PRED_COLUMNS)
+
+
 # ---------------------------------------------------------------- 設定
 def page_settings() -> None:
     header("Settings", "設定", "データの保存場所です。ふつうは変更不要です。")
@@ -267,6 +350,7 @@ PAGES = {
     "overview": st.Page(page_overview, title="データ", icon=":material/dashboard:", default=True),
     "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
     "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
+    "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
     "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),
 }

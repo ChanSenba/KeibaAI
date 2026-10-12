@@ -64,3 +64,19 @@ def test_preset_range():
     sat = dt.date(2024, 11, 30)  # 当日はまだ結果が出ていないので前の週末
     assert gui.preset_range("先週末", sat) == (dt.date(2024, 11, 23), dt.date(2024, 11, 25))
     assert gui.preset_range("今年", wed) == (dt.date(2024, 1, 1), wed)
+
+
+def test_next_race_day():
+    assert gui.next_race_day(dt.date(2026, 10, 12)) == dt.date(2026, 10, 12)  # 月曜(祝日開催がある)
+    assert gui.next_race_day(dt.date(2026, 10, 14)) == dt.date(2026, 10, 17)  # 水曜 → 次の土曜
+    assert gui.next_race_day(dt.date(2026, 10, 17)) == dt.date(2026, 10, 17)
+
+
+def test_entries_summary_and_predict_table():
+    from test_entries import _entries_for_future
+
+    conn = synthetic_db(n_days=40)
+    assert gui.entries_summary(conn, "2030-01-05")["races"] == 0
+    _entries_for_future(conn, "2030-01-05")
+    s = gui.entries_summary(conn, "2030-01-05")
+    assert (s["races"], s["horses"], s["with_odds"]) == (1, 10, 10)

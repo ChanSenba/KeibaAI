@@ -11,6 +11,8 @@ from .parse import JRA_PLACE_CODES
 
 RACE_URL = "https://db.netkeiba.com/race/{race_id}/"
 RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={date}"
+SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
+ODDS_URL = "https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={race_id}&type=1&action=init"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) keibaai-personal-use"
 MIN_INTERVAL_SEC = 3.0  # 規約上、サーバーに負荷をかけないための下限
 
@@ -62,6 +64,17 @@ class Fetcher:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(html, encoding="utf-8")
         return html
+
+    def shutuba_html(self, race_id: str) -> str:
+        """出馬表。発走前に内容が変わる(取消・馬体重など)ので、キャッシュしない。"""
+        html = self._get(SHUTUBA_URL.format(race_id=race_id), encoding="utf-8")
+        if "馬番" not in html:
+            raise PageUnavailable(f"出馬表のないページです: {race_id}")
+        return html
+
+    def odds_json(self, race_id: str) -> str:
+        """単勝オッズ(JSON)。発売前は空に近い応答になる。これもキャッシュしない。"""
+        return self._get(ODDS_URL.format(race_id=race_id), encoding="utf-8")
 
     def discard(self, race_id: str) -> None:
         (self.cache_dir / "race" / f"{race_id}.html").unlink(missing_ok=True)
