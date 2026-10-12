@@ -160,6 +160,11 @@ def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None, race_ids: list
     return fetch_entries(conn, fetcher, date.isoformat(), on_race=on_race, race_ids=race_ids)
 
 
+def review_dates(conn: sqlite3.Connection) -> list[str]:
+    """予想を保存してある日(新しい順)。"""
+    return [r[0] for r in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date DESC")]
+
+
 def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_min: float,
                  max_odds: float | None, stake: int):
     """(レース数, まとめの表, ルールごとの精算済み買い目)。学習は test_from より前だけを使う。"""
