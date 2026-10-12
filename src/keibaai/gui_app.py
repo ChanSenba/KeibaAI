@@ -15,26 +15,11 @@ from keibaai.fetch import Fetcher
 st.set_page_config(page_title="KeibaAI", page_icon=":material/insights:", layout="wide")
 st.logo(str(Path(__file__).with_name("logo.svg")), size="large")
 
-# 幅の広い画面では中央寄せ、狭い画面(スマホ)では余白を詰める
-st.html("""
-<style>
-[data-testid="stMainBlockContainer"] { max-width: 1120px; padding-top: 4.5rem; padding-bottom: 4rem; }
-@media (max-width: 640px) {
-  [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; padding-top: 4rem; }
-  h1 { font-size: 1.75rem !important; }
-  /* 件数カードはスマホでも 2 列に並べる */
-  .st-key-kpis [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .75rem; }
-  .st-key-kpis [data-testid="stColumn"] { flex: 1 1 calc(50% - .75rem) !important; min-width: calc(50% - .75rem) !important; }
-  .st-key-kpis [data-testid="stMetricValue"] { font-size: 1.6rem; }
-}
-.kb-eyebrow { font-size: .78rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--primary-color, #1F7A4D); margin-bottom: -.4rem; }
-.kb-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin-top: .25rem; }
-.kb-stat-label { font-size: .8rem; opacity: .7; }
-.kb-stat-value { font-size: 1.45rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
-.kb-lead { color: rgba(128,128,128,.95); margin-top: -.3rem; margin-bottom: 1.2rem; line-height: 1.7; }
-</style>
-""")
+# テーマで足りない部分のスタイル(画面幅への対応もここ)
+st.html(Path(__file__).with_name("style.css"))
+# light-dark() の色を、OS ではなく Streamlit で選ばれているテーマに合わせる
+if st.context.theme.type in ("light", "dark"):
+    st.html(f"<style>:root {{ color-scheme: {st.context.theme.type}; }}</style>")
 
 if "db_path" not in st.session_state:
     st.session_state["db_path"] = "data/keiba.db"
@@ -229,8 +214,8 @@ def page_train() -> None:
     st.subheader("評価結果", anchor=False)
     st.caption(f"{when:%Y/%m/%d} 以降の {int(report['レース数'].iloc[0]):,} レースで評価")
     best_roi = report["単勝回収率(%)"].max()
-    for i, (col, (_, r)) in enumerate(zip(st.columns(len(report), gap="small"), report.iterrows())):
-        with col.container(border=True, height="stretch", key=f"model-{i}"):
+    for col, (_, r) in zip(st.container(key="models").columns(len(report), gap="small"), report.iterrows()):
+        with col.container(border=True, height="stretch"):
             badge = " :green-badge[回収率 最高]" if r["単勝回収率(%)"] == best_roi else ""
             st.markdown(f"**{r['モデル']}**{badge}")
             st.caption(_note(r["モデル"]))

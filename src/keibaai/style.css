@@ -1,0 +1,107 @@
+/*
+ * KeibaAI 画面の追加スタイル。配色・書体・角丸の大半は .streamlit/config.toml のテーマで決め、
+ * ここではテーマで足りない部分だけを書く。good-css (github.com/vojtaholik/good-css) の書き方に従う:
+ * 画面幅ごとの切り替え(@media max-width)は使わず、clamp() と auto-fit で伸び縮みさせる。
+ */
+
+/* ---- トークン(1組で明暗どちらにも効く) ----
+ * color-scheme は gui_app.py が Streamlit の今のテーマ(ライト/ダーク)に合わせて上書きする */
+:root {
+  color-scheme: light dark;
+  --kb-accent: light-dark(oklch(0.5 0.12 155), oklch(0.75 0.14 155));
+  --kb-accent-subtle: color-mix(in oklch, var(--kb-accent) 14%, transparent);
+  --kb-muted: color-mix(in oklch, currentColor 62%, transparent);
+  --kb-gutter: clamp(1rem, 0.4rem + 3vw, 3rem);
+  --kb-content: 70rem;
+  --kb-space-top: clamp(4rem, 3.4rem + 2.5vw, 5.5rem);
+  --kb-h1: clamp(1.75rem, 1.35rem + 1.8vw, 2.75rem);
+  /* カードの幅(cqi)に合わせて縮む。113.8% のような長い数字でも隣とくっつかない */
+  --kb-stat: clamp(1.1rem, 0.4rem + 5cqi, 1.6rem);
+  --kb-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* ---- 文字の折り返し ----
+ * good-css の reset にある font-synthesis: none は入れない。日本語は PC 側のフォント(游ゴシック等)で
+ * 表示していて太字の書体を読み込めないため、入れると見出しの太字が細字になる。 */
+:root {
+  text-wrap: pretty;
+  overflow-wrap: break-word;
+  -webkit-tap-highlight-color: transparent;
+}
+h1, h2, h3, h4, h5 { text-wrap: balance; }
+
+/* スマホで入力欄をタップしたときに画面が拡大されないようにする */
+input, textarea, select { font-size: max(16px, 1rem); }
+
+/* ---- ページの外枠: 最大幅と左右の余白を 1 つの式で ---- */
+[data-testid="stMainBlockContainer"] {
+  max-inline-size: calc(var(--kb-content) + 2 * var(--kb-gutter));
+  padding-inline: var(--kb-gutter);
+  padding-block: var(--kb-space-top) 4rem;
+}
+h1 { font-size: var(--kb-h1) !important; }
+
+/* ---- 見出しまわり ---- */
+.kb-eyebrow {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kb-accent);
+  margin-block-end: -0.4rem;
+}
+.kb-lead {
+  color: var(--kb-muted);
+  margin-block: -0.3rem 1.2rem;
+  line-height: 1.7;
+  max-inline-size: 65ch;
+}
+
+/* ---- カードの並び: 列数を画面幅に任せる(PC 4 列 → スマホ 2 列) ---- */
+.st-key-kpis [data-testid="stHorizontalBlock"],
+.st-key-models [data-testid="stHorizontalBlock"] {
+  display: grid;
+  gap: 0.75rem;
+}
+/* 件数カードは 4 列か 2 列のどちらか(3+1 に割れないように)。枠の幅 40rem が境目 */
+.st-key-kpis [data-testid="stHorizontalBlock"] {
+  grid-template-columns: repeat(auto-fit, minmax(clamp(25% - 0.75rem, (40rem - 100%) * 999, 50% - 0.75rem), 1fr));
+}
+.st-key-models [data-testid="stHorizontalBlock"] {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+}
+:is(.st-key-kpis, .st-key-models) [data-testid="stColumn"] {
+  inline-size: auto !important;
+  min-inline-size: 0 !important;
+}
+
+/* ---- 数字: 桁をそろえる ---- */
+[data-testid="stMetricValue"],
+.kb-stat-value { font-variant-numeric: tabular-nums; }
+.st-key-kpis [data-testid="stMetricValue"] { font-size: clamp(1.6rem, 1.3rem + 1.2vw, 2.25rem); }
+
+/* モデルカード内の 3 つの数字。狭いカードでは 3→2→1 列に折り返す */
+.kb-stats {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
+  gap: 0.75rem;
+  margin-block-start: 0.25rem;
+}
+.kb-stat-label { font-size: 0.8rem; color: var(--kb-muted); }
+.kb-stat-value { font-size: var(--kb-stat); font-weight: 600; line-height: 1.3; }
+
+/* ---- 押したときの反応とフォーカス表示 ---- */
+:is(.stButton, .stPageLink, [data-testid="stBaseButton-segmented_control"]) :is(button, a):active {
+  scale: 0.97;
+}
+@media (prefers-reduced-motion: no-preference) {
+  :is(.stButton, .stPageLink) :is(button, a) {
+    transition: scale 160ms var(--kb-ease-out);
+  }
+}
+:is(button, a, [role="button"], [role="tab"]):focus-visible {
+  outline: max(2px, 0.08em) solid var(--kb-accent);
+  outline-offset: 0.2em;
+}
+button, a, [role="button"] { touch-action: manipulation; }
