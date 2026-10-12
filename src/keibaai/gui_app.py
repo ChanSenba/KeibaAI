@@ -507,8 +507,8 @@ def page_backtest() -> None:
         c1, c2, c3 = st.columns(3, vertical_alignment="bottom")
         start = c1.date_input("買う期間の開始日", max(first, last - dt.timedelta(days=90)), min_value=first,
                               max_value=last, format="YYYY/MM/DD")
-        model = c2.selectbox("勝率のモデル", ["能力のみ", "オッズ込み"],
-                             help="期待値(勝率×オッズ)で買うときは、オッズを使わない「能力のみ」が基本です")
+        model = c2.selectbox("勝率のモデル", ["能力のみ", "オッズ込み", "オッズと混ぜる"],
+                             help="「オッズと混ぜる」は、モデルの勝率と市場の確率を、開始日の前の1年で決めた割合で混ぜます")
         stake = c3.number_input("1点の金額(円)", 100, 100000, 100, step=100)
         c4, c5, c6 = st.columns([2, 2, 1], vertical_alignment="bottom")
         ev_min = c4.slider("期待値の基準", 0.5, 3.0, 1.0, 0.1, help="これ以上の馬だけ買うルールの基準です")
@@ -519,7 +519,8 @@ def page_backtest() -> None:
         try:
             with st.spinner("学習して買い方を再現しています(数分かかります)"):
                 st.session_state["backtest"] = (start, gui.backtest_run(
-                    conn, start.isoformat(), model == "オッズ込み", ev_min, cap or None, int(stake)))
+                    conn, start.isoformat(), model == "オッズ込み", ev_min, cap or None, int(stake),
+                    blend=model == "オッズと混ぜる"))
         except ValueError as e:
             st.error(str(e))
 
