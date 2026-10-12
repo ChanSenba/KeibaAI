@@ -7,6 +7,7 @@ import html
 from pathlib import Path
 
 import altair as alt
+import pandas as pd
 import streamlit as st
 
 from keibaai import db, gui
@@ -453,6 +454,71 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
 MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
 
 
+# ---------------------------------------------------------------- 買い方の検証
+def page_backtest() -> None:
+    header("Simulation", "馬券シミュレーション",
+           "過去のレースで「こう買っていたら」を再現します。学習は開始日より前だけ、買うのは開始日以後のレースだけです。")
+    conn = connection()
+    first, last = gui.date_bounds(conn)
+    if first is None:
+        with st.container(border=True):
+            st.markdown("#### まだデータがありません")
+            st.page_link(PAGES["collect"], label="取得へ", icon=":material/arrow_forward:")
+        return
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3, vertical_alignment="bottom")
+        start = c1.date_input("買う期間の開始日", max(first, last - dt.timedelta(days=90)), min_value=first,
+                              max_value=last, format="YYYY/MM/DD")
+        model = c2.selectbox("勝率のモデル", ["能力のみ", "オッズ込み"],
+                             help="期待値(勝率×オッズ)で買うときは、オッズを使わない「能力のみ」が基本です")
+        stake = c3.number_input("1点の金額(円)", 100, 100000, 100, step=100)
+        c4, c5, c6 = st.columns([2, 2, 1], vertical_alignment="bottom")
+        ev_min = c4.slider("期待値の基準", 0.5, 3.0, 1.0, 0.1, help="これ以上の馬だけ買うルールの基準です")
+        cap = c5.number_input("オッズの上限(倍・0で無制限)", 0.0, 1000.0, 0.0, step=10.0,
+                              help="大穴は期待値が大きく出やすいので、上限をつけて試せます")
+        run = c6.button("再現する", type="primary", icon=":material/play_arrow:", width="stretch")
+    if run:
+        try:
+            with st.spinner("学習して買い方を再現しています(数分かかります)"):
+                st.session_state["backtest"] = (start, gui.backtest_run(
+                    conn, start.isoformat(), model == "オッズ込み", ev_min, cap or None, int(stake)))
+        except ValueError as e:
+            st.error(str(e))
+
+    if "backtest" not in st.session_state:
+        return
+    when, (n_races, table, settled) = st.session_state["backtest"]
+    st.subheader("結果", anchor=False)
+    st.caption(f"{when:%Y/%m/%d} 以降の {n_races:,} レース。単勝のみ、確定オッズで計算しています。")
+    best = table["roi"].max()
+    for col, (_, r) in zip(st.container(key="rules").columns(len(table), gap="small"), table.iterrows()):
+        with col.container(border=True, height="stretch"):
+            badge = " :green-badge[回収率 最高]" if r["roi"] == best and r["n_bets"] else ""
+            st.markdown(f"**{r['rule']}**{badge}")
+            hit = "—" if r["hit_rate"] != r["hit_rate"] else f"{r['hit_rate']:.1%}"
+            stats = [("回収率", f"{r['roi']:.1f}%" if r["n_bets"] else "—"), ("的中率", hit),
+                     ("収支", f"{r['profit']:+,}円"), ("買い目数", f"{r['n_bets']:,}")]
+            st.html('<div class="kb-stats">' + "".join(
+                f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>'
+                for k, v in stats) + "</div>")
+
+    from keibaai.backtest import balance_by_date
+
+    # 全頭買いは大きく負けて縦軸を占領するので、推移のグラフには出さない
+    curves = pd.concat([balance_by_date(s).rename(name) for name, s in settled.items() if not name.startswith("全頭")], axis=1).sort_index().ffill().fillna(0)
+    long = curves.reset_index().melt("date", var_name="ルール", value_name="収支(円)")
+    st.altair_chart(alt.Chart(long).mark_line().encode(
+        x=alt.X("date:T", title=None, axis=alt.Axis(format="%Y/%m")), y=alt.Y("収支(円):Q", title=None), color=alt.Color("ルール:N", title=None),
+        tooltip=["date:T", "ルール:N", "収支(円):Q"]).properties(height=280), width="stretch")
+    with st.expander("すべての指標", icon=":material/table:"):
+        from keibaai.backtest import COLUMNS
+        st.dataframe(table.rename(columns=COLUMNS), hide_index=True, width="stretch")
+    st.info("回収率の下限〜上限は、買い目を引き直して出した幅です。買い目が少ないほど広く、"
+            "回収率が100%を超えても幅が100%をまたぐなら、たまたまの可能性が高いです。"
+            "また、確定オッズは買う時点のオッズより低いことが多く、実際の成績は表より悪くなりがちです。", icon=":material/info:")
+
+
 # ---------------------------------------------------------------- 設定
 def page_settings() -> None:
     header("Settings", "設定", "データの保存場所です。ふつうは変更不要です。")
@@ -470,6 +536,7 @@ PAGES = {
     "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
+    "backtest": st.Page(page_backtest, title="シミュレーション", icon=":material/payments:", url_path="backtest"),
     "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),
 }
 st.navigation(list(PAGES.values()), position="top").run()
