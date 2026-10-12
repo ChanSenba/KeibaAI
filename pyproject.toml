@@ -20,7 +20,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-keibaai = [".streamlit/*.toml", "logo.svg"]
+keibaai = [".streamlit/*.toml", "logo.svg", "style.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

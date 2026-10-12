@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import html
 from pathlib import Path
 
 import altair as alt
@@ -15,26 +16,11 @@ from keibaai.fetch import Fetcher
 st.set_page_config(page_title="KeibaAI", page_icon=":material/insights:", layout="wide")
 st.logo(str(Path(__file__).with_name("logo.svg")), size="large")
 
-# 幅の広い画面では中央寄せ、狭い画面(スマホ)では余白を詰める
-st.html("""
-<style>
-[data-testid="stMainBlockContainer"] { max-width: 1120px; padding-top: 4.5rem; padding-bottom: 4rem; }
-@media (max-width: 640px) {
-  [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; padding-top: 4rem; }
-  h1 { font-size: 1.75rem !important; }
-  /* 件数カードはスマホでも 2 列に並べる */
-  .st-key-kpis [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .75rem; }
-  .st-key-kpis [data-testid="stColumn"] { flex: 1 1 calc(50% - .75rem) !important; min-width: calc(50% - .75rem) !important; }
-  .st-key-kpis [data-testid="stMetricValue"] { font-size: 1.6rem; }
-}
-.kb-eyebrow { font-size: .78rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--primary-color, #1F7A4D); margin-bottom: -.4rem; }
-.kb-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin-top: .25rem; }
-.kb-stat-label { font-size: .8rem; opacity: .7; }
-.kb-stat-value { font-size: 1.45rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
-.kb-lead { color: rgba(128,128,128,.95); margin-top: -.3rem; margin-bottom: 1.2rem; line-height: 1.7; }
-</style>
-""")
+# テーマで足りない部分のスタイル(画面幅への対応もここ)
+st.html(Path(__file__).with_name("style.css"))
+# light-dark() の色を、OS ではなく Streamlit で選ばれているテーマに合わせる
+if st.context.theme.type in ("light", "dark"):
+    st.html(f"<style>:root {{ color-scheme: {st.context.theme.type}; }}</style>")
 
 if "db_path" not in st.session_state:
     st.session_state["db_path"] = "data/keiba.db"
@@ -229,8 +215,8 @@ def page_train() -> None:
     st.subheader("評価結果", anchor=False)
     st.caption(f"{when:%Y/%m/%d} 以降の {int(report['レース数'].iloc[0]):,} レースで評価")
     best_roi = report["単勝回収率(%)"].max()
-    for i, (col, (_, r)) in enumerate(zip(st.columns(len(report), gap="small"), report.iterrows())):
-        with col.container(border=True, height="stretch", key=f"model-{i}"):
+    for col, (_, r) in zip(st.container(key="models").columns(len(report), gap="small"), report.iterrows()):
+        with col.container(border=True, height="stretch"):
             badge = " :green-badge[回収率 最高]" if r["単勝回収率(%)"] == best_roi else ""
             st.markdown(f"**{r['モデル']}**{badge}")
             st.caption(_note(r["モデル"]))
@@ -261,6 +247,12 @@ PRED_COLUMNS = {
     "p_win_market": st.column_config.ProgressColumn("勝率(オッズ込)", min_value=0, max_value=1, format="percent"),
     "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f"),
     "ev_market": st.column_config.NumberColumn("期待値(オッズ込)", format="%.2f"),
+}
+ENTRY_COLUMNS = {
+    "bracket": st.column_config.NumberColumn("枠", format="%d"),
+    "number": PRED_COLUMNS["number"], "horse_name": "馬名", "sex_age": "性齢",
+    "weight_carried": st.column_config.NumberColumn("斤量", format="%.1f"), "jockey": "騎手",
+    "win_odds": PRED_COLUMNS["win_odds"], "popularity": PRED_COLUMNS["popularity"],
 }
 
 
@@ -310,29 +302,66 @@ def page_predict() -> None:
         except ValueError as e:
             st.error(str(e))
 
-    if "prediction" not in st.session_state:
-        return
-    when, table = st.session_state["prediction"]
-    if when != date:
-        st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
-        return
+    table = None
+    if "prediction" in st.session_state:
+        when, table = st.session_state["prediction"]
+        if when != date:
+            st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
+            table = None
 
-    st.subheader("期待値の高い馬", anchor=False)
-    key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
-    top = table.dropna(subset=[key]).nlargest(8, key)
-    with st.container(border=True):
-        st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
-            ["race", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]],
-            hide_index=True, width="stretch", column_config={**PRED_COLUMNS, "race": "レース"})
-        st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
-                   "過去のレースでの検証はこれからで、今は参考表示です。")
+    if table is not None:
+        st.subheader("期待値の高い馬", anchor=False)
+        key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
+        top = table.dropna(subset=[key]).nlargest(8, key)
+        with st.container(border=True):
+            st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
+                ["race", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]],
+                hide_index=True, width="stretch", column_config={**PRED_COLUMNS, "race": "レース"})
+            st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
+                       "過去のレースでの検証はこれからで、今は参考表示です。")
 
-    st.subheader("レース別", anchor=False)
-    races = table.drop_duplicates("race_id")
-    labels = {r.race_id: f"{r.venue}{int(r.round)}R {r.race_name or ''}" for r in races.itertuples()}
-    race_id = st.selectbox("レース", list(labels), format_func=labels.get)
-    one = table[table["race_id"] == race_id].sort_values("number")
-    st.dataframe(one[list(PRED_COLUMNS)], hide_index=True, width="stretch", column_config=PRED_COLUMNS)
+    races = gui.day_races(conn, date.isoformat())
+    if not races.empty:
+        st.subheader("出馬表" if table is None else "レース別", anchor=False)
+        race_board(conn, races, table, key=date.isoformat())
+
+
+# 枠番の色(JRA の帽子の色)
+BRACKET_COLORS = {1: ("#ffffff", "#222222"), 2: ("#222222", "#ffffff"), 3: ("#e8383d", "#ffffff"),
+                  4: ("#2f6fdb", "#ffffff"), 5: ("#ffd400", "#222222"), 6: ("#2e9e5b", "#ffffff"),
+                  7: ("#f39800", "#222222"), 8: ("#f19ec2", "#222222")}
+
+
+def bracket_color(b) -> str:
+    bg, fg = BRACKET_COLORS.get(b, (None, None))
+    return f"background-color: {bg}; color: {fg}; text-align: center" if bg else ""
+
+
+def race_board(conn, races, prediction, key: str) -> None:
+    """競馬場のタブと 1R〜12R のボタンでレースを選び、その出馬表を出す(netkeiba のレース一覧に近い形)。"""
+    venues = list(dict.fromkeys(races["venue"]))
+    with st.container(key="venue_tabs"):
+        venue = st.segmented_control("競馬場", venues, default=venues[0], key=f"venue_{key}",
+                                     label_visibility="collapsed", width="stretch") or venues[0]
+    here = races[races["venue"] == venue]
+    rounds = here["round"].astype(int).tolist()
+    with st.container(border=True, key="race_board"):
+        with st.container(key="round_grid"):
+            rnd = st.segmented_control("レース", rounds, default=rounds[0], format_func=lambda r: f"{r}R",
+                                       key=f"round_{key}_{venue}", label_visibility="collapsed",
+                                       width="stretch") or rounds[0]
+        race = here[here["round"] == rnd].iloc[0]
+        meta = [f"{race.course_type or ''}{race.distance}m" if race.distance else None, race.ground,
+                f"{race.start_time} 発走" if race.start_time else None, f"{race.runners}頭"]
+        st.html(f'<div class="kb-race-head"><span class="kb-race-no">{rnd}R</span>'
+                f'<span class="kb-race-name">{html.escape(race["name"] or "")}</span></div>'
+                f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
+        cols = {**ENTRY_COLUMNS, **(PRED_COLUMNS if prediction is not None else {})}
+        one = gui.race_entries(conn, race["race_id"], prediction)
+        st.dataframe(one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"]),
+                     hide_index=True, width="stretch", column_config=cols)
+        if prediction is None:
+            st.caption(":material/info: 「予想する」を押すと、勝率と期待値の列が加わります。")
 
 
 # ---------------------------------------------------------------- 設定

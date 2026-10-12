@@ -115,6 +115,29 @@ def entries_summary(conn: sqlite3.Connection, date: str) -> dict:
     return {"races": n_races, "horses": n_horses, "with_odds": with_odds, "fetched_at": fetched}
 
 
+def day_races(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
+    """出馬表を取得済みのレース一覧。競馬場は race_id の場コード順(札幌→小倉)、その中はレース番号順。"""
+    return pd.read_sql_query(
+        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.distance, c.ground, c.start_time, "
+        "COUNT(e.number) AS runners FROM entry_races c LEFT JOIN entries e USING (race_id) "
+        "WHERE c.date = ? GROUP BY c.race_id ORDER BY substr(c.race_id, 5, 2), c.round",
+        conn, params=(date,),
+    )
+
+
+def race_entries(conn: sqlite3.Connection, race_id: str, prediction: pd.DataFrame | None = None) -> pd.DataFrame:
+    """1レースの出馬表(馬番順)。予想があれば勝率と期待値の列を足す。"""
+    df = pd.read_sql_query(
+        "SELECT number, bracket, horse_name, sex_age, weight_carried, jockey, win_odds, popularity "
+        "FROM entries WHERE race_id = ? ORDER BY number",
+        conn, params=(race_id,),
+    )
+    if prediction is not None:
+        cols = ["number", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
+        df = df.merge(prediction.loc[prediction["race_id"] == race_id, cols], on="number", how="left")
+    return df
+
+
 def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None) -> int:
     from .predict import fetch_entries
 

@@ -80,3 +80,17 @@ def test_entries_summary_and_predict_table():
     _entries_for_future(conn, "2030-01-05")
     s = gui.entries_summary(conn, "2030-01-05")
     assert (s["races"], s["horses"], s["with_odds"]) == (1, 10, 10)
+
+
+def test_day_races_and_race_entries():
+    from test_entries import _entries_for_future
+
+    conn = synthetic_db(n_days=40)
+    _entries_for_future(conn, "2030-01-05")
+    races = gui.day_races(conn, "2030-01-05")
+    assert races[["venue", "round", "runners"]].values.tolist() == [["東京", 1, 10]]
+    one = gui.race_entries(conn, "202609990101")
+    assert one["number"].tolist() == list(range(1, 11)) and "p_win_market" not in one
+    pred = gui.predict_table(conn, dt.date(2030, 1, 5))
+    with_pred = gui.race_entries(conn, "202609990101", pred)
+    assert len(with_pred) == 10 and with_pred["ev_market"].notna().all()
