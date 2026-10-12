@@ -572,8 +572,15 @@ def page_factors() -> None:
     with box:
         race_head(race)
     one = values[values["race_id"] == race["race_id"]]
-    tabs = st.tabs([s["name"] for s in status])
-    for tab, section, st_ in zip(tabs, factor_view.SECTIONS, status):
+    tabs = st.tabs(["総合"] + [s["name"] for s in status])
+    with tabs[0]:
+        cols = [("number", "馬番"), ("horse_name", "馬名")] + factor_view.SUMMARY["cols"]
+        cols = [c for c in cols if c[0] in one]
+        cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols)}
+        st.dataframe(_factor_table(one, cols), hide_index=True, width="stretch", column_config=cfg)
+        st.caption(":material/palette: " + factor_view.SUMMARY["note"])
+        st.html(_factor_legend(cols[2:]))
+    for tab, section, st_ in zip(tabs[1:], factor_view.SECTIONS, status):
         with tab:
             if st_["state"] == "missing":
                 st.warning(st_["text"], icon=":material/block:")

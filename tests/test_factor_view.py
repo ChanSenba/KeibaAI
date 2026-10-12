@@ -125,3 +125,10 @@ def test_top_rank_for_records_and_recent_finishes():
     assert r[5] == 1 and r[1] == 2 and r.notna().sum() == 2  # 比べられる4頭の半分まで
     last5 = pd.Series(["1-2-3", "8-9", "—", "4-4-4-4-4", "2-1"])
     assert fv.top_rank(last5, "last5").dropna().to_dict() == {4: 1, 0: 2}
+
+
+def test_summary_columns_exist_and_are_explained(conn):
+    v = fv.factor_values(conn, DAY)
+    own = {c for s in fv.SECTIONS for c, _ in s["cols"]}
+    for col, _ in fv.SUMMARY["cols"]:
+        assert col in v and col in own and col in fv.COLUMN_INFO, col
