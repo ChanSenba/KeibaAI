@@ -96,6 +96,14 @@ def main(argv=None) -> None:
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
     pd_.add_argument("--limit", type=int, default=0, help="この頭数で止める(0なら全部)。まず試すとき用")
+    bp = sub.add_parser("bets", help="1レースの買い方(券種と金額配分)を出す。先に entries で出馬表を取得しておく")
+    bp.add_argument("--date", required=True, help="YYYY-MM-DD")
+    bp.add_argument("--race-id", required=True, help="対象レースの race_id(12桁)")
+    bp.add_argument("--bankroll", type=int, default=100_000, help="使える資金(円)")
+    bp.add_argument("--cap", type=int, default=10_000, help="このレースに使う上限(円)")
+    bp.add_argument("--kelly", type=float, default=0.5, help="ケリー基準をどれだけ抑えるか(0.5で半分)")
+    bp.add_argument("--db", default="data/keiba.db")
+    bp.add_argument("--cache", default="data/cache")
     fa = sub.add_parser("factors", help="要素(馬の質・騎手と厩舎・展開と馬場)ごとの予想の当たりやすさを比べる")
     fa.add_argument("--test-from", required=True, help="この日以後で評価する(YYYY-MM-DD)")
     fa.add_argument("--db", default="data/keiba.db")
@@ -118,13 +126,35 @@ def main(argv=None) -> None:
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
-    if args.cmd in ("entries", "collect", "weekly", "pedigree"):
+    if args.cmd in ("entries", "collect", "weekly", "pedigree", "bets"):
         warn_if_race_time()
     if args.cmd == "entries":
         from .predict import fetch_entries
 
         n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
+        return
+    if args.cmd == "bets":
+        from . import gui
+        from .predict import predict_day, blend_for_day
+
+        conn = db.connect(args.db)
+        pred = predict_day(conn, args.date)
+        if args.race_id not in set(pred["race_id"]):
+            raise SystemExit(f"{args.race_id} の出馬表がありません。先に entries で取得してください")
+        print("モデルとオッズの混ぜ方を決めています(数分かかります)")
+        blend = blend_for_day(conn, args.date)
+        odds = gui.fetch_bet_odds(Fetcher(cache_dir=args.cache), args.race_id)
+        plan, _ = gui.bet_plan_for(pred, args.race_id, odds, blend, args.bankroll, args.cap, args.kelly)
+        print(f"混ぜ方: モデル {blend.a:.2f} / オッズ {blend.b:.2f}")
+        if not plan.bets:
+            print(plan.note)
+            for b in plan.top_ev:
+                print(f"  参考 {b.kind} {b.label} オッズ{b.odds:.1f} 的中{b.prob:.1%} 期待値{b.ev:.2f}")
+            return
+        print(gui.plan_table(plan.bets).to_string(index=False, float_format=lambda x: f"{x:.2f}"))
+        print(f"合計 {plan.total:,}円 / どれか的中 {plan.hit_prob:.0%} / 期待回収率 {plan.expected_return:.0%} / "
+              f"期待収支 {plan.expected_profit:+,.0f}円 / 全部外れ {plan.worst:,}円")
         return
     if args.cmd == "pedigree":
         from .pedigree import collect_pedigrees, pending_horse_ids

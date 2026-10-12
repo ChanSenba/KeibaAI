@@ -214,6 +214,50 @@ def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
     return predict_day(conn, date.isoformat())
 
 
+def fetch_bet_odds(fetcher, race_id: str, on_type=None) -> dict:
+    """1レースの全券種のオッズを取得して {券種: {馬番の組: オッズ}} にする。6回アクセスする(3〜5秒おき)。"""
+    from .entries import BET_ODDS_TYPES, parse_bet_odds
+
+    out: dict = {}
+    for i, t in enumerate(BET_ODDS_TYPES):
+        if on_type:
+            on_type(i, len(BET_ODDS_TYPES), t)
+        out.update(parse_bet_odds(fetcher.odds_json(race_id, t), t))
+    return out
+
+
+def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
+                 cap: int = 10_000, kelly_scale: float = 0.5):
+    """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
+
+    勝率は、能力のモデルの勝率とオッズの確率を blend の重みで混ぜたもの。
+    """
+    from .betting import make_plan
+    from .blend import apply_blend
+
+    one = prediction.loc[prediction["race_id"] == race_id, ["race_id", "number", "p_win_ability"]].copy()
+    win = odds.get("単勝", {})
+    one["win_odds"] = one["number"].map(lambda n: win.get((int(n),)))
+    one["p_win"] = one["p_win_ability"]
+    if one["win_odds"].notna().sum() < 3:
+        raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
+    mixed = apply_blend(one, blend)
+    plan = make_plan([int(n) for n in mixed["number"]], mixed["p_win"].to_numpy(), odds, bankroll, cap, kelly_scale)
+    return plan, mixed
+
+
+def blend_for(conn: sqlite3.Connection, date: dt.date):
+    """その日の予想に使う、モデルとオッズの混ぜ方(直前12か月の結果で決める。数分かかる)。"""
+    from .predict import blend_for_day
+
+    return blend_for_day(conn, date.isoformat())
+
+
+def plan_table(bets) -> pd.DataFrame:
+    return pd.DataFrame([{"券種": b.kind, "買い目": b.label, "オッズ": b.odds, "的中確率": b.prob, "期待値": b.ev,
+                          "金額": b.stake, "的中時の払戻": int(b.stake * b.odds)} for b in bets])
+
+
 def date_bounds(conn: sqlite3.Connection) -> tuple[dt.date | None, dt.date | None]:
     s = summary(conn)
     if not s["first"]:
