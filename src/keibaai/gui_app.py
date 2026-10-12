@@ -460,11 +460,7 @@ def race_picker(races, key: str):
 
 def race_head(race) -> None:
     """レース番号・名前・条件の見出し。"""
-    meta = [f"{race.course_type or ''}{race.distance}m" if race.distance else None, race.ground,
-            f"{race.start_time} 発走" if race.start_time else None, f"{race.runners}頭"]
-    st.html(f'<div class="kb-race-head"><span class="kb-race-no">{int(race["round"])}R</span>'
-            f'<span class="kb-race-name">{html.escape(race["name"] or "")}</span></div>'
-            f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
+    st.html(gui.race_head_html(race))
 
 
 def race_detail(conn, race, race_id: str, prediction) -> None:
@@ -769,7 +765,7 @@ def show_day_plans(races, plans: dict, blend) -> None:
         got = plans.get(r.race_id)
         if got is None or isinstance(got[0], str) or not got[0].bets:
             continue
-        with st.expander(f"{got[1]}  {r.name or ''}  {got[0].total:,}円"):
+        with st.expander(f"{got[1]}  {gui.text_or_blank(r.name)}  {got[0].total:,}円"):
             show_plan(got, blend)
 
 

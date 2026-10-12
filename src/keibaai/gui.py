@@ -185,6 +185,26 @@ def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_
     return int(test["race_id"].nunique()), table, settled
 
 
+def text_or_blank(v) -> str:
+    """表示用の文字。None や NaN(出馬表の欠けた項目)は空にする。"""
+    return "" if v is None or v != v else str(v)
+
+
+def race_head_html(race) -> str:
+    """レース番号・名前・条件の見出しの HTML。出馬表に欠けた項目(レース名など)があっても落ちない。"""
+    import html
+
+    distance = pd.to_numeric(race.get("distance"), errors="coerce")
+    runners = pd.to_numeric(race.get("runners"), errors="coerce")
+    start = text_or_blank(race.get("start_time"))
+    meta = [f"{text_or_blank(race.get('course_type'))}{int(distance)}m" if distance == distance else None,
+            text_or_blank(race.get("ground")), f"{start} 発走" if start else None,
+            f"{int(runners)}頭" if runners == runners else None]
+    return (f'<div class="kb-race-head"><span class="kb-race-no">{int(race["round"])}R</span>'
+            f'<span class="kb-race-name">{html.escape(text_or_blank(race.get("name")))}</span></div>'
+            f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
+
+
 MARKS = ["◎", "○", "▲"]
 # ★の基準: 能力モデルの期待値、勝率、オッズ。過去の検証(2025年以降)では、この基準の馬を単勝で買っても回収率は76〜84%
 STAR_EV, STAR_P, STAR_ODDS = 1.1, 0.03, 30.0
