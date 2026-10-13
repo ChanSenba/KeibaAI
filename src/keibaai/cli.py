@@ -102,7 +102,11 @@ def main(argv=None) -> None:
     tr_.add_argument("--limit", type=int, default=0, help="このレース数で止める(0なら全部)。まず試すとき用")
     tr_.add_argument("--date", help="YYYY-MM-DD。出馬表を取った日のレースだけ取り直す(発走前の予想用)")
     tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
-    jv_ = sub.add_parser("jv", help="JRA-VAN の調教タイム(坂路・ウッド)を取り込む。32bit Python で JV-Link から書き出し、DB に入れる")
+    jv_ = sub.add_parser("jv", help="JRA-VAN から取り込む(調教タイム・過去の成績・血統)。32bit Python で JV-Link から書き出し、DB に入れる")
+    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree"], default=["training"],
+                     help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(入れ替え)")
+    jv_.add_argument("--replace", action="store_true",
+                     help="races: すでに DB にあるレースも JRA-VAN の内容で入れ替える(既定は、無いレースだけ足す)")
     jv_.add_argument("--db", default="data/keiba.db")
     jv_.add_argument("--raw", default="data/jv_raw", help="書き出し先(生データ)")
     jv_.add_argument("--from", dest="from_date", default="20230901", help="取得を始める日 YYYYMMDD")
@@ -189,17 +193,26 @@ def main(argv=None) -> None:
         import subprocess
         from pathlib import Path
 
+        from .jvrace import import_pedigree, import_races
         from .jvtraining import import_raw
 
+        specs = {"training": ["SLOP", "WOOD"], "races": ["RACE"], "pedigree": ["DIFN"]}
         if not args.import_only:
             src = str(Path(__file__).resolve().parent.parent)
             env = {**os.environ, "PYTHONPATH": src}
             cmd = [args.python32, "-m", "keibaai.jvexport", "--from", args.from_date, "--out", args.raw,
-                   "--option", str(args.option)]
+                   "--option", str(args.option), "--specs", *[s for w in args.what for s in specs[w]]]
             if subprocess.run(cmd, env=env).returncode:
                 raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
-        n = import_raw(db.connect(args.db), args.raw)
-        print(f"done: {n} 件を取り込みました")
+        conn = db.connect(args.db)
+        if "training" in args.what:
+            print(f"done: 調教 {import_raw(conn, args.raw)} 件を取り込みました")
+        if "races" in args.what:
+            d = args.from_date
+            n_race, n_res = import_races(conn, args.raw, f"{d[:4]}-{d[4:6]}-{d[6:]}", args.replace)
+            print(f"done: 成績 {n_race} レース・{n_res} 頭を取り込みました")
+        if "pedigree" in args.what:
+            print(f"done: 血統 {import_pedigree(conn, args.raw)} 頭を入れ替えました")
         return
     if args.cmd == "training":
         from .training import collect_training, fetch_entry_training, pending_race_ids, reparse_training

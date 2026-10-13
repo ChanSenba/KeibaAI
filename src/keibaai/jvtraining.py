@@ -59,6 +59,8 @@ def import_raw(conn: sqlite3.Connection, raw_dir: str | Path, chunk: int = 50_00
     n = 0
     sql = f"INSERT OR REPLACE INTO jv_training ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})"
     for path in sorted(Path(raw_dir).glob("*.txt")):
+        if path.stem in ("RACE", "DIFN"):  # 成績と馬のマスタは jvrace.py が読む
+            continue
         rows = []
         with path.open(encoding="utf-8") as f:
             for line in f:
