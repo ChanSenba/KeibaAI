@@ -294,6 +294,13 @@ def date_bounds(conn: sqlite3.Connection) -> tuple[dt.date | None, dt.date | Non
     return dt.date.fromisoformat(s["first"]), dt.date.fromisoformat(s["last"])
 
 
+def eval_start_bounds(first: dt.date, last: dt.date) -> tuple[dt.date, dt.date]:
+    """評価開始日の (選べる最も早い日, 初期値)。学習には評価開始日より前のレースが要るので、最初の1年(短い期間なら前半)は選ばせない。
+    初期値は、最後の日の1年前(それが最も早い日より前なら、最も早い日)。"""
+    earliest = first + min(dt.timedelta(days=365), (last - first) / 2)
+    return earliest, max(earliest, last - dt.timedelta(days=365))
+
+
 def main() -> None:
     """`keibaai-gui` で Streamlit を起動し、ブラウザを開く。"""
     from streamlit.web import cli as stcli
