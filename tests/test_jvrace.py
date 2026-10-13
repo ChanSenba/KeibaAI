@@ -64,8 +64,24 @@ def test_race_name_without_title_uses_age_and_class():
     assert parse_ra(ra(title="清滝特別", grade="E", cond="010"))[1] == "清滝特別(2勝)"
 
 
+def test_quick_results_replace_until_final_arrives(tmp_path):
+    """速報成績(区分6)で入れたレースは、直近のあいだは確定成績(区分7)で入れ替わる。古いレースは触らない。"""
+    conn = db.connect(":memory:")
+    quick = [ra(kubun="6", title="速報の名前"), se(over={2: "6"}), se(number="02", over={2: "6"})]
+    write(tmp_path, "RT_0B15.txt", quick)
+    assert import_races(conn, tmp_path, refresh_since="2026-10-01") == (1, 2)
+    assert conn.execute("SELECT name FROM races").fetchone()[0] == "速報の名前(GII)"
+    write(tmp_path, "RACE.txt", [ra(), se()])  # 確定成績が出た(出走は1頭に減った想定)
+    assert import_races(conn, tmp_path, refresh_since="2026-10-01") == (1, 1)  # 両方のファイルにあっても確定を使う
+    assert conn.execute("SELECT name FROM races").fetchone()[0] == "富士ステークス(GII)"
+    assert conn.execute("SELECT COUNT(*) FROM results").fetchone()[0] == 1
+    assert import_races(conn, tmp_path, refresh_since="2026-10-10") == (0, 0)  # 入れ替えの期間より前は、あれば触らない
+    assert import_races(conn, tmp_path) == (0, 0)
+
+
 def test_parse_race_skips_other_data():
     assert parse_ra(ra(kubun="2")) is None  # 出馬表の段階
+    assert parse_ra(ra(kubun="6")) is not None  # 速報成績は使う
     assert parse_ra(ra(race="2026100330040111")) is None  # 地方競馬の場コード
     assert parse_ra(se()) is None
 
@@ -106,13 +122,18 @@ def test_parse_horse_master():
     assert made == "20261001"
 
 
-def test_import_pedigree_replaces_everything(tmp_path):
+def test_import_pedigree_updates_listed_horses_and_drops_netkeiba_rows(tmp_path):
     conn = db.connect(":memory:")
-    conn.execute("INSERT INTO pedigree (horse_id, sire_id, sire) VALUES ('2015100001', '000a00033a', 'サンデーサイレンス')")
+    conn.executemany("INSERT INTO pedigree (horse_id, sire_id, sire, damsire_id) VALUES (?,?,?,?)", [
+        ("2015100001", "000a00033a", "サンデーサイレンス", "1998101786"),  # netkeiba の番号(輸入馬・生まれ年)
+        ("2016100002", "2002100816", "ディープインパクト", None),
+        ("2014100003", "1120002086", "ディープインパクト", "1120001232"),  # 前に JRA-VAN から入れた馬
+    ])
     write(tmp_path, "DIFN.txt", [um(made="20260903", sire=("1120009999", "古い父")), um(), um(horse="2018100442")])
     assert import_pedigree(conn, tmp_path) == 2
     rows = dict(conn.execute("SELECT horse_id, sire FROM pedigree"))
-    assert rows == {"2017100464": "ルーラーシップ", "2018100442": "ルーラーシップ"}  # 新しい作成日を使い、古い行は消える
+    # 新しい作成日を使う。差分に入っていない JRA-VAN の馬は残り、netkeiba の番号の行だけ消える
+    assert rows == {"2017100464": "ルーラーシップ", "2018100442": "ルーラーシップ", "2014100003": "ディープインパクト"}
 
 
 def test_import_without_files_does_nothing(tmp_path):

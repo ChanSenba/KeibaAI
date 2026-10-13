@@ -19,7 +19,7 @@ netkeiba から集めた 10,371 レース・142,774 頭と突き合わせ、日�
 違いが残るのは、着差(JRA-VAN はコード)、直線コースの通過順、降着の表記、レース名の表記。
 
 血統の番号は JRA-VAN の繁殖登録番号で、netkeiba の馬 ID とは別の番号。両方を混ぜると同じ種牡馬が別扱いになるので、
-取り込むときに pedigree を全部入れ替える(以後 `keibaai pedigree` は使わない)。
+取り込むときに netkeiba の番号の行は消す(以後 `keibaai pedigree` は使わない)。
 """
 from __future__ import annotations
 
@@ -92,9 +92,12 @@ def race_id_of(b: bytes) -> str:
     return (b[11:15] + b[19:27]).decode("ascii", errors="replace")
 
 
-def is_jra_result(b: bytes) -> bool:
-    """確定成績(区分 7)の中央競馬のレコードか。"""
-    return b[2:3] == b"7" and b[19:21].decode("ascii", errors="replace") in VENUES and b[11:19].isdigit()
+RESULT_KUBUNS = (b"6", b"7")  # 7 は確定成績(月曜)、6 は速報成績(全馬の着順確定)
+
+
+def is_jra_result(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> bool:
+    """中央競馬のレコードで、区分が kubuns のどれかか。既定は成績の入った区分。"""
+    return b[2:3] in kubuns and b[19:21].decode("ascii", errors="replace") in VENUES and b[11:19].isdigit()
 
 
 def race_name(title: str, grade: str, kind: str, cond: str) -> str | None:
@@ -105,9 +108,9 @@ def race_name(title: str, grade: str, kind: str, cond: str) -> str | None:
     return (AGE.get(kind, "") + COND.get(cond, "")) or None
 
 
-def parse_ra(b: bytes) -> tuple | None:
+def parse_ra(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> tuple | None:
     """RA の1件を RACE_COLS の順の組にする。対象外は None。"""
-    if b[:2] != b"RA" or len(b) < 978 or not is_jra_result(b):
+    if b[:2] != b"RA" or len(b) < 978 or not is_jra_result(b, kubuns):
         return None
     ctype, direction = _track(b[705:707].decode("ascii", errors="replace"))
     turf, dirt = chr(b[888]), chr(b[889])
@@ -124,9 +127,9 @@ def parse_ra(b: bytes) -> tuple | None:
             "-".join(laps) or None, _num(b[969:972], 10), _num(b[975:978], 10))
 
 
-def parse_se(b: bytes) -> tuple | None:
+def parse_se(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> tuple | None:
     """SE の1件を RESULT_COLS の順の組にする。対象外は None。"""
-    if b[:2] != b"SE" or len(b) < 393 or not is_jra_result(b) or not b[28:30].isdigit():
+    if b[:2] != b"SE" or len(b) < 393 or not is_jra_result(b, kubuns) or not b[28:30].isdigit():
         return None
     status = STATUS.get(chr(b[331]))
     finish = None if status else _num(b[334:336])
@@ -179,26 +182,43 @@ def _records(path: Path):
 
 
 def import_races(conn: sqlite3.Connection, raw_dir: str | Path, since: str = "0000-00-00",
-                 replace: bool = False) -> tuple[int, int]:
-    """raw_dir の RACE.txt(jvexport の出力)から races と results に入れる。(レース数, 出走数) を返す。
+                 replace: bool = False, refresh_since: str | None = None) -> tuple[int, int]:
+    """raw_dir の成績(jvexport の出力)から races と results に入れる。(レース数, 出走数) を返す。
 
-    since(YYYY-MM-DD)より前のレースは入れない。すでに DB にあるレース(netkeiba から取ったもの)は、
-    replace=True のときだけ入れ替える。レースと出走馬は同じレースをひとまとめに扱う。
+    読むのは RT_0B15.txt(速報成績。開催の当日から)と RACE.txt(確定成績。翌週に出る)。同じレースが両方にあれば確定成績を使う。
+    since(YYYY-MM-DD)より前のレースは入れない。すでに DB にあるレースは、replace=True のときだけ入れ替える。
+    ただし refresh_since 以後のレースは、DB にあっても入れ替える(速報で入れたものを、あとから確定成績に置き換えるため)。
+    レースと出走馬は同じレースをひとまとめに扱う。
     """
-    path = Path(raw_dir) / "RACE.txt"
-    if not path.exists():
+    paths = [p for p in (Path(raw_dir) / "RT_0B15.txt", Path(raw_dir) / "RACE.txt") if p.exists()]
+    if not paths:
         return 0, 0
-    have = set() if replace else {r[0] for r in conn.execute("SELECT race_id FROM races")}
-    races, results = {}, {}
-    for b in _records(path):
-        if b[:2] == b"RA":
-            row = parse_ra(b)
-            if row and row[2] >= since and row[0] not in have:
-                races[row[0]] = row
-        elif b[:2] == b"SE":
-            row = parse_se(b)
-            if row and row[0] not in have:
-                results.setdefault(row[0], {})[row[1]] = row
+    if replace:
+        have = set()
+    else:
+        have = {r[0] for r in conn.execute("SELECT race_id FROM races WHERE date < ? OR date IS NULL",
+                                           (refresh_since or "9999-99-99",))}
+    races, results, level = {}, {}, {}
+    for path in paths:
+        for b in _records(path):
+            kind = b[:2]
+            if kind not in (b"RA", b"SE"):
+                continue
+            row = parse_ra(b) if kind == b"RA" else parse_se(b)
+            if not row or row[0] in have:
+                continue
+            rid, kubun = row[0], b[2:3]
+            if kubun < level.get((rid, kind), b"0"):  # 確定成績(7)を速報(6)で上書きしない
+                continue
+            if kubun > level.get((rid, kind), b"0"):  # 区分が上がったら、そのレースの古い行は捨てる
+                level[(rid, kind)] = kubun
+                if kind == b"SE":
+                    results.pop(rid, None)
+            if kind == b"RA":
+                if row[2] >= since:
+                    races[rid] = row
+            else:
+                results.setdefault(rid, {})[row[1]] = row
     ids = [i for i in races if i in results]  # 出走馬のないレースや、レースのない出走馬は入れない
     n_res = 0
     with conn:
@@ -214,9 +234,11 @@ def import_races(conn: sqlite3.Connection, raw_dir: str | Path, since: str = "00
 
 
 def import_pedigree(conn: sqlite3.Connection, raw_dir: str | Path) -> int:
-    """raw_dir の DIFN.txt(馬のマスタ)から pedigree を作り直す。入れた頭数を返す。
+    """raw_dir の DIFN.txt(馬のマスタ)から pedigree に入れる。入れた頭数を返す。
 
-    同じ馬が何度も出てくるので、作成日が新しいものを使う。netkeiba から取った血統は番号の体系が違うので、全部入れ替える。
+    同じ馬が何度も出てくるので、作成日が新しいものを使う。書き出しに入っていた馬だけを上書きする
+    (差分の書き出しには一部の馬しか入っていないので、表を空にしてから入れてはいけない)。
+    netkeiba から取った血統は番号の体系が違うので、残っていれば消す。
     """
     path = Path(raw_dir) / "DIFN.txt"
     if not path.exists():
@@ -229,8 +251,12 @@ def import_pedigree(conn: sqlite3.Connection, raw_dir: str | Path) -> int:
     if not best:
         return 0
     with conn:
-        conn.execute("DELETE FROM pedigree")
         conn.executemany(
-            f"INSERT INTO pedigree ({','.join(PEDIGREE_COLS)}) VALUES ({','.join('?' * len(PEDIGREE_COLS))})",
+            f"INSERT OR REPLACE INTO pedigree ({','.join(PEDIGREE_COLS)}) VALUES ({','.join('?' * len(PEDIGREE_COLS))})",
             [row for _, row in best.values()])
+        conn.execute(f"DELETE FROM pedigree WHERE {NETKEIBA_ID}")
     return len(best)
+
+
+# netkeiba の馬 ID の形の父・母の父(生まれ年で始まる 19…/20…、輸入馬の 000a…)。JRA-VAN の繁殖登録番号は 11…/12…/14… で始まる
+NETKEIBA_ID = " OR ".join(f"{c} GLOB '{p}*'" for c in ("sire_id", "damsire_id") for p in ("19", "20", "00"))

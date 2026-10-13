@@ -92,6 +92,11 @@ def main(argv=None) -> None:
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
     e.add_argument("--cache", default="data/cache")
+    e.add_argument("--source", choices=["netkeiba", "jv"], default="netkeiba",
+                   help="取得元。jv は JRA-VAN の速報(JV-Link)。アクセス間隔の待ちがなく、netkeiba を使わない")
+    e.add_argument("--raw", default="data/jv_raw", help="jv: 書き出し先(生データ)")
+    e.add_argument("--python32", default=r"C:\Python311-32\jvenv\Scripts\python.exe", help="jv: pywin32 を入れた32bit Python")
+    e.add_argument("--no-odds", action="store_true", help="jv: オッズを取らず、出馬表だけ保存する(レースごとに開くので時間がかかるため)")
     pd_ = sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
@@ -104,9 +109,11 @@ def main(argv=None) -> None:
     tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
     jv_ = sub.add_parser("jv", help="JRA-VAN から取り込む(調教タイム・過去の成績・血統)。32bit Python で JV-Link から書き出し、DB に入れる")
     jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree"], default=["training"],
-                     help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(入れ替え)")
+                     help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(上書き)")
     jv_.add_argument("--replace", action="store_true",
                      help="races: すでに DB にあるレースも JRA-VAN の内容で入れ替える(既定は、無いレースだけ足す)")
+    jv_.add_argument("--rt-days", type=int, default=0,
+                     help="races: 直近この日数ぶんの速報成績も取る(確定成績は翌週に出るので、開催直後はこちら)。直近14日のレースは入れ替える")
     jv_.add_argument("--db", default="data/keiba.db")
     jv_.add_argument("--raw", default="data/jv_raw", help="書き出し先(生データ)")
     jv_.add_argument("--from", dest="from_date", default="20230901", help="取得を始める日 YYYYMMDD")
@@ -147,6 +154,28 @@ def main(argv=None) -> None:
 
     if args.cmd in ("entries", "collect", "weekly", "pedigree", "bets", "training"):
         warn_if_race_time()
+    if args.cmd == "entries" and args.source == "jv":
+        import os
+        import subprocess
+        from pathlib import Path
+
+        from .jventries import import_entries, race_keys
+
+        env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+        ymd = args.date.replace("-", "")
+        base = [args.python32, "-m", "keibaai.jvexport", "--from", ymd, "--out", args.raw, "--specs", "--rt"]
+        if subprocess.run(base + [f"0B15:{ymd}"], env=env).returncode:
+            raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
+        keys = race_keys(args.raw, args.date)
+        odds_file = Path(args.raw) / "RT_0B31.txt"
+        if odds_file.exists():
+            odds_file.unlink()  # 前に取った別の日のオッズを混ぜない
+        if keys and not args.no_odds:
+            if subprocess.run(base + [f"0B31:{k}" for k in keys], env=env).returncode:
+                print("オッズの書き出しに失敗しました。出馬表だけ保存します")
+        n = import_entries(db.connect(args.db), args.raw, args.date, dt.datetime.now().isoformat(timespec="seconds"))
+        print(f"done: {n} races")
+        return
     if args.cmd == "entries":
         from .predict import fetch_entries
 
@@ -203,6 +232,10 @@ def main(argv=None) -> None:
             env = {**os.environ, "PYTHONPATH": src}
             cmd = [args.python32, "-m", "keibaai.jvexport", "--from", args.from_date, "--out", args.raw,
                    "--option", str(args.option), "--specs", *[s for w in args.what for s in specs[w]]]
+            if "races" in args.what and args.rt_days > 0:
+                today = dt.date.today()
+                days = [today - dt.timedelta(days=i) for i in range(args.rt_days - 1, -1, -1)]
+                cmd += ["--rt", *[f"0B15:{d:%Y%m%d}" for d in days]]
             if subprocess.run(cmd, env=env).returncode:
                 raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
         conn = db.connect(args.db)
@@ -210,10 +243,11 @@ def main(argv=None) -> None:
             print(f"done: 調教 {import_raw(conn, args.raw)} 件を取り込みました")
         if "races" in args.what:
             d = args.from_date
-            n_race, n_res = import_races(conn, args.raw, f"{d[:4]}-{d[4:6]}-{d[6:]}", args.replace)
+            refresh = (dt.date.today() - dt.timedelta(days=14)).isoformat() if args.rt_days > 0 else None
+            n_race, n_res = import_races(conn, args.raw, f"{d[:4]}-{d[4:6]}-{d[6:]}", args.replace, refresh)
             print(f"done: 成績 {n_race} レース・{n_res} 頭を取り込みました")
         if "pedigree" in args.what:
-            print(f"done: 血統 {import_pedigree(conn, args.raw)} 頭を入れ替えました")
+            print(f"done: 血統 {import_pedigree(conn, args.raw)} 頭を取り込みました")
         return
     if args.cmd == "training":
         from .training import collect_training, fetch_entry_training, pending_race_ids, reparse_training

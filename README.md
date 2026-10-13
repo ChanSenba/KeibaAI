@@ -40,7 +40,7 @@ JV-Link は 32bit の部品なので、32bit 版 Python が別に要ります（
 
 ```
 keibaai jv --what training races pedigree --from 20190101 --python32 C:\Python311-32\python.exe
-keibaai jv --what training races pedigree --from 20261001 --option 1 --python32 C:\Python311-32\python.exe   # 毎週の差分
+keibaai jv --what training races pedigree --from 20261001 --option 1 --rt-days 4 --python32 C:\Python311-32\python.exe   # 毎週の差分
 ```
 
 `--from` は取得を始める日です。毎週の差分では、前回取り込んだ日より少し前の日付を指定します（重なった分は上書きされるだけです）。
@@ -49,7 +49,7 @@ keibaai jv --what training races pedigree --from 20261001 --option 1 --python32 
 |---|---|---|
 | `training` | 坂路・ウッドの調教タイム | 追加・上書き（5万件ごとに確定） |
 | `races` | レース成績（確定した中央のレースのみ） | DB に無いレースだけ足す（`--replace` で入れ替え） |
-| `pedigree` | 全馬の血統（3代） | **毎回 `pedigree` を全部入れ替える** |
+| `pedigree` | 全馬の血統（3代） | 書き出しに入っていた馬を上書き（netkeiba の番号の行は消す） |
 
 - 最初の `races`（`--option 4`、既定）は、同じデータ種別に入っているオッズ・投票の大きなファイルを1つずつ開いて飛ばすため、長くかかります（2019年以降で約30分）。調教タイムと血統は数分です。毎週の差分（`--option 1`）は短く済みます。
 - JV-Link を短い時間に何度も開き直すと、JVOpen が -303 を返して開けなくなることがありました（原因は未確認）。続けて試さず、時間をおいてください。
@@ -101,6 +101,7 @@ keibaai factors --test-from 2026-01-01
 
 ```
 keibaai entries --date 2026-10-17     # 出馬表と単勝オッズを取得して保存
+keibaai entries --date 2026-10-17 --source jv --python32 C:\Python311-32\python.exe   # 同じことを JRA-VAN の速報から（netkeiba を使わない）
 keibaai predict --date 2026-10-17     # 各馬の勝率と期待値を表示
 ```
 
