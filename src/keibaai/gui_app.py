@@ -10,7 +10,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from keibaai import betting, db, factor_view, gui
+from keibaai import betting, db, factor_view, gui, progress
 from keibaai.cli import reparse_cache
 from keibaai.fetch import Fetcher
 
@@ -155,6 +155,58 @@ def page_collect() -> None:
                 st.error(str(e))
             else:
                 status.update(label=f"完了しました。新しく {total} レースを保存しました", state="complete")
+
+
+# ---------------------------------------------------------------- 取得の進み具合
+@st.cache_data(ttl=3600, show_spinner=False)
+def _progress_total(db_path: str, kind: str) -> int | None:
+    return progress.read_total(db_path, progress.KINDS[kind][2])
+
+
+def _show_progress(kind: str) -> None:
+    p = progress.progress_of(kind, st.session_state["cache_dir"], _progress_total(st.session_state["db_path"], kind))
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 1])
+        c1.markdown(f"#### {p.name}")
+        if p.alive:
+            c2.markdown(":green[:material/play_circle: 動いています]")
+        elif p.last_saved is None:
+            c2.markdown(":gray[:material/hourglass_empty: まだ始まっていません]")
+        else:
+            c2.markdown(":orange[:material/pause_circle: 止まっています]")
+        if p.fraction is not None:
+            st.progress(p.fraction, f"{p.done:,} / {p.total:,}  ({p.fraction:.0%})")
+        else:
+            st.write(f"{p.done:,} 件を保存済み")
+        bits = []
+        if p.last_saved:
+            bits.append(f"最後の保存 {p.last_saved:%m/%d %H:%M:%S}")
+        if p.per_min:
+            bits.append(f"速さ 約{p.per_min:.1f}件/分")
+        if p.eta_hours is not None and p.alive:
+            bits.append(f"あと約{p.eta_hours:.0f}時間 ({dt.datetime.now() + dt.timedelta(hours=p.eta_hours):%m/%d %H:%M} ごろ)")
+        if bits:
+            st.caption(" ・ ".join(bits))
+
+
+def page_progress() -> None:
+    header("Progress", "取得の進み具合",
+           "バックグラウンドで動いている取得の進み具合です。DB には触れず、保存済みページの数から出しているので、"
+           "取得の邪魔になりません。")
+
+    @st.fragment(run_every=30)
+    def body() -> None:
+        _show_progress("training")
+        _show_progress("pedigree")
+        logs = sorted(Path("data").glob("out-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:1]
+        if logs:
+            with st.expander(f"ログの最後 ({logs[0].name})"):
+                st.code(progress.tail(logs[0]) or "(空)", language=None)
+        st.caption(f":material/autorenew: 30秒ごとに更新 ・ {dt.datetime.now():%H:%M:%S}")
+
+    body()
+    st.caption(":material/info: 総数は DB から1時間に1回だけ読み取り専用で読みます。"
+               "血統は、JRA-VAN の取り込みで済んだ馬はここに数えられません。")
 
 
 # ---------------------------------------------------------------- 再解析
@@ -923,6 +975,7 @@ def page_settings() -> None:
 PAGES = {
     "overview": st.Page(page_overview, title="データ", icon=":material/dashboard:", default=True),
     "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
+    "progress": st.Page(page_progress, title="進み具合", icon=":material/timelapse:", url_path="progress"),
     "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
     "bets": st.Page(page_bets, title="買い方", icon=":material/calculate:", url_path="bets"),
