@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
+import pickle
 import sqlite3
+from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
@@ -89,23 +93,97 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
-def blend_for_day(conn: sqlite3.Connection, date: str, valid_months: int = 12):
-    """date の買い方に使う、オッズ込みのモデルとオッズの混ぜ方。date の直前 valid_months か月の結果で決める(それ以後は使わない)。"""
-    from .blend import fit_blend
-    from .model import evaluate
+CACHE_VERSION = 1  # 保存した結果の形を変えたら上げる(古い保存は使われなくなる)
+CACHE_DIR = "model_cache"  # DB と同じフォルダの中に作る
 
-    df, _ = day_frame(conn, date)
-    done = df[df["finish"].notna()]
-    valid_from = pd.Timestamp(date) - pd.DateOffset(months=valid_months)
-    _, valid = evaluate(done, str(valid_from.date()), use_market=True)
-    return fit_blend(valid)
+
+def _db_file(conn: sqlite3.Connection) -> Path | None:
+    """接続先の DB ファイル。メモリ上の DB なら None(保存しない)。"""
+    for _, name, file in conn.execute("PRAGMA database_list"):
+        if name == "main":
+            return Path(file) if file else None
+    return None
+
+
+def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tuple = ()) -> str:
+    """計算結果を左右するデータの指紋。学習に使う結果・血統・調教・(予想なら)その日の出馬表とオッズ、特徴量と学習の設定。
+
+    どれかが変われば別の値になるので、古い保存を誤って使うことはない。
+    """
+    one = lambda sql, *a: tuple(conn.execute(sql, a).fetchone())
+    parts: list = [
+        CACHE_VERSION, date, extra, ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, sorted(PARAMS.items()),
+        one("SELECT COUNT(*), MAX(race_id) FROM races WHERE date < ?", date),
+        one("SELECT COUNT(*), COALESCE(SUM(finish), 0) FROM results"),
+        one("SELECT COUNT(*) FROM pedigree"),
+        one("SELECT COUNT(*) FROM training"),
+        one("SELECT COALESCE(MAX(rowid), 0) FROM jv_training"),
+    ]
+    if with_entries:
+        rows = conn.execute(
+            "SELECT e.* FROM entries e JOIN entry_races c USING (race_id) WHERE c.date = ? ORDER BY e.race_id, e.number",
+            (date,)).fetchall()
+        races = conn.execute("SELECT * FROM entry_races WHERE date = ? ORDER BY race_id", (date,)).fetchall()
+        parts += [rows, [r[:-1] for r in races]]  # 取得時刻(最後の列)だけ変わっても、中身が同じなら使い回す
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, default=str).encode()).hexdigest()[:20]
+
+
+def _cached(conn: sqlite3.Connection, kind: str, date: str, with_entries: bool, extra: tuple, compute):
+    """compute() の結果を DB の隣に保存し、データが同じなら次からはそれを返す。
+
+    予想や混ぜ方の決定は、毎回1万レース以上で学習し直すので数十秒かかる。出馬表やオッズを取り直したり、
+    成績を足したりすると指紋が変わり、計算し直す。同じ日・同じ種類の古い保存は消す。
+    """
+    path = _db_file(conn)
+    if path is None:
+        return compute()
+    folder = path.parent / CACHE_DIR
+    file = folder / f"{kind}-{date}-{_data_key(conn, date, with_entries, extra)}.pkl"
+    if file.exists():
+        try:
+            with file.open("rb") as f:
+                return pickle.load(f)
+        except Exception:  # 壊れた保存は捨てて計算し直す
+            file.unlink(missing_ok=True)
+    out = compute()
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob(f"{kind}-{date}-*.pkl"):
+        old.unlink(missing_ok=True)
+    tmp = file.with_suffix(".tmp")
+    with tmp.open("wb") as f:
+        pickle.dump(out, f)
+    tmp.replace(file)
+    return out
+
+
+def blend_for_day(conn: sqlite3.Connection, date: str, valid_months: int = 12):
+    """date の買い方に使う、オッズ込みのモデルとオッズの混ぜ方。date の直前 valid_months か月の結果で決める(それ以後は使わない)。
+
+    結果は保存して使い回す(その日の出馬表やオッズには左右されないので、成績などが変わるまで同じ)。
+    """
+    def compute():
+        from .blend import fit_blend
+        from .model import evaluate
+
+        df, _ = day_frame(conn, date)
+        done = df[df["finish"].notna()]
+        valid_from = pd.Timestamp(date) - pd.DateOffset(months=valid_months)
+        _, valid = evaluate(done, str(valid_from.date()), use_market=True)
+        return fit_blend(valid)
+
+    return _cached(conn, "blend", date, False, (valid_months,), compute)
 
 
 def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.DataFrame:
     """date(YYYY-MM-DD)の各馬の勝率(能力のみ / オッズ込み)と期待値(勝率×単勝オッズ)を返す。
 
     学習には、その日より前の結果だけを使う。期待値は 1 を超えると、予測どおりなら長い目で得になる目安。
+    結果は保存して使い回す。出馬表やオッズを取り直すと計算し直す。
     """
+    return _cached(conn, "predict", date, True, (rounds,), lambda: _predict_day(conn, date, rounds)).copy()
+
+
+def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFrame:
     df, hist = day_frame(conn, date)
     is_entry = df["finish"].isna()
     train, target = df[~is_entry], df[is_entry].copy()
