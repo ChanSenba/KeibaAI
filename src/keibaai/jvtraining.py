@@ -70,11 +70,12 @@ def import_raw(conn: sqlite3.Connection, raw_dir: str | Path, chunk: int = 50_00
                     rows.append(row)
                 if len(rows) >= chunk:
                     conn.executemany(sql, rows)
+                    conn.commit()  # まとめて最後に確定すると、その間ほかの処理(収集や画面)が DB に書けない
                     n += len(rows)
                     rows = []
         conn.executemany(sql, rows)
+        conn.commit()
         n += len(rows)
-    conn.commit()
     return n
 
 
