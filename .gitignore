@@ -7,3 +7,5 @@ __pycache__/
 *.db
 *.sqlite
 *.egg-info/
+# 利用キーなどの書類は、うっかり公開しない
+*.pdf
