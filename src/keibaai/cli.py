@@ -173,6 +173,7 @@ def main(argv=None) -> None:
         print(gui.plan_table(plan.bets).to_string(index=False, float_format=lambda x: f"{x:.2f}"))
         print(f"合計 {plan.total:,}円 / どれか的中 {plan.hit_prob:.0%} / 期待回収率 {plan.expected_return:.0%} / "
               f"期待収支 {plan.expected_profit:+,.0f}円 / 全部外れ {plan.worst:,}円")
+        print("注: 期待回収率は予想が当たっている前提の数字です。過去8年の検証(馬連・ワイド)では、実際の回収率は90%前後でした。")
         return
     if args.cmd == "pedigree":
         from .pedigree import collect_pedigrees, pending_horse_ids

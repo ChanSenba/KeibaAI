@@ -206,7 +206,8 @@ def race_head_html(race) -> str:
 
 
 MARKS = ["◎", "○", "▲"]
-# ★の基準: 能力モデルの期待値、勝率、オッズ。過去の検証(2025年以降)では、この基準の馬を単勝で買っても回収率は76〜84%
+# ★の基準: オッズ込みモデルの期待値、勝率、オッズ。過去8年(2019年以降)の検証では、この基準の馬を単勝で買った回収率は
+# 90〜97%(能力のみのモデルの期待値で選ぶと79.5%で、無作為に買うのと変わらなかった)。100%には届かない
 STAR_EV, STAR_P, STAR_ODDS = 1.1, 0.03, 30.0
 
 
@@ -216,11 +217,12 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     レースごとに、勝率の高い順に ◎ ○ ▲、続く 2 頭に △(9 頭立て以下は 1 頭)。
     勝率はオッズ込みを使い、そのレースにオッズがなければ能力のみを使う。
     印のない馬のうち、能力のみの期待値がいちばん高く 1 以上の馬に ☆(穴)。
-    別の star 列に、モデルがオッズより高く評価している馬(能力の期待値・勝率・オッズが基準以上)へ ★。
+    別の star 列に、オッズ込みのモデルが、オッズより高く評価している馬(その期待値・勝率・オッズが基準以上)へ ★。
+    オッズがない馬には付けない。
     """
     out = table.copy()
     out["mark"] = ""
-    out["star"] = ((out["ev_ability"] >= STAR_EV) & (out["p_win_ability"] >= STAR_P)
+    out["star"] = ((out["ev_market"] >= STAR_EV) & (out["p_win_market"] >= STAR_P)
                    & (out["win_odds"] <= STAR_ODDS)).map({True: "★", False: ""})
     for _, g in out.groupby("race_id", sort=False):
         p = "p_win_market" if g["p_win_market"].notna().all() else "p_win_ability"
