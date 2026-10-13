@@ -1,7 +1,11 @@
-"""JV-Link(JRA-VAN Data Lab)から調教の生データを書き出す。32bit版 Python で動かす小さなスクリプト。
+"""JV-Link(JRA-VAN Data Lab)から調教・成績・馬の生データを書き出す。32bit版 Python で動かす小さなスクリプト。
 
 JV-Link は 32bit の COM 部品なので、64bit の Python からは呼べない。このファイルは標準ライブラリと pywin32 だけを使い、
-JV-Link から読んだレコードを1行1レコードのテキストに書き出すだけにする。中身を読んで DB に入れるのは 64bit 側(jvtraining.py)。
+JV-Link から読んだレコードを1行1レコードのテキストに書き出すだけにする。中身を読んで DB に入れるのは 64bit 側
+(調教は jvtraining.py、成績と血統は jvrace.py)。データ種別は --specs で選ぶ(SLOP・WOOD=調教、RACE=成績、DIFN=馬のマスタ)。
+
+日本語を含むレコード(RACE・DIFN)は、JV-Link が Shift_JIS の1バイトを1文字として返すので、そのまま書き出す。
+文字に戻すのは読む側(jvrace.to_bytes)。
 
     C:\\Python311-32\\jvenv\\Scripts\\python.exe -m keibaai.jvexport --from 20231001 --out data\\jv_raw
 
@@ -16,10 +20,17 @@ from pathlib import Path
 
 SPECS = ("SLOP", "WOOD")  # 坂路調教・ウッドチップ調教
 BUFFER = 110000
+# データ種別ごとに、書き出すレコード種別。ここにない種別は全部書く。
+# RACE にはオッズや票数(1件が数万文字)も入っているので、成績(RA・SE)だけにして残りのファイルは読み飛ばす。
+KEEP = {"RACE": ("RA", "SE"), "DIFN": ("UM",)}
+# 読み取りの大きさ。大きすぎると1件ごとの読み取りが極端に遅くなる(RA 1272・SE 555・UM 1609 文字)
+SMALL_BUFFER = 4000
 
 
 def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
     """1種類のデータを読んで out に書き出す。書いたレコード数を返す。"""
+    keep = KEEP.get(spec)
+    buffer = SMALL_BUFFER if keep else BUFFER
     ret = jv.JVOpen(spec, f"{from_date}000000", option, 0, 0, "")
     if isinstance(ret, tuple) and ret[0] == -2:  # 最初の1回だけ失敗することがあった。もう一度だけ試す
         jv.JVClose()
@@ -34,7 +45,7 @@ def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
     n = 0
     with out.open("w", encoding="utf-8", newline="\n") as f:
         while True:
-            r, buff, _size, fname = jv.JVRead("", BUFFER, "")
+            r, buff, _size, fname = jv.JVRead("", buffer, "")
             if r == 0:  # 全部読んだ
                 break
             if r == -1:  # ファイルの切り替わり
@@ -45,6 +56,9 @@ def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
             if r < 0:
                 jv.JVClose()
                 raise SystemExit(f"{spec}: JVRead が失敗しました({r})")
+            if keep and buff[:2] not in keep:  # 要らない種別のファイルは、先頭の1件だけ見て飛ばす
+                jv.JVSkip()
+                continue
             f.write(f"{fname}\t{buff.rstrip(chr(13) + chr(10))}\n")
             n += 1
             if n % 20000 == 0:
