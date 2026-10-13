@@ -19,7 +19,7 @@ netkeiba から集めた 10,371 レース・142,774 頭と突き合わせ、日�
 違いが残るのは、着差(JRA-VAN はコード)、直線コースの通過順、降着の表記、レース名の表記。
 
 血統の番号は JRA-VAN の繁殖登録番号で、netkeiba の馬 ID とは別の番号。両方を混ぜると同じ種牡馬が別扱いになるので、
-取り込むときに pedigree を全部入れ替える(以後 `keibaai pedigree` は使わない)。
+取り込むときに netkeiba の番号の行は消す(以後 `keibaai pedigree` は使わない)。
 """
 from __future__ import annotations
 
@@ -231,9 +231,11 @@ def import_races(conn: sqlite3.Connection, raw_dir: str | Path, since: str = "00
 
 
 def import_pedigree(conn: sqlite3.Connection, raw_dir: str | Path) -> int:
-    """raw_dir の DIFN.txt(馬のマスタ)から pedigree を作り直す。入れた頭数を返す。
+    """raw_dir の DIFN.txt(馬のマスタ)から pedigree に入れる。入れた頭数を返す。
 
-    同じ馬が何度も出てくるので、作成日が新しいものを使う。netkeiba から取った血統は番号の体系が違うので、全部入れ替える。
+    同じ馬が何度も出てくるので、作成日が新しいものを使う。書き出しに入っていた馬だけを上書きする
+    (差分の書き出しには一部の馬しか入っていないので、表を空にしてから入れてはいけない)。
+    netkeiba から取った血統は番号の体系が違うので、残っていれば消す。
     """
     path = Path(raw_dir) / "DIFN.txt"
     if not path.exists():
@@ -246,8 +248,12 @@ def import_pedigree(conn: sqlite3.Connection, raw_dir: str | Path) -> int:
     if not best:
         return 0
     with conn:
-        conn.execute("DELETE FROM pedigree")
         conn.executemany(
-            f"INSERT INTO pedigree ({','.join(PEDIGREE_COLS)}) VALUES ({','.join('?' * len(PEDIGREE_COLS))})",
+            f"INSERT OR REPLACE INTO pedigree ({','.join(PEDIGREE_COLS)}) VALUES ({','.join('?' * len(PEDIGREE_COLS))})",
             [row for _, row in best.values()])
+        conn.execute(f"DELETE FROM pedigree WHERE {NETKEIBA_ID}")
     return len(best)
+
+
+# netkeiba の馬 ID の形の父・母の父(生まれ年で始まる 19…/20…、輸入馬の 000a…)。JRA-VAN の繁殖登録番号は 11…/12…/14… で始まる
+NETKEIBA_ID = " OR ".join(f"{c} GLOB '{p}*'" for c in ("sire_id", "damsire_id") for p in ("19", "20", "00"))

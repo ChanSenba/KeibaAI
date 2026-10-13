@@ -122,13 +122,18 @@ def test_parse_horse_master():
     assert made == "20261001"
 
 
-def test_import_pedigree_replaces_everything(tmp_path):
+def test_import_pedigree_updates_listed_horses_and_drops_netkeiba_rows(tmp_path):
     conn = db.connect(":memory:")
-    conn.execute("INSERT INTO pedigree (horse_id, sire_id, sire) VALUES ('2015100001', '000a00033a', 'サンデーサイレンス')")
+    conn.executemany("INSERT INTO pedigree (horse_id, sire_id, sire, damsire_id) VALUES (?,?,?,?)", [
+        ("2015100001", "000a00033a", "サンデーサイレンス", "1998101786"),  # netkeiba の番号(輸入馬・生まれ年)
+        ("2016100002", "2002100816", "ディープインパクト", None),
+        ("2014100003", "1120002086", "ディープインパクト", "1120001232"),  # 前に JRA-VAN から入れた馬
+    ])
     write(tmp_path, "DIFN.txt", [um(made="20260903", sire=("1120009999", "古い父")), um(), um(horse="2018100442")])
     assert import_pedigree(conn, tmp_path) == 2
     rows = dict(conn.execute("SELECT horse_id, sire FROM pedigree"))
-    assert rows == {"2017100464": "ルーラーシップ", "2018100442": "ルーラーシップ"}  # 新しい作成日を使い、古い行は消える
+    # 新しい作成日を使う。差分に入っていない JRA-VAN の馬は残り、netkeiba の番号の行だけ消える
+    assert rows == {"2017100464": "ルーラーシップ", "2018100442": "ルーラーシップ", "2014100003": "ディープインパクト"}
 
 
 def test_import_without_files_does_nothing(tmp_path):
