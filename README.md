@@ -101,6 +101,7 @@ keibaai factors --test-from 2026-01-01
 
 ```
 keibaai entries --date 2026-10-17     # 出馬表と単勝オッズを取得して保存
+keibaai entries --date 2026-10-17 --source jv --python32 C:\Python311-32\python.exe   # 同じことを JRA-VAN の速報から（netkeiba を使わない）
 keibaai predict --date 2026-10-17     # 各馬の勝率と期待値を表示
 ```
 

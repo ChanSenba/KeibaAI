@@ -92,9 +92,12 @@ def race_id_of(b: bytes) -> str:
     return (b[11:15] + b[19:27]).decode("ascii", errors="replace")
 
 
-def is_jra_result(b: bytes) -> bool:
-    """成績の入った中央競馬のレコードか。区分 7 は確定成績(月曜)、6 は速報成績(全馬の着順確定)。"""
-    return b[2:3] in (b"6", b"7") and b[19:21].decode("ascii", errors="replace") in VENUES and b[11:19].isdigit()
+RESULT_KUBUNS = (b"6", b"7")  # 7 は確定成績(月曜)、6 は速報成績(全馬の着順確定)
+
+
+def is_jra_result(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> bool:
+    """中央競馬のレコードで、区分が kubuns のどれかか。既定は成績の入った区分。"""
+    return b[2:3] in kubuns and b[19:21].decode("ascii", errors="replace") in VENUES and b[11:19].isdigit()
 
 
 def race_name(title: str, grade: str, kind: str, cond: str) -> str | None:
@@ -105,9 +108,9 @@ def race_name(title: str, grade: str, kind: str, cond: str) -> str | None:
     return (AGE.get(kind, "") + COND.get(cond, "")) or None
 
 
-def parse_ra(b: bytes) -> tuple | None:
+def parse_ra(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> tuple | None:
     """RA の1件を RACE_COLS の順の組にする。対象外は None。"""
-    if b[:2] != b"RA" or len(b) < 978 or not is_jra_result(b):
+    if b[:2] != b"RA" or len(b) < 978 or not is_jra_result(b, kubuns):
         return None
     ctype, direction = _track(b[705:707].decode("ascii", errors="replace"))
     turf, dirt = chr(b[888]), chr(b[889])
@@ -124,9 +127,9 @@ def parse_ra(b: bytes) -> tuple | None:
             "-".join(laps) or None, _num(b[969:972], 10), _num(b[975:978], 10))
 
 
-def parse_se(b: bytes) -> tuple | None:
+def parse_se(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> tuple | None:
     """SE の1件を RESULT_COLS の順の組にする。対象外は None。"""
-    if b[:2] != b"SE" or len(b) < 393 or not is_jra_result(b) or not b[28:30].isdigit():
+    if b[:2] != b"SE" or len(b) < 393 or not is_jra_result(b, kubuns) or not b[28:30].isdigit():
         return None
     status = STATUS.get(chr(b[331]))
     finish = None if status else _num(b[334:336])

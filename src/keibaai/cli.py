@@ -92,6 +92,11 @@ def main(argv=None) -> None:
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
     e.add_argument("--cache", default="data/cache")
+    e.add_argument("--source", choices=["netkeiba", "jv"], default="netkeiba",
+                   help="取得元。jv は JRA-VAN の速報(JV-Link)。アクセス間隔の待ちがなく、netkeiba を使わない")
+    e.add_argument("--raw", default="data/jv_raw", help="jv: 書き出し先(生データ)")
+    e.add_argument("--python32", default=r"C:\Python311-32\jvenv\Scripts\python.exe", help="jv: pywin32 を入れた32bit Python")
+    e.add_argument("--no-odds", action="store_true", help="jv: オッズを取らず、出馬表だけ保存する(レースごとに開くので時間がかかるため)")
     pd_ = sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
@@ -149,6 +154,28 @@ def main(argv=None) -> None:
 
     if args.cmd in ("entries", "collect", "weekly", "pedigree", "bets", "training"):
         warn_if_race_time()
+    if args.cmd == "entries" and args.source == "jv":
+        import os
+        import subprocess
+        from pathlib import Path
+
+        from .jventries import import_entries, race_keys
+
+        env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+        ymd = args.date.replace("-", "")
+        base = [args.python32, "-m", "keibaai.jvexport", "--from", ymd, "--out", args.raw, "--specs", "--rt"]
+        if subprocess.run(base + [f"0B15:{ymd}"], env=env).returncode:
+            raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
+        keys = race_keys(args.raw, args.date)
+        odds_file = Path(args.raw) / "RT_0B31.txt"
+        if odds_file.exists():
+            odds_file.unlink()  # 前に取った別の日のオッズを混ぜない
+        if keys and not args.no_odds:
+            if subprocess.run(base + [f"0B31:{k}" for k in keys], env=env).returncode:
+                print("オッズの書き出しに失敗しました。出馬表だけ保存します")
+        n = import_entries(db.connect(args.db), args.raw, args.date, dt.datetime.now().isoformat(timespec="seconds"))
+        print(f"done: {n} races")
+        return
     if args.cmd == "entries":
         from .predict import fetch_entries
 
