@@ -792,8 +792,8 @@ def show_plan(got, blend) -> None:
     st.dataframe(gui.plan_table(plan.bets), hide_index=True, width="stretch", column_config=BET_COLUMNS)
     if plan.note:
         st.caption(f":material/info: {plan.note}")
-    st.caption("期待値 = 的中確率 × 当日オッズ。モデルの勝率とオッズの確率を混ぜた確率"
-               f"(モデル {blend.a:.2f}・オッズ {blend.b:.2f} の重み)から、1〜3着の組み合わせの確率をハーヴィルの式で出しています。"
+    st.caption("期待値 = 的中確率 × 当日オッズ。オッズ込みのモデルの勝率と、いまのオッズの確率を混ぜた確率"
+               f"(オッズ込みのモデル {blend.a:.2f}・いまのオッズ {blend.b:.2f} の重み)から、1〜3着の組み合わせの確率をハーヴィルの式で出しています。"
                "複勝とワイドは、幅のあるオッズの下限で計算しています。期待回収率は予想が当たっている前提の数字で、"
                "過去8年の検証(馬連・ワイド)では、実際の回収率は90%前後で、表示より2〜3割低くなりました。"
                "結果を保証するものではありません。")

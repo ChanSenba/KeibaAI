@@ -258,15 +258,23 @@ def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bank
                  cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0):
     """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
 
-    勝率は、能力のモデルの勝率とオッズの確率を blend の重みで混ぜたもの。
+    勝率は、オッズ込みのモデルの勝率と、いま取ったオッズの確率を blend の重みで混ぜたもの。
+    過去7年の検証で、能力のモデルと混ぜるより当たりやすかった(LogLoss 0.2053 → 0.2048。同じ買い方の回収率は
+    馬連 86.7% → 90.4%、ワイド 86.8% → 90.0%)。能力のモデルは、混ぜても重みがほぼ 0 になり、オッズに何も足せていなかった。
+    出馬表を取ったときにオッズがなくてオッズ込みの勝率が出せていない場合は、いまのオッズの確率だけを使う。
     """
     from .betting import make_plan
-    from .blend import apply_blend
+    from .blend import Blend, apply_blend
 
-    one = prediction.loc[prediction["race_id"] == race_id, ["race_id", "number", "p_win_ability"]].copy()
+    cols = ["race_id", "number", "p_win_ability"] + (["p_win_market"] if "p_win_market" in prediction.columns else [])
+    one = prediction.loc[prediction["race_id"] == race_id, cols].copy()
     win = odds.get("単勝", {})
     one["win_odds"] = one["number"].map(lambda n: win.get((int(n),)))
-    one["p_win"] = one["p_win_ability"]
+    if "p_win_market" in one.columns and one["p_win_market"].notna().all():
+        one["p_win"] = one["p_win_market"]
+    else:  # オッズ込みの勝率がない。重みはオッズ込みの勝率に合わせて決めてあるので、能力の勝率には当てはめない
+        one["p_win"] = one["p_win_ability"]
+        blend = Blend(0.0, 1.0, blend.loglik, blend.baseline_loglik)
     if one["win_odds"].notna().sum() < 3:
         raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
     mixed = apply_blend(one, blend)

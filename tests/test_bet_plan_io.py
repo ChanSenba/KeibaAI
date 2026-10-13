@@ -59,14 +59,27 @@ def test_fetch_bet_odds_asks_each_type_once_and_merges():
 
 def test_bet_plan_for_mixes_probabilities_and_uses_race_odds():
     pred = pd.DataFrame({"race_id": ["r1"] * 4 + ["r2"], "number": [1, 2, 3, 4, 1],
-                         "p_win_ability": [0.55, 0.25, 0.15, 0.05, 1.0]})
+                         "p_win_ability": [0.25, 0.25, 0.25, 0.25, 1.0],
+                         "p_win_market": [0.55, 0.25, 0.15, 0.05, 1.0]})
     odds = {"単勝": {(1,): 2.4, (2,): 3.2, (3,): 4.8, (4,): 9.6}, "馬連": {(1, 2): 2.0}}  # オッズの逆数の合計は1.25(控除率20%)
-    plan, mixed = gui.bet_plan_for(pred, "r1", odds, Blend(1.0, 0.0, 0, 0))  # モデルだけ
+    plan, mixed = gui.bet_plan_for(pred, "r1", odds, Blend(1.0, 0.0, 0, 0))  # モデルだけ。使うのはオッズ込みの勝率
     assert len(mixed) == 4 and np.isclose(mixed["p_win"].sum(), 1) and np.isclose(mixed["p_win"].iloc[0], 0.55)
     assert plan.bets and plan.bets[0].kind in ("単勝", "馬連")  # モデルの見立てでは有利
     assert list(gui.plan_table(plan.bets).columns) == ["券種", "買い目", "オッズ", "的中確率", "期待値", "金額", "的中時の払戻"]
     plan2, _ = gui.bet_plan_for(pred, "r1", odds, Blend(0.0, 1.0, 0, 0))  # オッズだけ → 控除率で期待値は1未満
     assert plan2.bets == [] and "見送り" in plan2.note
+
+
+def test_bet_plan_for_falls_back_to_odds_when_market_model_is_missing():
+    """出馬表を取ったときにオッズがなく、オッズ込みの勝率が出せていないレースは、いまのオッズの確率だけを使う。"""
+    odds = {"単勝": {(1,): 2.4, (2,): 3.2, (3,): 4.8, (4,): 9.6}}
+    for market in ([0.55, np.nan, 0.15, 0.05], None):
+        pred = pd.DataFrame({"race_id": ["r1"] * 4, "number": [1, 2, 3, 4], "p_win_ability": [0.7, 0.1, 0.1, 0.1]})
+        if market:
+            pred["p_win_market"] = market
+        plan, mixed = gui.bet_plan_for(pred, "r1", odds, Blend(1.0, 0.0, 0, 0))
+        assert np.allclose(mixed["p_win"], [0.4, 0.3, 0.2, 0.1])  # 単勝オッズの逆数を合計1にしたもの
+        assert plan.bets == []  # 能力の勝率(0.7)を重み1で使っていれば、1番の単勝が買い目になってしまう
 
 
 def test_bet_plan_for_without_win_odds_explains():

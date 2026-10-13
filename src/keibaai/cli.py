@@ -197,7 +197,7 @@ def main(argv=None) -> None:
         blend = blend_for_day(conn, args.date)
         odds = gui.fetch_bet_odds(Fetcher(cache_dir=args.cache), args.race_id)
         plan, _ = gui.bet_plan_for(pred, args.race_id, odds, blend, args.bankroll, args.cap, args.kelly)
-        print(f"混ぜ方: モデル {blend.a:.2f} / オッズ {blend.b:.2f}")
+        print(f"混ぜ方: オッズ込みのモデル {blend.a:.2f} / いまのオッズ {blend.b:.2f}")
         if not plan.bets:
             print(plan.note)
             for b in plan.top_ev:
