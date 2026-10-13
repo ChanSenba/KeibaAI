@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
-from .features import BASE_FEATURES, CATEGORICAL, MARKET_FEATURES, build_features, load_results
+from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results
 from .factors import COLUMN, FACTORS, predict_factors
 from .jvtraining import add_jv_features
 from .model import PARAMS, normalize_within_race
@@ -110,10 +110,10 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
     is_entry = df["finish"].isna()
     train, target = df[~is_entry], df[is_entry].copy()
 
-    ability = _fit(train, BASE_FEATURES, rounds)
-    market = _fit(train, BASE_FEATURES + MARKET_FEATURES, rounds)
-    target["p_win_ability"] = normalize_within_race(target, ability.predict(target[BASE_FEATURES]))
-    pm = market.predict(target[BASE_FEATURES + MARKET_FEATURES])
+    ability = _fit(train, ABILITY_MODEL_FEATURES, rounds)
+    market = _fit(train, MARKET_MODEL_FEATURES, rounds)
+    target["p_win_ability"] = normalize_within_race(target, ability.predict(target[ABILITY_MODEL_FEATURES]))
+    pm = market.predict(target[MARKET_MODEL_FEATURES])
     target["p_win_market"] = np.where(target["win_odds"].notna(), pm, np.nan)
     ok = target["p_win_market"].notna()
     target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())

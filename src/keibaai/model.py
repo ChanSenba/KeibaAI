@@ -7,7 +7,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import BASE_FEATURES, CATEGORICAL, MARKET_FEATURES
+from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES
 
 PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in_leaf=50,
               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, verbose=-1, seed=0)
@@ -50,7 +50,7 @@ def _fit(train: pd.DataFrame, features: list[str], target: str, rounds: int):
 
 
 def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 300) -> tuple[Report, pd.DataFrame]:
-    features = BASE_FEATURES + (MARKET_FEATURES if use_market else [])
+    features = MARKET_MODEL_FEATURES if use_market else ABILITY_MODEL_FEATURES
     cut = pd.Timestamp(test_from)
     train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
     if train.empty or test.empty:
