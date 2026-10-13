@@ -151,3 +151,10 @@ def test_race_head_html_survives_missing_fields():
                        "ground": float("nan"), "start_time": float("nan"), "runners": float("nan")})
     out = gui.race_head_html(empty)
     assert "1R" in out and "nan" not in out and "None" not in out
+
+
+def test_eval_start_bounds():
+    # 長い期間: 最初の1年は選ばせず、初期値は最後の1年前
+    assert gui.eval_start_bounds(dt.date(2019, 1, 5), dt.date(2026, 10, 12)) == (dt.date(2020, 1, 5), dt.date(2025, 10, 12))
+    # 2年に満たない期間: 前半は選ばせず、初期値は最も早い日
+    assert gui.eval_start_bounds(dt.date(2025, 1, 4), dt.date(2025, 1, 18)) == (dt.date(2025, 1, 11), dt.date(2025, 1, 11))

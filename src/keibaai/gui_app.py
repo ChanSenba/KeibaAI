@@ -199,16 +199,19 @@ def page_train() -> None:
 
     with st.container(border=True):
         c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
-        test_from = c1.date_input("評価開始日", max(first, last - dt.timedelta(days=90)), min_value=first,
-                                  max_value=last, format="YYYY/MM/DD",
-                                  help=f"取得済み期間は {first:%Y/%m/%d} – {last:%Y/%m/%d} です")
+        earliest, default = gui.eval_start_bounds(first, last)
+        test_from = c1.date_input("評価開始日", default, min_value=earliest, max_value=last, format="YYYY/MM/DD",
+                                  help=f"取得済み期間は {first:%Y/%m/%d} – {last:%Y/%m/%d} です。"
+                                       f"学習用に、評価開始日より前のレースが要るので、選べるのは {earliest:%Y/%m/%d} 以降です")
         run = c2.button("学習して評価", type="primary", icon=":material/model_training:", width="stretch")
     if run:
         try:
             with st.spinner("学習しています(データ量によって数分かかります)"):
                 st.session_state["report"] = (test_from, gui.train_reports(conn, test_from.isoformat()))
-        except ValueError as e:
-            st.error(str(e))
+        except ValueError:
+            st.error(f"{test_from:%Y/%m/%d} では、学習用か評価用のレースが足りません。"
+                     f"{earliest:%Y/%m/%d} から {last:%Y/%m/%d} の間の日付を選んでください"
+                     f"(取得済みの期間は {first:%Y/%m/%d} から {last:%Y/%m/%d})。")
 
     if "report" not in st.session_state:
         return
