@@ -10,6 +10,8 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from .jvtraining import JV_FEATURES, add_jv_features
+
 CATEGORICAL = ["course_type", "venue", "ground", "sex", "train_critic"]
 # 馬の過去成績・騎手/調教師の過去成績・レース条件。オッズは含めない(能力だけで予測するため)
 BASE_FEATURES = [
@@ -37,7 +39,7 @@ LAP_FEATURES = ["prev_pace_diff", "pace_diff_3", "l3f_vs_lap_3"]
 PEDIGREE_FEATURES = ["sire_n", "sire_top3_rate", "sire_ctdist_top3_rate", "sire_ground_top3_rate",
                      "damsire_n", "damsire_top3_rate", "damsire_ctdist_top3_rate"]
 # 調教: 最終追い切りの評価(netkeiba の短評とA〜D)。レース前日に公開されるので、当日の予想にも使える
-TRAINING_FEATURES = ["train_rank_score", "train_rank_vs_field", "train_critic"]
+TRAINING_FEATURES = ["train_rank_score", "train_rank_vs_field", "train_critic"] + JV_FEATURES
 TRAIN_RANK_SCORE = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "E": 0.0}
 ARTICLE_FEATURES = (APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
                     + LAP_FEATURES + PEDIGREE_FEATURES + TRAINING_FEATURES)
@@ -58,7 +60,7 @@ def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
         conn,
     )
     df["date"] = pd.to_datetime(df["date"])
-    return df
+    return add_jv_features(conn, df)
 
 
 _CLASS_PATTERNS = [  # 上から順に判定。値が大きいほど格上
