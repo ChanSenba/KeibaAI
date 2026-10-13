@@ -44,6 +44,14 @@ TRAIN_RANK_SCORE = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "E": 0.0}
 ARTICLE_FEATURES = (APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
                     + LAP_FEATURES + PEDIGREE_FEATURES + TRAINING_FEATURES)
 BIAS_FEATURES = ["track_front_bias", "track_inner_bias"]  # トラックバイアス(下の _track_bias)
+# レースの条件。要素別のモデルには入っているが、総合には入っていなかった
+CONDITION_FEATURES = ["course_type", "ground", "venue", "sex"]
+# 予想に使う組(train・predict・backtest・bets)。全要素を使う。
+# 2026年の2,730レースで: 能力のみ AUC 0.794(総合の27個)→ 0.803、オッズあり LogLoss 0.2050 → 0.2044(オッズだけは 0.2047)。
+# 条件の列は能力のみのモデルでは少し効き(AUC +0.0006〜0.0013)、オッズありでは効かなかったので、能力のみにだけ足す
+_ALL_FEATURES = list(dict.fromkeys(BASE_FEATURES + BIAS_FEATURES + ARTICLE_FEATURES))
+ABILITY_MODEL_FEATURES = _ALL_FEATURES + CONDITION_FEATURES
+MARKET_MODEL_FEATURES = _ALL_FEATURES + MARKET_FEATURES
 BIAS_WINDOW = "10D"
 
 
