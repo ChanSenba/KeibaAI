@@ -58,3 +58,8 @@ def test_steeplechase_course_text():
 def test_course_variants(text, dist):
     race = parse_race(HTML.replace("芝左2400m", text), "202408060704").race
     assert race.distance == (dist or 3200) and race.course_type in ("障", "芝")
+
+
+def test_trainer_name_keeps_leading_character_that_looks_like_a_region():
+    html = HTML.replace("[西] 友道康夫", "[東] 西村真幸")
+    assert parse_race(html, "202405050812").results[0].trainer == "西村真幸"

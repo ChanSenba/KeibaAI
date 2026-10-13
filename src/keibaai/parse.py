@@ -209,7 +209,7 @@ def parse_race(html: str, race_id: str) -> ParsedRace:
         r.win_odds = _num(text("win_odds"))
         r.popularity = _num(text("popularity"), int)
         r.body_weight, r.body_weight_diff = parse_body_weight(text("body_weight"))
-        r.trainer = _squash(text("trainer") or "").lstrip("[東西地外]") or None
+        r.trainer = re.sub(r"^\[[東西地外]\]", "", _squash(text("trainer") or "")) or None  # 先頭の所属 [東] だけを取る
         r.trainer_id = _id_from_href(cell("trainer").find("a") if cell("trainer") else None, "trainer")
         r.owner = text("owner")
         r.prize = _num(text("prize"))
