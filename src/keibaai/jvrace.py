@@ -93,8 +93,8 @@ def race_id_of(b: bytes) -> str:
 
 
 def is_jra_result(b: bytes) -> bool:
-    """確定成績(区分 7)の中央競馬のレコードか。"""
-    return b[2:3] == b"7" and b[19:21].decode("ascii", errors="replace") in VENUES and b[11:19].isdigit()
+    """成績の入った中央競馬のレコードか。区分 7 は確定成績(月曜)、6 は速報成績(全馬の着順確定)。"""
+    return b[2:3] in (b"6", b"7") and b[19:21].decode("ascii", errors="replace") in VENUES and b[11:19].isdigit()
 
 
 def race_name(title: str, grade: str, kind: str, cond: str) -> str | None:
@@ -179,26 +179,43 @@ def _records(path: Path):
 
 
 def import_races(conn: sqlite3.Connection, raw_dir: str | Path, since: str = "0000-00-00",
-                 replace: bool = False) -> tuple[int, int]:
-    """raw_dir の RACE.txt(jvexport の出力)から races と results に入れる。(レース数, 出走数) を返す。
+                 replace: bool = False, refresh_since: str | None = None) -> tuple[int, int]:
+    """raw_dir の成績(jvexport の出力)から races と results に入れる。(レース数, 出走数) を返す。
 
-    since(YYYY-MM-DD)より前のレースは入れない。すでに DB にあるレース(netkeiba から取ったもの)は、
-    replace=True のときだけ入れ替える。レースと出走馬は同じレースをひとまとめに扱う。
+    読むのは RT_0B15.txt(速報成績。開催の当日から)と RACE.txt(確定成績。翌週に出る)。同じレースが両方にあれば確定成績を使う。
+    since(YYYY-MM-DD)より前のレースは入れない。すでに DB にあるレースは、replace=True のときだけ入れ替える。
+    ただし refresh_since 以後のレースは、DB にあっても入れ替える(速報で入れたものを、あとから確定成績に置き換えるため)。
+    レースと出走馬は同じレースをひとまとめに扱う。
     """
-    path = Path(raw_dir) / "RACE.txt"
-    if not path.exists():
+    paths = [p for p in (Path(raw_dir) / "RT_0B15.txt", Path(raw_dir) / "RACE.txt") if p.exists()]
+    if not paths:
         return 0, 0
-    have = set() if replace else {r[0] for r in conn.execute("SELECT race_id FROM races")}
-    races, results = {}, {}
-    for b in _records(path):
-        if b[:2] == b"RA":
-            row = parse_ra(b)
-            if row and row[2] >= since and row[0] not in have:
-                races[row[0]] = row
-        elif b[:2] == b"SE":
-            row = parse_se(b)
-            if row and row[0] not in have:
-                results.setdefault(row[0], {})[row[1]] = row
+    if replace:
+        have = set()
+    else:
+        have = {r[0] for r in conn.execute("SELECT race_id FROM races WHERE date < ? OR date IS NULL",
+                                           (refresh_since or "9999-99-99",))}
+    races, results, level = {}, {}, {}
+    for path in paths:
+        for b in _records(path):
+            kind = b[:2]
+            if kind not in (b"RA", b"SE"):
+                continue
+            row = parse_ra(b) if kind == b"RA" else parse_se(b)
+            if not row or row[0] in have:
+                continue
+            rid, kubun = row[0], b[2:3]
+            if kubun < level.get((rid, kind), b"0"):  # 確定成績(7)を速報(6)で上書きしない
+                continue
+            if kubun > level.get((rid, kind), b"0"):  # 区分が上がったら、そのレースの古い行は捨てる
+                level[(rid, kind)] = kubun
+                if kind == b"SE":
+                    results.pop(rid, None)
+            if kind == b"RA":
+                if row[2] >= since:
+                    races[rid] = row
+            else:
+                results.setdefault(rid, {})[row[1]] = row
     ids = [i for i in races if i in results]  # 出走馬のないレースや、レースのない出走馬は入れない
     n_res = 0
     with conn:

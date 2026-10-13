@@ -67,12 +67,55 @@ def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
     return n
 
 
+def export_rt(jv, spec: str, keys: list[str], out: Path) -> int:
+    """速報系のデータ(JVRTOpen)を、キー(日付 YYYYMMDD やレース)ごとに読んで out に書き出す。書いたレコード数を返す。
+
+    速報は開催からおよそ1週間ぶんだけ取れる。データのない日は飛ばす。
+    JV-Link を短い間隔で何度も開き直すと内部のサービスが落ちることがあったので、開くたびに間をあける。
+    """
+    n = 0
+    with out.open("w", encoding="utf-8", newline="\n") as f:
+        for i, key in enumerate(keys):
+            if i:
+                time.sleep(RT_INTERVAL)
+            code = jv.JVRTOpen(spec, key)
+            code = code[0] if isinstance(code, tuple) else code
+            if code < 0:  # -1 はデータなし。ほかのエラーも、その日を飛ばして続ける
+                print(f"{spec} {key}: JVRTOpen -> {code}(飛ばします)", flush=True)
+                jv.JVClose()
+                continue
+            m = 0
+            while True:
+                r, buff, _size, fname = jv.JVRead("", BUFFER, "")
+                if r == 0:
+                    break
+                if r == -1:
+                    continue
+                if r == -3:
+                    time.sleep(1)
+                    continue
+                if r < 0:
+                    print(f"{spec} {key}: JVRead -> {r}(ここまでにします)", flush=True)
+                    break
+                f.write(f"{fname or key}\t{buff.rstrip(chr(13) + chr(10))}\n")
+                m += 1
+            jv.JVClose()
+            print(f"{spec} {key}: {m} 件", flush=True)
+            n += m
+    return n
+
+
+RT_INTERVAL = 5  # 速報を続けて開くときの間隔(秒)
+
+
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="JV-Link から調教の生データを書き出す(32bit Python 用)")
+    ap = argparse.ArgumentParser(description="JV-Link から調教・成績・馬の生データを書き出す(32bit Python 用)")
     ap.add_argument("--from", dest="from_date", required=True, help="取得を始める日 YYYYMMDD")
     ap.add_argument("--out", default="data/jv_raw", help="出力先フォルダ")
     ap.add_argument("--option", type=int, default=4, help="JVOpen のオプション(1=通常の差分、4=セットアップ(ダイアログなし))")
-    ap.add_argument("--specs", nargs="+", default=list(SPECS))
+    ap.add_argument("--specs", nargs="*", default=list(SPECS))
+    ap.add_argument("--rt", nargs="*", default=[], metavar="種別:キー",
+                    help="速報系のデータ。例: 0B15:20261012(その日の速報成績と払戻)。出力は RT_<種別>.txt")
     args = ap.parse_args(argv)
     import win32com.client as w  # 32bit 側にだけ入れる
 
@@ -82,9 +125,20 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"JVInit が失敗しました({r})")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    for spec in args.specs:
+    for i, spec in enumerate(args.specs):
+        if i:
+            time.sleep(RT_INTERVAL)  # 続けて開き直すと JV-Link の内部サービスが落ちることがあった
         n = export_spec(jv, spec, args.from_date, args.option, out / f"{spec}.txt")
         print(f"{spec}: {n} 件を書き出しました", flush=True)
+    rt: dict[str, list[str]] = {}
+    for item in args.rt:
+        spec, _, key = item.partition(":")
+        rt.setdefault(spec, []).append(key)
+    for spec, keys in rt.items():
+        if args.specs:
+            time.sleep(RT_INTERVAL)
+        n = export_rt(jv, spec, keys, out / f"RT_{spec}.txt")
+        print(f"{spec}(速報): {n} 件を書き出しました", flush=True)
 
 
 if __name__ == "__main__":

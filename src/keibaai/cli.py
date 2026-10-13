@@ -107,6 +107,8 @@ def main(argv=None) -> None:
                      help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(入れ替え)")
     jv_.add_argument("--replace", action="store_true",
                      help="races: すでに DB にあるレースも JRA-VAN の内容で入れ替える(既定は、無いレースだけ足す)")
+    jv_.add_argument("--rt-days", type=int, default=0,
+                     help="races: 直近この日数ぶんの速報成績も取る(確定成績は翌週に出るので、開催直後はこちら)。直近14日のレースは入れ替える")
     jv_.add_argument("--db", default="data/keiba.db")
     jv_.add_argument("--raw", default="data/jv_raw", help="書き出し先(生データ)")
     jv_.add_argument("--from", dest="from_date", default="20230901", help="取得を始める日 YYYYMMDD")
@@ -203,6 +205,10 @@ def main(argv=None) -> None:
             env = {**os.environ, "PYTHONPATH": src}
             cmd = [args.python32, "-m", "keibaai.jvexport", "--from", args.from_date, "--out", args.raw,
                    "--option", str(args.option), "--specs", *[s for w in args.what for s in specs[w]]]
+            if "races" in args.what and args.rt_days > 0:
+                today = dt.date.today()
+                days = [today - dt.timedelta(days=i) for i in range(args.rt_days - 1, -1, -1)]
+                cmd += ["--rt", *[f"0B15:{d:%Y%m%d}" for d in days]]
             if subprocess.run(cmd, env=env).returncode:
                 raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
         conn = db.connect(args.db)
@@ -210,7 +216,8 @@ def main(argv=None) -> None:
             print(f"done: 調教 {import_raw(conn, args.raw)} 件を取り込みました")
         if "races" in args.what:
             d = args.from_date
-            n_race, n_res = import_races(conn, args.raw, f"{d[:4]}-{d[4:6]}-{d[6:]}", args.replace)
+            refresh = (dt.date.today() - dt.timedelta(days=14)).isoformat() if args.rt_days > 0 else None
+            n_race, n_res = import_races(conn, args.raw, f"{d[:4]}-{d[4:6]}-{d[6:]}", args.replace, refresh)
             print(f"done: 成績 {n_race} レース・{n_res} 頭を取り込みました")
         if "pedigree" in args.what:
             print(f"done: 血統 {import_pedigree(conn, args.raw)} 頭を入れ替えました")
