@@ -63,7 +63,13 @@ class Fetcher:
                 wait = self.min_interval + self._rng.uniform(0, self._jitter) - (self._clock() - self._last)
                 if wait > 0:
                     self._sleep(wait)
-            resp = self.session.get(url, timeout=30)
+            try:
+                resp = self.session.get(url, timeout=30)
+            except (requests.Timeout, requests.ConnectionError):
+                # 通信の一時的な失敗(読み込みのタイムアウト・切断)。数時間かけて取るので、1回の失敗で全体を止めない
+                self._last = self._clock()
+                self._sleep(30 * (attempt + 1))
+                continue
             self._last = self._clock()
             if resp.status_code in (429, 503):
                 self._sleep(30 * (attempt + 1))  # 取得を間引いて待つ
