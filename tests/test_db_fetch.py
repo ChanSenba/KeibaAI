@@ -36,7 +36,10 @@ class FakeSession:
 
     def get(self, url, timeout):
         self.calls += 1
-        return self.resps.pop(0)
+        r = self.resps.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
 
 
 def test_cache_prevents_refetch_and_rate_limit(tmp_path):
@@ -58,6 +61,26 @@ def test_backoff_on_429(tmp_path):
     f = Fetcher(tmp_path, session=sess, sleep=sleeps.append, clock=lambda: 0.0)
     assert f.race_html("202405050812") == "ok race_table_01"
     assert 30 in sleeps
+
+
+def test_retries_after_read_timeout(tmp_path):
+    import requests
+
+    sess = FakeSession([requests.ReadTimeout("timed out"), FakeResp(200, "ok race_table_01")])
+    sleeps = []
+    f = Fetcher(tmp_path, session=sess, sleep=sleeps.append, clock=lambda: 0.0)
+    assert f.race_html("202405050812") == "ok race_table_01"
+    assert sess.calls == 2 and 30 in sleeps
+
+
+def test_gives_up_after_repeated_timeouts(tmp_path):
+    import pytest
+    import requests
+
+    sess = FakeSession([requests.ConnectionError("reset")] * 4)
+    f = Fetcher(tmp_path, session=sess, sleep=lambda s: None, clock=lambda: 0.0)
+    with pytest.raises(RuntimeError):
+        f.race_html("202405050812")
 
 
 def test_default_requests_user_agent_is_replaced(tmp_path):
