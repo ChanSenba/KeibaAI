@@ -46,6 +46,22 @@ def test_read_entries_before_the_race(tmp_path):
     assert (p.entries[1].horse_name, p.entries[1].win_odds) == ("スズハローム", 22.8)
 
 
+def test_weekly_data_card_is_read_and_the_later_stage_wins(tmp_path):
+    """木曜〜金曜の「今週のデータ」(RACE.txt)からも読む。出走馬名表(1)のあと出馬表(2)が来たら出馬表を使う。"""
+    names = [ra(race=RACE, kubun="1", title="スワンステークス"), se(race=RACE, number="00", over={2: "1"}),
+             se(race=RACE, number="00", over={2: "1", 30: "2024100000"})]
+    write(tmp_path, "RACE.txt", names)
+    assert race_keys(tmp_path, "2026-10-17") == [RACE]  # 馬番の前でも、オッズを取るレースは分かる
+    assert read_entries(tmp_path, "2026-10-17") == []  # 木曜: 馬番がないので、まだ入れない
+    write(tmp_path, "RACE.txt", names + card())  # 枠順が出た(区分 2)
+    (p,) = read_entries(tmp_path, "2026-10-17")
+    assert [e.number for e in p.entries] == [1, 2]
+    write(tmp_path, "RT_0B15.txt", [ra(race=RACE, kubun="2", title="スワンステークス"),
+                                    se(race=RACE, number="05", over={2: "2"})])  # 速報にも同じ区分がある
+    (p,) = read_entries(tmp_path, "2026-10-17")
+    assert [e.number for e in p.entries] == [1, 2, 5]  # 同じ区分なら両方の馬を合わせる
+
+
 def test_entries_without_numbers_or_odds(tmp_path):
     rows = card()
     write(tmp_path, "RT_0B15.txt", [rows[0], se(race=RACE, number="00", over={2: "1"})])  # 木曜: 馬番の確定前
