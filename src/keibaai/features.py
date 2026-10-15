@@ -29,7 +29,10 @@ APTITUDE_FEATURES = ["horse_ct_top3_rate", "horse_venue_top3_rate", "horse_dir_t
                      # 組み合わせの条件: 競馬場×芝ダ×距離帯のコース、芝ダ×馬場状態、同じレース名。件数も付ける
                      "horse_course_top3_rate", "horse_course_n", "horse_ctground_top3_rate",
                      "horse_race_top3_rate", "horse_race_n"]
-FORM_FEATURES = ["l3f_rank_3", "time_diff_5", "pos_gain_3", "bw_vs_avg", "weight_ratio", "weight_change",
+FORM_FEATURES = ["l3f_rank_3", "time_diff_5", "pos_gain_3",
+                 # 直近1〜2走の中身(平均ではなく前走そのもの)
+                 "prev_l3f_rank", "prev_early_pos", "prev_pos_gain", "prev_class", "prev_field_size",
+                 "prev_l3f_vs_lap", "prev2_finish", "prev2_time_diff", "bw_vs_avg", "weight_ratio", "weight_change",
                  "prev_pop_gap", "dist_shorten300", "dist_extend300"]
 ROTATION_FEATURES = ["weeks_since_last", "is_layoff", "runs_since_layoff", "is_renso",
                      # 前走の内容(タイム差・前半のペース・距離)と、今回までの間隔の組み合わせ
@@ -209,6 +212,13 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["prev_time_diff"] = df.groupby("horse_id", sort=False)["time_diff"].shift(1).astype(float)
     df["prev_pace_z"] = pace_z.groupby(df["horse_id"], sort=False).shift(1)
     df["prev_distance"] = g["distance"].shift(1)
+    df["prev2_time_diff"] = df.groupby("horse_id", sort=False)["time_diff"].shift(2).astype(float)
+    df["prev_l3f_rank"] = g["l3f_rank_rel"].shift(1)
+    df["prev_early_pos"] = g["early_pos"].shift(1)
+    df["prev_pos_gain"] = g["pos_gain"].shift(1)
+    df["prev_class"] = g["race_class"].shift(1)
+    df["prev_field_size"] = g["field_size"].shift(1)
+    df["prev2_finish"] = g["finish"].shift(2)
     short = (df["days_since_last"] <= 21).astype(float).where(df["days_since_last"].notna())  # 3週以内
     hard = ((df["prev_time_diff"] <= 0.3) | (df["prev_pace_z"] <= -1)).astype(float).where(
         df["prev_time_diff"].notna() | df["prev_pace_z"].notna())
@@ -249,6 +259,7 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["prev_pace_diff"] = g["pace_diff"].shift(1)
     df["pace_diff_3"] = _prior_mean(df["pace_diff"], h, 3)
     df["l3f_vs_lap_3"] = _prior_mean(df["l3f_vs_lap"], h, 3)
+    df["prev_l3f_vs_lap"] = g["l3f_vs_lap"].shift(1)
 
     # --- 血統: 父・母の父の産駒の過去成績(同じ日の他レースは含めない) ---
     df["sire_n"], df["sire_top3_rate"] = _expanding_rate(df, "sire_id", "top3")
