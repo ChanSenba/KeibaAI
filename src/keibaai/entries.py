@@ -24,6 +24,7 @@ class EntryRace:
     ground: str | None = None
     start_time: str | None = None
     course: str | None = None  # 外 / 内 / 外-内 など(parse.Race と同じ)
+    rail: str | None = None  # A〜E コース
 
 
 @dataclass
@@ -80,8 +81,8 @@ def _parse_race_info(soup: BeautifulSoup, race_id: str) -> EntryRace:
         race.date = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
     if m := re.search(r"(障|芝|ダ)(?:芝|ダート|ダ)*(\d{3,4})m", text):
         race.course_type, race.distance = m.group(1), int(m.group(2))
-        if d := re.search(r"\((左|右|直線)\s*((?:外|内)(?:-(?:外|内))?(?:\d周)?)?", text[m.end():m.end() + 16]):
-            race.direction, race.course = d.group(1), d.group(2)
+        if d := re.search(r"\((左|右|直線)\s*((?:外|内)(?:-(?:外|内))?(?:\d周)?)?\s*([A-E](?![A-Za-z]))?", text[m.end():m.end() + 20]):
+            race.direction, race.course, race.rail = d.group(1), d.group(2), d.group(3)
     if m := re.search(r"天候[:：]?(晴|曇|小雨|雨|小雪|雪)", text):
         race.weather = m.group(1)
     if m := re.search(r"馬場[:：]?(良|稍重|重|不良)", text):

@@ -144,10 +144,13 @@ def test_backtest_run_returns_table_and_curves():
 def test_race_head_html_survives_missing_fields():
     import pandas as pd
 
-    full = pd.Series({"round": 11, "name": "スワンS", "course_type": "芝", "distance": 1400, "ground": "良",
-                      "start_time": "15:45", "runners": 18})
-    assert "スワンS" in gui.race_head_html(full) and "芝1400m ・ 良 ・ 15:45 発走 ・ 18頭" in gui.race_head_html(full)
-    empty = pd.Series({"round": 1, "name": float("nan"), "course_type": None, "distance": float("nan"),
+    full = pd.Series({"venue": "京都", "round": 11, "name": "スワンS", "course_type": "芝", "direction": "右",
+                      "distance": 1400, "ground": "良", "start_time": "15:45", "runners": 18})
+    out = gui.race_head_html(full)
+    assert "京都11R" in out and "スワンS" in out and "芝・右回り 1400m ・ 良 ・ 15:45 発走 ・ 18頭" in out
+    assert gui.course_text(pd.Series({"course_type": "芝", "direction": "直線", "distance": 1000})) == "芝・直線 1000m"
+    assert gui.course_text(pd.Series({"course_type": "障", "direction": None, "distance": 2910})) == "障 2910m"
+    empty = pd.Series({"venue": None, "round": 1, "name": float("nan"), "course_type": None, "distance": float("nan"),
                        "ground": float("nan"), "start_time": float("nan"), "runners": float("nan")})
     out = gui.race_head_html(empty)
     assert "1R" in out and "nan" not in out and "None" not in out
@@ -160,13 +163,13 @@ def test_eval_start_bounds():
     assert gui.eval_start_bounds(dt.date(2025, 1, 4), dt.date(2025, 1, 18)) == (dt.date(2025, 1, 11), dt.date(2025, 1, 11))
 
 
-def test_course_text_names_venue_turn_and_inner_outer():
+def test_course_text_names_turn_inner_outer_and_rail():
     import pandas as pd
 
     s = lambda **kw: pd.Series({"venue": "京都", "course_type": "芝", "distance": 1600, **kw})
-    assert gui.course_text(s(direction="右", course="外")) == "京都 芝1600m(右回り・外回り)"
-    assert gui.course_text(s(direction="右", course=None)) == "京都 芝1600m(右回り)"
-    assert gui.course_text(s(course_type="障", distance=3170, direction=None, course="外-内")) == "京都 障害3170m(外回り→内回り)"
-    assert gui.course_text(s(direction="右", course="内2周")) == "京都 芝1600m(右回り・内回り2周)"
-    assert gui.course_text(s(course_type="ダ", venue="新潟", direction="直線", course=None)) == "新潟 ダート1600m(直線)"
-    assert "京都 芝1600m(右回り・外回り) ・ 良" in gui.race_head_html(s(round=11, direction="右", course="外", ground="良"))
+    assert gui.course_text(s(direction="右", course="外", rail="A")) == "芝・右回り・外回り・Aコース 1600m"
+    assert gui.course_text(s(direction="右", course=None, rail=None)) == "芝・右回り 1600m"
+    assert gui.course_text(s(course_type="障", distance=3170, direction=None, course="外-内")) == "障・外回り→内回り 3170m"
+    assert gui.course_text(s(direction="右", course="内2周", rail="C")) == "芝・右回り・内回り2周・Cコース 1600m"
+    out = gui.race_head_html(s(round=11, direction="右", course="外", rail="B", ground="良"))
+    assert "京都11R" in out and "芝・右回り・外回り・Bコース 1600m ・ 良" in out

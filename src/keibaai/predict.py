@@ -56,7 +56,7 @@ def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime
 def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
-        SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground,
+        SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.course, c.rail, c.distance, c.ground,
                p.sire_id, p.damsire_id, t.rank AS train_rank, t.critic AS train_critic
         FROM entries e JOIN entry_races c USING (race_id) LEFT JOIN pedigree p USING (horse_id)
         LEFT JOIN training t ON t.race_id = e.race_id AND t.number = e.number AND t.seq = 0

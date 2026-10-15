@@ -66,7 +66,7 @@ def read_entries(raw_dir: str | Path, date: str) -> list[ParsedEntries]:
             r = parse_ra(b, ENTRY_KUBUNS)
             if r and r[2] == date and b[2:3] >= level.get((r[0], b"RA"), b"0"):
                 level[(r[0], b"RA")] = b[2:3]
-                races[r[0]] = EntryRace(*r[:11], course=r[14])
+                races[r[0]] = EntryRace(*r[:11], course=r[14], rail=r[15])
         elif b[:2] == b"SE":
             s = parse_se(b, ENTRY_KUBUNS)
             if not s:

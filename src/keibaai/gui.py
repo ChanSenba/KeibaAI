@@ -119,8 +119,8 @@ def entries_summary(conn: sqlite3.Connection, date: str) -> dict:
 def day_races(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     """出馬表を取得済みのレース一覧。競馬場は race_id の場コード順(札幌→小倉)、その中はレース番号順。"""
     return pd.read_sql_query(
-        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.direction, c.course, c.distance, c.ground, "
-        "c.start_time, "
+        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.direction, c.course, c.rail, c.distance, "
+        "c.ground, c.start_time, "
         "COUNT(e.number) AS runners FROM entry_races c LEFT JOIN entries e USING (race_id) "
         "WHERE c.date = ? GROUP BY c.race_id ORDER BY substr(c.race_id, 5, 2), c.round",
         conn, params=(date,),
@@ -191,35 +191,34 @@ def text_or_blank(v) -> str:
     return "" if v is None or v != v else str(v)
 
 
-COURSE_TYPE_NAMES = {"芝": "芝", "ダ": "ダート", "障": "障害"}
-
-
 def course_text(race) -> str:
-    """「京都 芝1600m(右・外回り)」のような、競馬場とコースの説明。分からない項目は省く。"""
+    """コースの表記。芝・ダート(障害)、回り、内回り・外回り、A〜E コース、距離。分からない項目は省く。
+
+    例: 芝・右回り・外回り・Aコース 1600m、芝・直線 1000m。
+    """
     distance = pd.to_numeric(race.get("distance"), errors="coerce")
-    ct = text_or_blank(race.get("course_type"))
-    body = f"{COURSE_TYPE_NAMES.get(ct, ct)}{int(distance)}m" if distance == distance else ""
-    direction, course = text_or_blank(race.get("direction")), text_or_blank(race.get("course"))
-    turn = []
-    if direction:
-        turn.append(direction if direction == "直線" else f"{direction}回り")
-    if course:  # 外 → 外回り、外-内 → 外回り→内回り、内2周 → 内回り2周
-        turn.append("→".join(f"{c[0]}回り{c[1:]}" for c in course.split("-")))
-    if turn:
-        body += f"({'・'.join(turn)})"
-    return " ".join(x for x in (text_or_blank(race.get("venue")), body) if x)
+    kind = text_or_blank(race.get("course_type"))
+    way = text_or_blank(race.get("direction"))
+    way = way if way == "直線" else (f"{way}回り" if way else "")
+    inout = text_or_blank(race.get("course"))  # 外 → 外回り、外-内 → 外回り→内回り、内2周 → 内回り2周
+    inout = "→".join(f"{c[0]}回り{c[1:]}" for c in inout.split("-")) if inout else ""
+    rail = text_or_blank(race.get("rail"))
+    rail = f"{rail}コース" if rail else ""
+    head = "・".join(p for p in (kind, way, inout, rail) if p)
+    far = f"{int(distance)}m" if distance == distance else ""
+    return f"{head} {far}".strip()
 
 
 def race_head_html(race) -> str:
-    """レース番号・名前・条件の見出しの HTML。出馬表に欠けた項目(レース名など)があっても落ちない。"""
+    """競馬場・レース番号・名前・コースの見出しの HTML。出馬表に欠けた項目(レース名など)があっても落ちない。"""
     import html
 
     runners = pd.to_numeric(race.get("runners"), errors="coerce")
     start = text_or_blank(race.get("start_time"))
-    meta = [course_text(race) or None,
-            text_or_blank(race.get("ground")), f"{start} 発走" if start else None,
+    meta = [course_text(race), text_or_blank(race.get("ground")), f"{start} 発走" if start else None,
             f"{int(runners)}頭" if runners == runners else None]
-    return (f'<div class="kb-race-head"><span class="kb-race-no">{int(race["round"])}R</span>'
+    place = f"{text_or_blank(race.get('venue'))}{int(race['round'])}R"
+    return (f'<div class="kb-race-head"><span class="kb-race-no">{html.escape(place)}</span>'
             f'<span class="kb-race-name">{html.escape(text_or_blank(race.get("name")))}</span></div>'
             f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
 

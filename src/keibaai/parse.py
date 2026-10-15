@@ -31,6 +31,7 @@ class Race:
     pace_first3f: float | None = None  # 前半3ハロン
     pace_last3f: float | None = None  # 後半3ハロン
     course: str | None = None  # 内回り・外回りの別(外 / 内 / 外-内 / 内2周 など)。別のない競馬場は None
+    rail: str | None = None  # 芝の A〜E コース(仮柵の位置)。JRA-VAN から入る
 
 
 @dataclass

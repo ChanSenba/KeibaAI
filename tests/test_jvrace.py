@@ -53,7 +53,7 @@ def test_bytes_round_trip():
 def test_parse_race():
     r = parse_ra(ra())
     assert r == ("202605040111", "富士ステークス(GII)", "2026-10-03", "東京", 11, "芝", "左", 1600, "晴", "稍重",
-                 "15:45", "12.3-11.0-11.8", 34.5, 33.9, None)
+                 "15:45", "12.3-11.0-11.8", 34.5, 33.9, None, None)
     assert parse_class(r[1]) == 7.0
 
 
@@ -150,3 +150,8 @@ def test_course_inner_outer_from_track_code():
     assert parse_ra(ra(track="17", race="2026100308040111"))[14] == "内"  # 京都は内外の別がある
     assert parse_ra(ra(track="11"))[14] is None  # 東京は内外の別がない
     assert parse_ra(ra(track="20", race="2026100306040111"))[14] == "外-内"
+
+
+def test_rail_from_course_kubun():
+    assert parse_ra(ra(over={709: "B "}))[15] == "B"
+    assert parse_ra(ra())[15] is None  # 空(ダートなど)
