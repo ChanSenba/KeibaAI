@@ -18,8 +18,14 @@ import pandas as pd
 KINDS = {"HC": "slope", "WC": "wood"}
 # 追い切りとして扱う4Fの上限(秒)。これより遅いのは流し(キャンター)
 FAST_F4 = {"slope": 58.0, "wood": 56.0}
-JV_FEATURES = ["jv_n14", "jv_best_f4", "jv_best_l1", "jv_last_f4", "jv_last_l1", "jv_days_since",
-               "jv_f4_vs_base", "jv_f4_vs_field"]
+# 基準(同じトレセン・コース・時期の追い切りの中央値)との差と順位。美浦と栗東・坂路とウッド・改修の前後で
+# 時計の水準が違うので、タイムそのものではなく「そのコースの追い切りの中でどれだけ速いか」で見る
+BASE_FEATURES = ["jv_n14", "jv_best_f4", "jv_best_l1", "jv_last_f4", "jv_last_l1", "jv_days_since",
+                 "jv_f4_vs_base", "jv_f4_vs_field"]
+COURSE_FEATURES = ["jv_best_f4_z", "jv_best_pct", "jv_last_f4_z", "jv_last_pct", "jv_last_f2_z", "jv_last_l1_z",
+                   "jv_last_accel"]
+JV_FEATURES = BASE_FEATURES + COURSE_FEATURES
+MIHO_NEW_SLOPE = "2023-09-28"  # 美浦坂路は2023年に改修(高低差18m→33m)。この日から新コース
 COLUMNS = ["horse_id", "date", "time", "kind", "center", "course", "turn", "f4", "f3", "f2", "l1"]
 
 
@@ -79,6 +85,25 @@ def import_raw(conn: sqlite3.Connection, raw_dir: str | Path, chunk: int = 50_00
     return n
 
 
+def add_course_relative(tr: pd.DataFrame) -> pd.DataFrame:
+    """追い切りごとに、同じ「トレセン・坂路/ウッド・(ウッドは)コース・時期」の追い切りと比べた値を足す。
+
+    f4_z / f2_z / l1_z: そのグループの中央値との差(秒。負なら速い)。f4_pct: グループ内の4Fの順位(0 が最速、1 が最遅)。
+    accel: 最初の1Fのラップ − 最後の1Fのラップ(正なら加速、負なら失速)。美浦坂路は改修の前後で別グループ。
+    グループの基準は全期間の追い切りから出す(馬ごとの結果は使わない)。
+    """
+    tr = tr.copy()
+    new_miho = (tr["kind"] == "slope") & (tr["center"] == "0") & (tr["date"].astype(str) >= MIHO_NEW_SLOPE)
+    key = (tr["kind"].astype(str) + tr["center"].fillna("").astype(str) + tr["course"].fillna("").astype(str)
+           + new_miho.map({True: "new", False: ""}))
+    g = tr.groupby(key, sort=False)
+    for col in ("f4", "f2", "l1"):
+        tr[f"{col}_z"] = tr[col] - g[col].transform("median")
+    tr["f4_pct"] = g["f4"].rank(pct=True)
+    tr["accel"] = (tr["f4"] - tr["f3"]) - tr["l1"]
+    return tr
+
+
 def add_jv_features(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
     """出走の表(horse_id と date の列がある)に、レース前の調教タイムの特徴量(JV_FEATURES)を足す。
 
@@ -92,8 +117,10 @@ def add_jv_features(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
     n = conn.execute("SELECT COUNT(*) FROM jv_training").fetchone()[0]
     if not n or df.empty:
         return df
-    tr = pd.read_sql_query("SELECT horse_id, date, time, kind, f4, l1 FROM jv_training WHERE f4 IS NOT NULL", conn)
+    tr = pd.read_sql_query(
+        "SELECT horse_id, date, time, kind, center, course, f4, f3, f2, l1 FROM jv_training WHERE f4 IS NOT NULL", conn)
     tr = tr[tr["f4"] <= tr["kind"].map(FAST_F4)]
+    tr = add_course_relative(tr)
     tr["date"] = pd.to_datetime(tr["date"])
     tr = tr[tr["horse_id"].isin(set(df["horse_id"].dropna()))].sort_values(["date", "time"])
     keys = df[["horse_id"]].assign(day=pd.to_datetime(df["date"])).drop_duplicates()
@@ -106,6 +133,9 @@ def add_jv_features(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
     agg = pd.DataFrame({
         "jv_n14": g.size(), "jv_best_f4": g["f4"].min(), "jv_best_l1": g["l1"].min(),
         "jv_last_f4": g["f4"].last(), "jv_last_l1": g["l1"].last(), "jv_days_since": g["ago"].min(),
+        "jv_best_f4_z": g["f4_z"].min(), "jv_best_pct": g["f4_pct"].min(),
+        "jv_last_f4_z": g["f4_z"].last(), "jv_last_pct": g["f4_pct"].last(),
+        "jv_last_f2_z": g["f2_z"].last(), "jv_last_l1_z": g["l1_z"].last(), "jv_last_accel": g["accel"].last(),
     })
     base = m[m["ago"] > 14].groupby(["horse_id", "day"], sort=False)["f4"].agg(["mean", "size"])
     agg["jv_f4_vs_base"] = agg["jv_best_f4"] - base["mean"].where(base["size"] >= 3).reindex(agg.index)
