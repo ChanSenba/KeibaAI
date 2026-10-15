@@ -191,63 +191,55 @@ def _data_status(db_path: str):
     return progress.read_data_status(db_path)
 
 
-def _show_data_status() -> None:
+def _status_badge(p) -> str:
+    """取得の状態の短い表示。"""
+    if p.alive:
+        return ":green[:material/play_circle: 動いています]"
+    if p.last_saved is None:
+        return ":gray[:material/hourglass_empty: まだ始まっていません]"
+    if p.total and p.done >= p.total:
+        return ":green[:material/check_circle: 揃っています]"
+    return ":orange[:material/pause_circle: 止まっています]"
+
+
+def _show_data_grid() -> None:
+    """データの揃い具合を1つの枠にまとめる(取得元が JRA-VAN でも netkeiba でも同じ並び)。"""
     s = _data_status(st.session_state["db_path"])
+    tr = progress.progress_of("training", st.session_state["cache_dir"],
+                              _progress_total(st.session_state["db_path"], "training"))
     with st.container(border=True):
-        st.markdown("#### データの揃い具合(JRA-VAN)")
+        st.markdown("#### データの揃い具合")
         if s is None:
             st.caption("DB を読めませんでした(取り込み中の可能性があります)。少しあとで開き直してください。")
             return
-        c1, c2, c3 = st.columns(3)
-        c1.metric("成績", f"{s.races:,} レース", help=f"最新 {s.last_race_date or '-'}")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("成績", f"{s.races:,} レース", help=f"最新 {s.last_race_date or '-'}(JRA-VAN)")
         frac = s.pedigree_fraction
         c2.metric("血統", f"{frac:.0%}" if frac is not None else "-",
-                  help=f"成績に出てくる {s.horses:,} 頭のうち {s.horses_with_pedigree:,} 頭")
-        c3.metric("調教タイム", f"約{s.training_rows / 10000:,.0f}万本", help=f"最新 {s.last_training_date or '-'}")
-        st.caption(f"成績の最新 {s.last_race_date or '-'} ・ 血統 {s.horses_with_pedigree:,} / {s.horses:,} 頭 ・ "
-                   f"調教タイムの最新 {s.last_training_date or '-'}。毎週 `keibaai jv` の差分の取り込みで増えます。")
-
-
-def _show_progress(kind: str) -> None:
-    p = progress.progress_of(kind, st.session_state["cache_dir"], _progress_total(st.session_state["db_path"], kind))
-    with st.container(border=True):
-        c1, c2 = st.columns([3, 1])
-        c1.markdown(f"#### {p.name}")
-        if p.alive:
-            c2.markdown(":green[:material/play_circle: 動いています]")
-        elif p.last_saved is None:
-            c2.markdown(":gray[:material/hourglass_empty: まだ始まっていません]")
-        elif p.total and p.done >= p.total:
-            c2.markdown(":green[:material/check_circle: 完了]")
-        else:
-            c2.markdown(":orange[:material/pause_circle: 止まっています]")
-        if p.fraction is not None:
-            st.progress(p.fraction, f"{p.done:,} / {p.total:,}  ({p.fraction:.0%})")
-        else:
-            st.write(f"{p.done:,} 件を保存済み")
-        bits = []
-        if p.last_saved:
-            bits.append(f"最後の保存 {p.last_saved:%m/%d %H:%M:%S}")
-        if p.per_min:
-            bits.append(f"速さ 約{p.per_min:.1f}件/分")
-        if p.eta_hours is not None and p.alive:
-            bits.append(f"あと約{p.eta_hours:.0f}時間 ({dt.datetime.now() + dt.timedelta(hours=p.eta_hours):%m/%d %H:%M} ごろ)")
-        if bits:
-            st.caption(" ・ ".join(bits))
+                  help=f"成績に出てくる {s.horses:,} 頭のうち {s.horses_with_pedigree:,} 頭(JRA-VAN)")
+        c3.metric("調教タイム", f"約{s.training_rows / 10000:,.0f}万本", help=f"最新 {s.last_training_date or '-'}(JRA-VAN)")
+        c4.metric("調教の評価", f"{tr.fraction:.0%}" if tr.fraction is not None else f"{tr.done:,} 件",
+                  help=f"{tr.done:,} / {tr.total or '-'} レース(短評と A〜D。netkeiba)")
+        c4.markdown(_status_badge(tr))
+        if tr.alive and tr.fraction is not None:
+            st.progress(tr.fraction, f"調教の評価 {tr.done:,} / {tr.total:,}")
+        bits = [f"成績の最新 {s.last_race_date or '-'}", f"調教タイムの最新 {s.last_training_date or '-'}"]
+        if tr.last_saved:
+            bits.append(f"調教の評価の最後の保存 {tr.last_saved:%m/%d %H:%M}")
+        if tr.per_min:
+            bits.append(f"速さ 約{tr.per_min:.1f}件/分")
+        if tr.eta_hours is not None and tr.alive:
+            bits.append(f"あと約{tr.eta_hours:.0f}時間")
+        st.caption(" ・ ".join(bits))
 
 
 def page_progress() -> None:
     header("Progress", "取得の進み具合",
-           "バックグラウンドで動いている取得の進み具合です。DB には触れず、保存済みページの数から出しているので、"
-           "取得の邪魔になりません。")
-
-    _show_data_status()
+           "成績・血統・調教がどこまで揃っているかと、バックグラウンドの取得の進み具合です。")
 
     @st.fragment(run_every=30)
     def body() -> None:
-        # 血統は JRA-VAN から全頭ぶん入るので、netkeiba からの血統の取得(保存済みページの数)はもう出さない。
-        # 出すと、使っていない古いページの数(約1万)が「止まっている取得」に見えてしまう
-        _show_progress("training")
+        _show_data_grid()
         logs = sorted(Path("data").glob("out-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:1]
         if logs:
             with st.expander(f"ログの最後 ({logs[0].name})"):
@@ -255,8 +247,8 @@ def page_progress() -> None:
         st.caption(f":material/autorenew: 30秒ごとに更新 ・ {dt.datetime.now():%H:%M:%S}")
 
     body()
-    st.caption(":material/info: 総数は DB から1時間に1回だけ読み取り専用で読みます。"
-               "「調教の評価」(短評と A〜D)は netkeiba からの取得です(JRA-VAN にはない項目)。")
+    st.caption(":material/info: 件数は DB から1時間に1回だけ、読み取り専用で読みます(取得の邪魔にならないように)。"
+               "取得元は、各項目の ? に書いてあります。")
 
 
 # ---------------------------------------------------------------- 再解析
