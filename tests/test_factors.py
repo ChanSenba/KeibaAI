@@ -83,3 +83,27 @@ def test_cli_commands_return_without_falling_through(tmp_path, capsys):
         cli.main([cmd, "--db", str(path), "--test-from", "2025-06-01"])
     out = capsys.readouterr().out
     assert "全馬が同じ勝率" in out and "単勝を毎回" in out and "モデル" in out
+
+
+def test_gate_bias_counts_inner_middle_outer_before_the_day(tmp_path):
+    import pandas as pd
+
+    from keibaai import db, factor_view
+
+    conn = db.connect(tmp_path / "k.db")
+    rows = []
+    for i, (date, rail) in enumerate([("2026-09-01", "A"), ("2026-09-02", "A"), ("2026-09-03", "B"), ("2026-10-20", "A")]):
+        rid = f"R{i}"
+        conn.execute("INSERT INTO races (race_id, date, venue, course_type, distance, course, rail) "
+                     "VALUES (?, ?, '京都', '芝', 1600, '外', ?)", (rid, date, rail))
+        for n in range(1, 7):  # 内(1,2)が 1・2 着、外(5,6)が 3 着と着外
+            finish = {1: 1, 2: 2, 5: 3}.get(n, n + 1)
+            rows.append((rid, n, finish))
+    conn.executemany("INSERT INTO results (race_id, number, finish) VALUES (?, ?, ?)", rows)
+    conn.commit()
+    race = pd.Series({"venue": "京都", "course_type": "芝", "distance": 1600, "course": "外", "rail": "A"})
+    t = factor_view.gate_bias(conn, race, "2026-10-17").set_index("条件")
+    assert t.loc["同じコース", "レース数"] == 3 and t.loc["同じ Aコース", "レース数"] == 2  # 10/20 は数えない
+    assert t.loc["同じコース", "内枠"] == 1.0 and t.loc["同じコース", "外枠"] == 0.5
+    assert t.loc["同じコース", "内−外"] == 50.0
+    assert factor_view.gate_bias(conn, pd.Series({"venue": None}), "2026-10-17").empty

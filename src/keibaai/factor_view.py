@@ -357,3 +357,44 @@ def section_status(conn: sqlite3.Connection) -> list[dict]:
             state, text = "ready", "取得済み"
         out.append({"name": name, "state": state, "text": text})
     return out
+
+
+GATES = ["内", "中", "外"]
+
+
+def gate_bias(conn: sqlite3.Connection, race, before: str) -> pd.DataFrame:
+    """このコースと、この A〜E コースでの、内・中・外の枠の過去の 3 着内率(参考。予想には使っていない)。
+
+    枠は馬番を頭数で3等分して、内(前の3分の1)・中・外とする。before(YYYY-MM-DD)より前のレースだけを数える。
+    行は「同じコース」(競馬場・芝ダ・距離・内外回り)と「同じ A〜E」(競馬場・芝ダ・柵)。分からない行は出さない。
+    """
+    venue, ct = race.get("venue"), race.get("course_type")
+    if not isinstance(venue, str) or not isinstance(ct, str):
+        return pd.DataFrame()
+    df = pd.read_sql_query(
+        "SELECT r.race_id, r.number, r.finish, c.distance, c.course, c.rail FROM results r JOIN races c USING (race_id) "
+        "WHERE c.venue = ? AND c.course_type = ? AND c.date < ? AND r.finish IS NOT NULL",
+        conn, params=(venue, ct, before))
+    if df.empty:
+        return pd.DataFrame()
+    pos = df["number"] / df.groupby("race_id")["number"].transform("count")
+    df["gate"] = np.select([pos <= 1 / 3, pos <= 2 / 3], GATES[:2], GATES[2])
+    df["top3"] = (df["finish"] <= 3).astype(float)
+    same = lambda col, v: df[col].isna() if v is None or v != v else df[col] == v
+    rows = []
+    distance = pd.to_numeric(race.get("distance"), errors="coerce")
+    if distance == distance:
+        rows.append(("同じコース", df[(df["distance"] == distance) & same("course", race.get("course"))]))
+    rail = race.get("rail")
+    if isinstance(rail, str) and rail:
+        rows.append((f"同じ {rail}コース", df[df["rail"] == rail]))
+    out = []
+    for name, g in rows:
+        if g.empty:
+            continue
+        rate = g.groupby("gate")["top3"].mean()
+        row = {"条件": name, "レース数": g["race_id"].nunique()}
+        row.update({f"{k}枠": rate.get(k, np.nan) for k in GATES})
+        row["内−外"] = (row["内枠"] - row["外枠"]) * 100
+        out.append(row)
+    return pd.DataFrame(out)

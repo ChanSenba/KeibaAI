@@ -583,6 +583,20 @@ def race_head(race) -> None:
     st.html(gui.race_head_html(race))
 
 
+def _show_gate_bias(conn, race, date: dt.date) -> None:
+    """このコース・この A〜E コースでの、内・中・外の枠の過去の 3 着内率(参考)。"""
+    table = factor_view.gate_bias(conn, race, date.isoformat())
+    if table.empty:
+        return
+    with st.expander("枠の傾向(参考)", icon=":material/view_column:"):
+        pct = st.column_config.NumberColumn(format="percent")
+        st.dataframe(table, hide_index=True, width="stretch", column_config={
+            "レース数": st.column_config.NumberColumn(format="%d"), "内枠": pct, "中枠": pct, "外枠": pct,
+            "内−外": st.column_config.NumberColumn("内−外(pt)", format="%+.1f", help="内枠 − 外枠(ポイント)。プラスなら内の枠のほうが 3 着以内に来ている")})
+        st.caption("馬番を頭数で3等分して、内・中・外の枠の過去の 3 着内率を出しています(2019年以降、この日より前)。"
+                   "予想の勝率には入れていません。検証では、モデルに足しても当たりやすさは変わりませんでした。")
+
+
 def race_detail(conn, race, race_id: str, prediction) -> None:
     """レース名・条件と出馬表。予想があれば印・勝率・期待値も出す。"""
     race_head(race)
@@ -702,6 +716,7 @@ def page_factors() -> None:
         return
     with box:
         race_head(race)
+        _show_gate_bias(conn, race, date)
     one = values[values["race_id"] == race["race_id"]]
     tabs = st.tabs(["総合"] + [s["name"] for s in status])
     with tabs[0]:
