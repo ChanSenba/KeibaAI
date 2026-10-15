@@ -16,7 +16,7 @@ RATE_WINDOW_SEC = 1800  # 速さは直近30分から出す
 
 # 取得の種類: (画面での名前, 保存済みページの下位フォルダ, 総数を数える SQL)
 KINDS = {
-    "training": ("調教の評価(netkeiba・任意)", "oikiri", "SELECT COUNT(*) FROM races"),
+    "training": ("調教の評価(netkeiba)", "oikiri", "SELECT COUNT(*) FROM races"),
     "pedigree": ("血統", "ped", "SELECT COUNT(DISTINCT horse_id) FROM results WHERE horse_id IS NOT NULL"),
 }
 

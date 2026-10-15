@@ -87,7 +87,8 @@ def connect(path: str | Path) -> sqlite3.Connection:
 
 
 # 後から増えた列。作成済みの DB にも足す
-_ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("pace_last3f", "REAL")]}
+_ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("pace_last3f", "REAL"), ("course", "TEXT"), ("rail", "TEXT")],
+                  "entry_races": [("course", "TEXT"), ("rail", "TEXT")]}
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:

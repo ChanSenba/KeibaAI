@@ -119,7 +119,8 @@ def entries_summary(conn: sqlite3.Connection, date: str) -> dict:
 def day_races(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     """出馬表を取得済みのレース一覧。競馬場は race_id の場コード順(札幌→小倉)、その中はレース番号順。"""
     return pd.read_sql_query(
-        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.direction, c.distance, c.ground, c.start_time, "
+        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.direction, c.course, c.rail, c.distance, "
+        "c.ground, c.start_time, "
         "COUNT(e.number) AS runners FROM entry_races c LEFT JOIN entries e USING (race_id) "
         "WHERE c.date = ? GROUP BY c.race_id ORDER BY substr(c.race_id, 5, 2), c.round",
         conn, params=(date,),
@@ -191,13 +192,19 @@ def text_or_blank(v) -> str:
 
 
 def course_text(race) -> str:
-    """コースの表記。芝・ダート(障害)、回り(左回り・右回り・直線)、距離。例: 芝・左回り 1600m。"""
+    """コースの表記。芝・ダート(障害)、回り、内回り・外回り、A〜E コース、距離。分からない項目は省く。
+
+    例: 芝・右回り・外回り・Aコース 1600m、芝・直線 1000m。
+    """
     distance = pd.to_numeric(race.get("distance"), errors="coerce")
     kind = text_or_blank(race.get("course_type"))
     way = text_or_blank(race.get("direction"))
     way = way if way == "直線" else (f"{way}回り" if way else "")
-    parts = [p for p in (kind, way) if p]
-    head = "・".join(parts)
+    inout = text_or_blank(race.get("course"))  # 外 → 外回り、外-内 → 外回り→内回り、内2周 → 内回り2周
+    inout = "→".join(f"{c[0]}回り{c[1:]}" for c in inout.split("-")) if inout else ""
+    rail = text_or_blank(race.get("rail"))
+    rail = f"{rail}コース" if rail else ""
+    head = "・".join(p for p in (kind, way, inout, rail) if p)
     far = f"{int(distance)}m" if distance == distance else ""
     return f"{head} {far}".strip()
 

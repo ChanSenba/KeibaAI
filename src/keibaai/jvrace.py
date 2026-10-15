@@ -38,7 +38,7 @@ GRADE = {"A": "GI", "B": "GII", "C": "GIII", "L": "L", "F": "J.GI", "G": "J.GII"
 SEX = {"1": "牡", "2": "牝", "3": "セ"}
 STATUS = {"1": "取", "2": "除", "3": "除", "4": "中", "5": "失"}  # 異常区分 → netkeiba と同じ1文字
 RACE_COLS = ["race_id", "name", "date", "venue", "round", "course_type", "direction", "distance", "weather", "ground",
-             "start_time", "lap_times", "pace_first3f", "pace_last3f"]
+             "start_time", "lap_times", "pace_first3f", "pace_last3f", "course", "rail"]
 RESULT_COLS = ["race_id", "number", "finish", "status", "bracket", "horse_id", "horse_name", "sex_age",
                "weight_carried", "jockey", "jockey_id", "time_sec", "margin", "passing", "last3f", "win_odds",
                "popularity", "body_weight", "body_weight_diff", "trainer", "trainer_id", "owner", "prize"]
@@ -88,6 +88,26 @@ def _track(code: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+# トラックコード → 内回り・外回りの別(netkeiba の「芝右 外」「芝右 外-内」と同じ書き方)
+_COURSE = {12: "外", 13: "内-外", 14: "外-内", 15: "内2周", 16: "外2周",
+           18: "外", 19: "内-外", 20: "外-内", 21: "内2周", 22: "外2周", 25: "内", 26: "内"}
+INNER_OUTER_VENUES = {"新潟", "中山", "京都", "阪神"}  # 芝に内回りと外回りがある競馬場
+
+
+def course_of(code: str, venue: str | None) -> str | None:
+    """トラックコードと競馬場 → 外 / 内 / 外-内 など。内外の別がなければ None。"""
+    c = int(code) if code.isdigit() else 0
+    if c in (11, 17) and venue in INNER_OUTER_VENUES:
+        return "内"
+    return _COURSE.get(c)
+
+
+def rail_of(code: bytes) -> str | None:
+    """コース区分(A〜E。仮柵の位置)。空ならNone(ダートや、出走馬名表の段階)。"""
+    c = code.decode("ascii", errors="replace").strip()
+    return c if c in ("A", "B", "C", "D", "E") else None
+
+
 def race_id_of(b: bytes) -> str:
     return (b[11:15] + b[19:27]).decode("ascii", errors="replace")
 
@@ -121,10 +141,12 @@ def parse_ra(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> tuple | None:
     ymd = b[11:19].decode()
     name = race_name(_txt(b[32:92]), chr(b[614]), b[616:618].decode("ascii", errors="replace"),
                      b[634:637].decode("ascii", errors="replace"))
-    return (race_id_of(b), name, f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}", VENUES[b[19:21].decode()], int(b[25:27]),
+    venue = VENUES[b[19:21].decode()]
+    return (race_id_of(b), name, f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}", venue, int(b[25:27]),
             ctype, direction, _num(b[697:701]), WEATHER.get(chr(b[887])), ground,
             f"{st[:2]}:{st[2:]}" if st.isdigit() and st != "0000" else None,
-            "-".join(laps) or None, _num(b[969:972], 10), _num(b[975:978], 10))
+            "-".join(laps) or None, _num(b[969:972], 10), _num(b[975:978], 10),
+            course_of(b[705:707].decode("ascii", errors="replace"), venue), rail_of(b[709:711]))
 
 
 def parse_se(b: bytes, kubuns: tuple = RESULT_KUBUNS) -> tuple | None:

@@ -30,6 +30,8 @@ class Race:
     lap_times: str | None = None  # 200m ごとのラップ('12.7 - 11.4 - ...')
     pace_first3f: float | None = None  # 前半3ハロン
     pace_last3f: float | None = None  # 後半3ハロン
+    course: str | None = None  # 内回り・外回りの別(外 / 内 / 外-内 / 内2周 など)。別のない競馬場は None
+    rail: str | None = None  # 芝の A〜E コース(仮柵の位置)。JRA-VAN から入る
 
 
 @dataclass
@@ -114,9 +116,9 @@ def _parse_race_info(soup: BeautifulSoup, race_id: str) -> Race:
 
     info = soup.select_one("dl.racedata dd p")
     info_text = _squash(info.get_text(" ") if info else "")
-    m = re.search(r"(障|芝|ダ)(?:芝|ダート|ダ)*(左|右|直線)?(?:(?:外|内)(?:-(?:外|内))?(?:\d周)?)?(\d{3,4})m", info_text)
+    m = re.search(r"(障|芝|ダ)(?:芝|ダート|ダ)*(左|右|直線)?\s*((?:外|内)(?:-(?:外|内))?(?:\d周)?)?(\d{3,4})m", info_text)
     if m:
-        race.course_type, race.direction, race.distance = m.group(1), m.group(2), int(m.group(3))
+        race.course_type, race.direction, race.course, race.distance = m.group(1), m.group(2), m.group(3), int(m.group(4))
     if m := re.search(r"天候:(\S+?)(?:/|$)", info_text):
         race.weather = m.group(1)
     if m := re.search(r"(?:芝|ダート|ダ):(良|稍重|重|不良)", info_text):

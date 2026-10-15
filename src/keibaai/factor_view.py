@@ -348,7 +348,7 @@ def section_status(conn: sqlite3.Connection) -> list[dict]:
         elif name == "血統":
             share = n_ped / n_horses if n_horses else 0
             state = "ready" if share >= 0.95 else "partial" if n_ped else "missing"
-            text = f"{n_ped:,} / {n_horses:,} 頭ぶん取得済み" if n_ped else "未取得(keibaai pedigree で取得)"
+            text = f"{n_ped:,} / {n_horses:,} 頭ぶん取得済み" if n_ped else "未取得(keibaai jv --what pedigree で取得)"
         elif name == "ラップ・ペース":
             share = n_lap / n_flat if n_flat else 0
             state = "ready" if share >= 0.95 else "partial" if n_lap else "missing"

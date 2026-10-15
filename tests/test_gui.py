@@ -161,3 +161,15 @@ def test_eval_start_bounds():
     assert gui.eval_start_bounds(dt.date(2019, 1, 5), dt.date(2026, 10, 12)) == (dt.date(2020, 1, 5), dt.date(2025, 10, 12))
     # 2年に満たない期間: 前半は選ばせず、初期値は最も早い日
     assert gui.eval_start_bounds(dt.date(2025, 1, 4), dt.date(2025, 1, 18)) == (dt.date(2025, 1, 11), dt.date(2025, 1, 11))
+
+
+def test_course_text_names_turn_inner_outer_and_rail():
+    import pandas as pd
+
+    s = lambda **kw: pd.Series({"venue": "京都", "course_type": "芝", "distance": 1600, **kw})
+    assert gui.course_text(s(direction="右", course="外", rail="A")) == "芝・右回り・外回り・Aコース 1600m"
+    assert gui.course_text(s(direction="右", course=None, rail=None)) == "芝・右回り 1600m"
+    assert gui.course_text(s(course_type="障", distance=3170, direction=None, course="外-内")) == "障・外回り→内回り 3170m"
+    assert gui.course_text(s(direction="右", course="内2周", rail="C")) == "芝・右回り・内回り2周・Cコース 1600m"
+    out = gui.race_head_html(s(round=11, direction="右", course="外", rail="B", ground="良"))
+    assert "京都11R" in out and "芝・右回り・外回り・Bコース 1600m ・ 良" in out
