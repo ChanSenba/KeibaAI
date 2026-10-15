@@ -64,3 +64,20 @@ def test_tail(tmp_path):
     log.write_text("\n".join(f"line{i}" for i in range(20)), encoding="utf-8")
     assert progress.tail(log, 3) == "line17\nline18\nline19"
     assert progress.tail(tmp_path / "none.log") == ""
+
+
+def test_data_status_counts_pedigree_coverage_from_the_db(tmp_path):
+    path = tmp_path / "k.db"
+    conn = db.connect(path)
+    conn.execute("INSERT INTO races (race_id, date) VALUES ('A', '2026-10-12')")
+    conn.executemany("INSERT INTO results (race_id, number, horse_id) VALUES ('A', ?, ?)",
+                     [(1, "H1"), (2, "H2"), (3, "H3"), (4, None)])
+    conn.executemany("INSERT INTO pedigree (horse_id) VALUES (?)", [("H1",), ("H2",), ("X",)])
+    conn.execute("INSERT INTO jv_training (horse_id, date, time, kind) VALUES ('H1', '2026-10-15', '0600', 'slope')")
+    conn.commit()
+    conn.close()
+    s = progress.read_data_status(path)
+    assert (s.races, s.last_race_date, s.horses, s.horses_with_pedigree) == (1, "2026-10-12", 3, 2)
+    assert abs(s.pedigree_fraction - 2 / 3) < 1e-9
+    assert (s.training_rows, s.last_training_date) == (1, "2026-10-15")
+    assert progress.read_data_status(tmp_path / "nothing.db") is None
