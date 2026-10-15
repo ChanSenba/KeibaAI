@@ -60,7 +60,11 @@ CONDITION_FEATURES = ["course_type", "ground", "venue", "sex"]
 # 2026年の2,730レースで: 能力のみ AUC 0.794(総合の27個)→ 0.803、オッズあり LogLoss 0.2050 → 0.2044(オッズだけは 0.2047)。
 # 条件の列は能力のみのモデルでは少し効き(AUC +0.0006〜0.0013)、オッズありでは効かなかったので、能力のみにだけ足す
 _ALL_FEATURES = list(dict.fromkeys(BASE_FEATURES + BIAS_FEATURES + ARTICLE_FEATURES))
-ABILITY_MODEL_FEATURES = _ALL_FEATURES + CONDITION_FEATURES
+# 厩舎×騎手の3着内率は、能力のみのモデルでは回数の少なさを割り引いた版(tj_top3_shr)に置き換える。
+# 評価 2025年から・2026年から(乱数3通り)で AUC 0.8055 → 0.8063、0.8044 → 0.8053。LogLoss の差の95%区間は
+# 両方とも0をまたがなかった(k=5・10・20 はまたいだ)。オッズありのモデルでは良くならなかったので、元の率のまま
+TJ_SHRINK_K = 50
+ABILITY_MODEL_FEATURES = [("tj_top3_shr" if c == "tj_top3_rate" else c) for c in _ALL_FEATURES] + CONDITION_FEATURES
 MARKET_MODEL_FEATURES = _ALL_FEATURES + MARKET_FEATURES
 BIAS_WINDOW = "10D"
 
@@ -239,6 +243,11 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["jockey_roi"] = _expanding_rate(df, "jockey_id", "_ret")[1]
     df["pair_n"], df["pair_top3_rate"] = _expanding_rate(df, ["horse_id", "jockey_id"], "top3")
     df["tj_n"], df["tj_top3_rate"] = _expanding_rate(df, ["trainer_id", "jockey_id"], "top3")
+    # 回数が少ない組み合わせは、全体の3着内率(前日まで)に寄せる: (3着内の数 + k×全体の率) ÷ (回数 + k)
+    df["_all"] = 0
+    overall = _expanding_rate(df, "_all", "top3")[1]
+    hits = (df["tj_top3_rate"] * df["tj_n"]).fillna(0.0)
+    df["tj_top3_shr"] = (hits + TJ_SHRINK_K * overall) / (df["tj_n"] + TJ_SHRINK_K)
 
     # --- ペース: 出走馬の脚質の組み合わせ(各馬の過去の位置取りだけを使う) ---
     ep = df["early_pos"]
@@ -274,7 +283,7 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = np.nan
     df["train_rank_score"] = df["train_rank"].map(TRAIN_RANK_SCORE).astype(float)
     df["train_rank_vs_field"] = df["train_rank_score"] - df.groupby("race_id")["train_rank_score"].transform("mean")
-    return df.drop(columns=["dist_bucket_s", "_ret", "l3f_rank_rel", "time_diff", "pos_gain", "pace_diff", "l3f_vs_lap"])
+    return df.drop(columns=["dist_bucket_s", "_ret", "_all", "l3f_rank_rel", "time_diff", "pos_gain", "pace_diff", "l3f_vs_lap"])
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
