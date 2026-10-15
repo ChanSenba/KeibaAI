@@ -123,7 +123,7 @@ def test_training_place_names():
     assert fv.training_place("wood", "0", "3", "1") == "ウッドD(左)"
 
 
-def test_training_places_and_load_in_one_section(conn):
+def test_training_places_in_one_section(conn):
     race_id, number, horse = conn.execute(
         "SELECT race_id, number, horse_id FROM entries WHERE race_id IN "
         "(SELECT race_id FROM entry_races WHERE date = ?) ORDER BY race_id, number LIMIT 1", (DAY,)).fetchone()
@@ -133,14 +133,12 @@ def test_training_places_and_load_in_one_section(conn):
             (horse, "2029-12-01", "0700", "wood", "1", "2", "0", 50.0)]  # 14日より前
     conn.executemany("INSERT INTO jv_training (horse_id, date, time, kind, center, course, turn, f4) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
-    conn.execute("INSERT INTO training (race_id, number, seq, course, load, partner) VALUES (?, ?, 0, '栗坂', '一杯', '先着')",
-                 (race_id, number))
+    conn.execute("INSERT INTO training (race_id, number, seq, course) VALUES (?, ?, 0, '栗坂')", (race_id, number))
     conn.commit()
     try:
         v = fv.factor_values(conn, DAY)
         r = v[(v["race_id"] == race_id) & (v["number"] == number)].iloc[0]
         assert (r["train_center"], r["train_last_place"], r["train_best_place"]) == ("栗東", "坂路", "CW(右)")
-        assert (r["train_load"], r["train_partner"]) == ("一杯", "先着")
         assert {s["name"]: s for s in fv.section_status(conn)}["調教"]["state"] == "ready"
         names = [s["name"] for s in fv.SECTIONS]
         assert names.count("調教") == 1 and not any("JRA-VAN" in n for n in names)

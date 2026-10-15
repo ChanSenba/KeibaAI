@@ -626,7 +626,8 @@ def _factor_values(db_path: str, date: str, stamp: str):
     return factor_view.factor_values(db.connect(db_path), date)
 
 
-def _factor_config(cols) -> dict:
+def _factor_config(cols, frame=None) -> dict:
+    """列の見出し・説明・書式。frame を渡すと、下の一覧にない数値の列も小数2桁で出す(54.200000 のようにしない)。"""
     out = {}
     for col, label in cols:
         info, good = factor_view.COLUMN_INFO.get(col, (None, None))
@@ -641,6 +642,8 @@ def _factor_config(cols) -> dict:
                      "popularity", "body_weight", "body_weight_diff", "days_since_last", "distance_change", "class_change",
                      "prev_pop_gap"):
             out[col] = st.column_config.NumberColumn(label, format="%d", help=help_)
+        elif frame is not None and col in frame and pd.api.types.is_numeric_dtype(frame[col]):
+            out[col] = st.column_config.NumberColumn(label, format="%.2f", help=help_)
         else:
             out[col] = st.column_config.TextColumn(label, help=help_)
     return out
@@ -652,7 +655,10 @@ OVERALL_HIGH = {"p_win_market", "p_win_ability", "ev_market", "ev_ability"}
 
 def _factor_table(one, cols, extra=None):
     """各列の良い値の上位の馬に色をつける。1位は濃く、ほかは薄く。extra の列(予想の勝率・期待値)は馬名の右に入れる。"""
-    df = one[[c for c, _ in cols]]
+    df = one[[c for c, _ in cols]].copy()
+    for c in df.columns:  # 文字の列の欠けは空欄にする(「None」と出さない)
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = df[c].astype(object).where(df[c].notna(), "")
     if extra is not None:
         df = pd.concat([df.iloc[:, :2], extra, df.iloc[:, 2:]], axis=1)
 
@@ -714,7 +720,7 @@ def page_factors() -> None:
     with tabs[0]:
         cols = [("number", "馬番"), ("horse_name", "馬名")] + factor_view.SUMMARY["cols"]
         cols = [c for c in cols if c[0] in one]
-        cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols)}
+        cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols, one)}
         extra = None
         pred = st.session_state.get("prediction")
         if pred is not None and pred[0] == date:
@@ -744,7 +750,7 @@ def page_factors() -> None:
             if section["name"] == "騎手・厩舎":
                 cols.insert(2, ("jockey", "騎手"))
             cols = list(dict.fromkeys(c for c in cols if c[0] in one))
-            cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols)}
+            cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols, one)}
             st.dataframe(_factor_table(one, cols), hide_index=True, width="stretch", column_config=cfg)
             st.caption(":material/palette: 緑の色は、その列で良い値の上位の馬です(いちばん良い馬は濃い緑)。"
                        "良し悪しのない列には色をつけません。" + section["note"])
