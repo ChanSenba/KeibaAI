@@ -53,6 +53,35 @@ def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime
     return n
 
 
+def snapshot_odds(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,
+                  race_ids: list[str] | None = None) -> int:
+    """date(YYYY-MM-DD)の各レースの単勝オッズを、取得時刻つきで odds_snapshots に追記し、記録したレース数を返す。
+
+    レースは出馬表を取り込み済みのもの(entry_races)。オッズが取れない・空のレースは飛ばす。
+    """
+    stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    ids = race_ids if race_ids is not None else [r[0] for r in conn.execute(
+        "SELECT race_id FROM entry_races WHERE date = ? ORDER BY race_id", (date,))]
+    n = 0
+    for race_id in ids:
+        try:
+            text = fetcher.odds_json(race_id)
+            odds = parse_odds_json(text)
+            official = (json.loads(text).get("data") or {}).get("official_datetime")
+        except Exception as e:
+            print(f"odds {race_id}: {e}")
+            continue
+        if not odds:
+            print(f"skip {race_id}: オッズがまだありません")
+            continue
+        with conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO odds_snapshots (race_id, number, snapped_at, official_at, win_odds, popularity) VALUES (?,?,?,?,?,?)",
+                [(race_id, num, stamp, official, o, pop) for num, (o, pop) in odds.items()])
+        n += 1
+    return n
+
+
 def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     df = pd.read_sql_query(
         """

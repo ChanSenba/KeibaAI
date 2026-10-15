@@ -8,7 +8,7 @@ import pytest
 
 from keibaai import db
 from keibaai.entries import apply_odds, parse_odds_json, parse_shutuba
-from keibaai.predict import fetch_entries, predict_day
+from keibaai.predict import fetch_entries, predict_day, snapshot_odds
 
 from test_model import synthetic_db
 
@@ -154,3 +154,22 @@ def test_fetch_entries_skips_race_without_horses_yet(capsys):
     n = fetch_entries(conn, F(["202405050812", "202405050811"]), "2024-11-24", now=dt.datetime(2024, 11, 23))
     assert n == 1 and conn.execute("SELECT COUNT(*) FROM entry_races").fetchone()[0] == 1
     assert "確定していません" in capsys.readouterr().out
+
+
+def test_snapshot_odds_appends_with_time_and_skips_empty(capsys):
+    """オッズを取るたびに時刻つきで足していく(上書きしない)。発売前で空のレースは飛ばす。"""
+    conn = db.connect(":memory:")
+    fetch_entries(conn, FakeFetcher(["202405050812"]), "2024-11-24", now=dt.datetime(2024, 11, 23))
+    f = FakeFetcher(["202405050812"])
+    assert snapshot_odds(conn, f, "2024-11-24", now=dt.datetime(2024, 11, 24, 9, 0)) == 1
+    assert snapshot_odds(conn, f, "2024-11-24", now=dt.datetime(2024, 11, 24, 15, 0)) == 1
+    rows = conn.execute("SELECT snapped_at, number, win_odds, popularity, official_at FROM odds_snapshots ORDER BY snapped_at, number").fetchall()
+    assert len(rows) == 4 and rows[0] == ("2024-11-24T09:00:00", 1, 15.8, 6, "2024-11-24 15:52:26")
+    assert rows[3][:4] == ("2024-11-24T15:00:00", 3, 2.3, 1)
+
+    class Empty(FakeFetcher):
+        def odds_json(self, race_id, odds_type=1):
+            return json.dumps({"status": "yet", "data": []})
+
+    assert snapshot_odds(conn, Empty([]), "2024-11-24", now=dt.datetime(2024, 11, 24, 16, 0)) == 0
+    assert "オッズがまだ" in capsys.readouterr().out

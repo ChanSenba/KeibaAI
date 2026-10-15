@@ -114,6 +114,10 @@ def main(argv=None) -> None:
     e.add_argument("--cache", default="data/cache")
     _add_source(e, "出馬表とオッズ")
     e.add_argument("--no-odds", action="store_true", help="jv: オッズを取らず、出馬表だけ保存する(レースごとに開くので時間がかかるため)")
+    sn = sub.add_parser("snapshot", help="取り込み済みの出馬表のレースについて、いまの単勝オッズを時刻つきで記録する(発走前に何度か実行して、オッズの動きを溜める)")
+    sn.add_argument("--date", required=True, help="YYYY-MM-DD")
+    sn.add_argument("--db", default="data/keiba.db")
+    sn.add_argument("--cache", default="data/cache")
     pd_ = sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
@@ -188,6 +192,12 @@ def main(argv=None) -> None:
         from .predict import fetch_entries
 
         n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
+        print(f"done: {n} races")
+        return
+    if args.cmd == "snapshot":
+        from .predict import snapshot_odds
+
+        n = snapshot_odds(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
         return
     if args.cmd == "bets":
