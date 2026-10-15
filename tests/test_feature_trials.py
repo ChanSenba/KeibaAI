@@ -15,13 +15,13 @@ def raw():
     conn = synthetic_db(n_days=40, races_per_day=6)
     conn.execute("UPDATE results SET passing = (number % 5 + 1) || '-' || finish")
     conn.execute("UPDATE races SET course = CASE WHEN round % 2 = 0 THEN '外' ELSE '内' END, rail = 'A'")
-    return load_results(conn).merge(pd.read_sql_query("SELECT race_id, course, rail FROM races", conn), on="race_id")
+    return load_results(conn).merge(pd.read_sql_query("SELECT race_id, course, rail, weather FROM races", conn), on="race_id")
 
 
 def candidates(raw: pd.DataFrame) -> pd.DataFrame:
     df = build_features(raw.copy())
     df = ft.add_bias_candidates(df, ft.market_top3(df, MID))
-    return ft.add_affinity_candidates(df)
+    return ft.add_more_candidates(ft.add_affinity_candidates(df))
 
 
 def test_market_top3_sums_to_three_per_race(raw):
@@ -93,3 +93,35 @@ def test_run_compares_variants(raw, tmp_path):
     assert "相性" in ft.to_markdown(res)
     again = ft.run(df, variants, seeds=1, rounds=5, out_dir=tmp_path, periods=[MID])  # 保存から読み直す
     pd.testing.assert_frame_equal(res, again)
+
+
+def test_race_level_uses_only_next_runs_finished_before_the_day():
+    # A と B が 1/1 のレースで一緒に走り、B は 1/8 に勝った。A の 1/8 の前走レベルには B の 1/8 は入らない
+    d = pd.to_datetime
+    df = pd.DataFrame({
+        "race_id": ["r1", "r1", "r2", "r3", "r4"], "horse_id": ["A", "B", "B", "A", "A"],
+        "date": d(["2025-01-01", "2025-01-01", "2025-01-08", "2025-01-08", "2025-01-15"]),
+        "finish": [2, 1, 1, 5, 3], "top3": [1, 1, 1, 0, 1]})
+    lvl, n = ft._race_level(df, 1)
+    assert np.isnan(lvl[3]) and n[3] == 0  # A の 1/8: B の次走は同じ日なので数えない
+    # A の 1/15 の前走は r3(1/8)で、ほかの馬はいない
+    assert n[4] == 0
+    lvl2, n2 = ft._race_level(df, 2)
+    assert lvl2[4] == 1.0 and n2[4] == 1  # 2走前の r1 の B は、1/8 に3着以内
+
+
+def test_more_candidates_ignore_results_of_the_same_and_later_days(raw):
+    day = raw["date"].sort_values().unique()[30]
+    a = candidates(raw)
+    b_raw = raw.copy()
+    m = b_raw["date"] >= day
+    rng = np.random.default_rng(2)
+    b_raw.loc[m, "finish"] = rng.integers(1, 11, int(m.sum()))
+    b_raw.loc[m, "time_sec"] = rng.uniform(80, 100, int(m.sum()))
+    b = candidates(b_raw)
+    cols = [c for c in ft.MORE_COLUMNS if c not in ("bw_vs_season",)]
+    keep = a["date"] <= day
+    ka = a[keep].sort_values(["race_id", "number"])[cols].reset_index(drop=True)
+    kb = b[keep].sort_values(["race_id", "number"])[cols].reset_index(drop=True)
+    pd.testing.assert_frame_equal(ka, kb)
+    assert a["meet_day"].notna().all() and a["jockey_rank_365"].notna().any()

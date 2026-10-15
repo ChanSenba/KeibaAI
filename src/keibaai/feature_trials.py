@@ -192,6 +192,115 @@ def add_affinity_candidates(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([df.drop(columns=["_all"]), pd.DataFrame(cols, index=df.index)], axis=1)
 
 
+# ---------------------------------------------------------------- 設計スレッドの「足せるもの」
+
+WEATHER_CODE = {"晴": 0.0, "曇": 1.0, "小雨": 2.0, "雨": 3.0, "小雪": 4.0, "雪": 5.0}
+
+
+def _race_level(df: pd.DataFrame, lag: int) -> tuple[pd.Series, pd.Series]:
+    """lag 走前のレースの『レースレベル』: そのレースに出たほかの馬の、次の1走の3着以内率と件数。
+
+    次の1走は、今回のレースの日より前に終わったものだけを数える(当日・未来の結果は使わない)。
+    """
+    g = df.groupby("horse_id", sort=False)
+    nxt = pd.DataFrame({"race_id": df["race_id"], "horse_id": df["horse_id"],
+                        "next_top3": g["top3"].shift(-1).astype(float), "next_date": g["date"].shift(-1)})
+    nxt = nxt[nxt["next_date"].notna() & df["finish"].notna().to_numpy()]
+    cur = pd.DataFrame({"row": df.index, "horse_id": df["horse_id"], "date": df["date"],
+                        "prev_race": g["race_id"].shift(lag)}).dropna(subset=["prev_race"])
+    m = cur.merge(nxt.rename(columns={"race_id": "prev_race", "horse_id": "other"}), on="prev_race")
+    m = m[(m["other"] != m["horse_id"]) & (m["next_date"] < m["date"])]
+    agg = m.groupby("row")["next_top3"].agg(["mean", "count"])
+    n = agg["count"].reindex(df.index).fillna(0.0).where(cur.set_index("row")["prev_race"].reindex(df.index).notna())
+    return agg["mean"].reindex(df.index), n
+
+
+def _jockey_rate_asof(df: pd.DataFrame, jockey: pd.Series) -> pd.Series:
+    """jockey 列の騎手の、その日より前の3着以内率(その日に乗っていない騎手でも、直前までの成績で)。"""
+    done = df[df["finish"].notna()]
+    day = done.groupby(["jockey_id", "date"])["top3"].agg(["sum", "count"]).reset_index().sort_values("date")
+    day["cs"] = day.groupby("jockey_id")["sum"].cumsum()
+    day["cn"] = day.groupby("jockey_id")["count"].cumsum()
+    q = pd.DataFrame({"row": df.index, "jockey_id": jockey, "date": df["date"]}).dropna(subset=["jockey_id"])
+    q = q.sort_values("date")
+    m = pd.merge_asof(q, day[["jockey_id", "date", "cs", "cn"]], on="date", by="jockey_id",
+                      allow_exact_matches=False)  # 当日の分は含めない
+    return pd.Series((m["cs"] / m["cn"]).to_numpy(), index=m["row"]).reindex(df.index)
+
+
+def _jockey_rank_365(df: pd.DataFrame, jockey: pd.Series) -> pd.Series:
+    """jockey 列の騎手の、その日より前365日の勝利数の順位(1が最多。リーディング順位の代わり)。"""
+    done = df[df["finish"].notna()]
+    wins = done.pivot_table(index="date", columns="jockey_id", values="win", aggfunc="sum").fillna(0.0)
+    dates = pd.DatetimeIndex(sorted(df["date"].unique()))
+    wins = wins.reindex(wins.index.union(dates), fill_value=0.0)
+    roll = wins.rolling("365D", closed="left").sum().reindex(dates)
+    rank = roll.rank(axis=1, ascending=False, method="min")
+    long = rank.stack().rename("rank").reset_index()
+    long.columns = ["date", "jockey_id", "rank"]
+    q = pd.DataFrame({"date": df["date"], "jockey_id": jockey})
+    return q.merge(long, on=["date", "jockey_id"], how="left")["rank"].set_axis(df.index)
+
+
+def add_more_candidates(df: pd.DataFrame) -> pd.DataFrame:
+    cols = {}
+    # 1. レースレベル(前走・2走前に出たほかの馬の、次の1走の成績)
+    cols["prev_race_level"], cols["prev_race_level_n"] = _race_level(df, 1)
+    cols["prev2_race_level"], _ = _race_level(df, 2)
+    # 2. 開催の何回目・何日目(レースID: 年4・場2・回2・日2・R2)
+    rid = df["race_id"].astype(str)
+    cols["meet_kai"] = pd.to_numeric(rid.str[6:8], errors="coerce")
+    cols["meet_day"] = pd.to_numeric(rid.str[8:10], errors="coerce")
+    # 3. 天候と季節。馬体重は、同じ季節の過去の自分の平均との差
+    cols["weather_code"] = df["weather"].map(WEATHER_CODE) if "weather" in df else np.nan
+    month = df["date"].dt.month
+    cols["month"] = month.astype(float)
+    doy = df["date"].dt.dayofyear
+    cols["season_sin"], cols["season_cos"] = np.sin(2 * np.pi * doy / 365.25), np.cos(2 * np.pi * doy / 365.25)
+    season = ((month % 12) // 3).rename("season")
+    bw = pd.to_numeric(df["body_weight"], errors="coerce")
+    keys = [df["horse_id"], season]
+    s_sum = bw.fillna(0.0).groupby(keys).cumsum() - bw.fillna(0.0)
+    s_n = bw.notna().astype(float).groupby(keys).cumsum() - bw.notna().astype(float)
+    cols["bw_vs_season"] = bw - s_sum / s_n.where(s_n > 0)
+    # 4. 騎手の格差: 前走の騎手と今回の騎手の、いまの3着以内率の差と、直近365日の勝利数順位の差
+    prev_j = df.groupby("horse_id", sort=False)["jockey_id"].shift(1)
+    cur_rate, prev_rate = _jockey_rate_asof(df, df["jockey_id"]), _jockey_rate_asof(df, prev_j)
+    cols["jockey_grade_diff"] = cur_rate - prev_rate
+    cols["jockey_rank_365"] = _jockey_rank_365(df, df["jockey_id"])
+    cols["jockey_rank_change"] = cols["jockey_rank_365"] - _jockey_rank_365(df, prev_j)
+    # 5. 前走の RPCI(前半3F ÷ 後半3F × 50。50より大きいとスロー)と、自分の PCI
+    rpci = (pd.to_numeric(df["pace_first3f"], errors="coerce") / pd.to_numeric(df["pace_last3f"], errors="coerce")
+            * 50).astype(float)
+    dist = df["distance"].astype(float)
+    t, l3 = pd.to_numeric(df["time_sec"], errors="coerce"), pd.to_numeric(df["last3f"], errors="coerce")
+    pci = (((t - l3) / (dist - 600) * 600) / l3 * 50 - 50).astype(float)
+    pci = pci.where(dist > 600)
+    cols["prev_rpci"] = rpci.groupby(df["horse_id"], sort=False).shift(1)
+    cols["prev_pci"] = pci.groupby(df["horse_id"], sort=False).shift(1)
+    cols["pci_3"] = pci.groupby(df["horse_id"], sort=False).shift(1).groupby(df["horse_id"]).rolling(
+        3, min_periods=1).mean().reset_index(level=0, drop=True)
+    cols["prev_pci_vs_rpci"] = cols["prev_pci"] - cols["prev_rpci"]
+    return pd.concat([df, pd.DataFrame(cols, index=df.index)], axis=1)
+
+
+MORE_COLUMNS = ["prev_race_level", "prev_race_level_n", "prev2_race_level", "meet_kai", "meet_day", "weather_code",
+                "month", "season_sin", "season_cos", "bw_vs_season", "jockey_grade_diff", "jockey_rank_365",
+                "jockey_rank_change", "prev_rpci", "prev_pci", "pci_3", "prev_pci_vs_rpci"]
+
+
+def more_variants() -> dict[str, tuple[list[str], list[str]]]:
+    return {
+        "base": ([], []),
+        "レースレベル(前走・2走前)": (["prev_race_level", "prev_race_level_n", "prev2_race_level"], []),
+        "開催の何回目・何日目": (["meet_kai", "meet_day"], []),
+        "天候と季節(季節の馬体重差つき)": (["weather_code", "month", "season_sin", "season_cos", "bw_vs_season"], []),
+        "騎手の格差(乗り替わりの上下・順位)": (["jockey_grade_diff", "jockey_rank_365", "jockey_rank_change"], []),
+        "前走の RPCI・PCI": (["prev_rpci", "prev_pci", "pci_3", "prev_pci_vs_rpci"], []),
+        "5つすべて": (MORE_COLUMNS, []),
+    }
+
+
 # ---------------------------------------------------------------- 比べ方
 
 def _fit_predict(train: pd.DataFrame, test: pd.DataFrame, features: list[str], seed: int, rounds: int) -> np.ndarray:
@@ -340,11 +449,12 @@ def prepare(conn: sqlite3.Connection) -> pd.DataFrame:
     from .features import build_features, load_results
 
     df = build_features(load_results(conn))
-    extra = pd.read_sql_query("SELECT race_id, course, rail FROM races", conn)
+    extra = pd.read_sql_query("SELECT race_id, course, rail, weather FROM races", conn)
     df = df.merge(extra, on="race_id", how="left")
     q = market_top3(df, TEST_PERIODS[0])
     df = add_bias_candidates(df, q)
-    return add_affinity_candidates(df)
+    df = add_affinity_candidates(df)
+    return add_more_candidates(df)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -353,7 +463,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="data/feature_trials")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--rounds", type=int, default=300)
-    ap.add_argument("--only", choices=["bias", "affinity"], default=None)
+    ap.add_argument("--only", choices=["bias", "affinity", "more"], default=None)
     args = ap.parse_args(argv)
 
     out = Path(args.out)
@@ -362,7 +472,8 @@ def main(argv: list[str] | None = None) -> None:
     conn = sqlite3.connect(f"file:{Path(args.db).as_posix()}?mode=ro", uri=True)  # 読み取り専用で開く
     df = prepare(conn)
     print(f"特徴量を作りました: {len(df):,} 行, {time.time() - t0:.0f}s", flush=True)
-    cand = [c for c in BIAS_COLUMNS + ["tj_top3_shr10", "js_top3_shr10", "ts_top3_shr10", "js_n"] if c in df]
+    cand = [c for c in BIAS_COLUMNS + ["tj_top3_shr10", "js_top3_shr10", "ts_top3_shr10", "js_n"] + MORE_COLUMNS
+            if c in df]
     print(df.loc[df["date"] >= TEST_PERIODS[0], cand].describe().T[["count", "mean", "std"]].to_string(), flush=True)
 
     parts = []
@@ -374,6 +485,8 @@ def main(argv: list[str] | None = None) -> None:
         r2 = run(df, affinity_variants(k), args.seeds, args.rounds, out, TEST_PERIODS)
         parts.append(("相性: 厩舎×騎手の割り引き(k の比較)", r1))
         parts.append((f"相性: k={k} での版と、騎手×種牡馬・調教師×種牡馬", r2))
+    if args.only in (None, "more"):
+        parts.append(("設計スレッドの足せるもの", run(df, more_variants(), args.seeds, args.rounds, out, TEST_PERIODS)))
     text = "\n\n".join(f"## {title}\n{to_markdown(r)}" for title, r in parts)
     (out / "results.md").write_text(text, encoding="utf-8")
     pd.concat([r.assign(part=t) for t, r in parts]).to_csv(out / "results.csv", index=False, encoding="utf-8-sig")
