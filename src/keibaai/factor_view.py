@@ -57,10 +57,10 @@ SECTIONS: list[dict] = [
     {"name": "調教",
      "note": "場所とタイムは JRA-VAN の坂路・ウッドの調教タイムから、レース前日までの直近14日の追い切り"
              "(坂路4F58秒以内・ウッド56秒以内)で作ります(取り込みは keibaai jv)。JRA-VAN にあるのは坂路とウッドだけです。"
-             "追い方・併せ馬・短評・評価は netkeiba の最終追い切りで、取得したレースだけ出ます(keibaai training --date)。"
+             "短評・評価は netkeiba の最終追い切りで、取得したレースだけ出ます(keibaai training --date)。"
              "評価のメンバー内の差は、A=4〜D=1 とした点数からレースの平均を引いた値です。",
-     "cols": [("train_center", "トレセン"), ("train_last_place", "最後の追い切り"), ("train_load", "追い方"),
-              ("train_partner", "併せ馬"), ("jv_last_f4", "最後の4F"), ("jv_last_l1", "最後の1F"),
+     "cols": [("train_center", "トレセン"), ("train_last_place", "最後の追い切り"),
+              ("jv_last_f4", "最後の4F"), ("jv_last_l1", "最後の1F"),
               ("jv_last_f4_z", "コース基準との差(4F)"), ("jv_last_pct", "コース内の順位(4F)"),
               ("jv_last_accel", "加速(最初−最後の1F)"), ("jv_best_f4", "一番時計の4F"), ("train_best_place", "一番時計の場所"),
               ("jv_f4_vs_base", "ふだんとの差(4F)"), ("jv_f4_vs_field", "メンバー内の差(4F)"), ("jv_n14", "追い切りの本数(14日)"),
@@ -134,8 +134,6 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "train_center": ("所属のトレセン(美浦・栗東)。直近14日の追い切りをした場所(JRA-VAN)", None),
     "train_last_place": ("最後の追い切りの場所。坂路か、ウッドのどのコースか(回り)。JRA-VAN になければ netkeiba のコース", None),
     "train_best_place": ("直近14日で一番時計を出した追い切りの場所", None),
-    "train_load": ("最終追い切りの追い方(netkeiba)。馬なり・強め・一杯 など。一杯ほど強く追っている", None),
-    "train_partner": ("最終追い切りの併せ馬(netkeiba)。先着・同入・遅れ など", None),
     "train_critic": ("最終追い切りの短評(netkeiba)。気配上昇・仕上良好・前走並み など", None),
     "train_rank": ("最終追い切りの評価。A が最も良く、D に向かって下がる", None),
     "train_rank_vs_field": ("評価を A=4〜D=1 の点にして、レース平均を引いた値。プラスほどメンバーの中で良い", "high"),
@@ -325,10 +323,10 @@ def training_place(kind: str, center: str | None, course: str | None, turn: str 
 
 
 def _training_places(conn: sqlite3.Connection, t: pd.DataFrame, date: str) -> pd.DataFrame:
-    """出走馬ごとに、トレセン・最後の追い切りと一番時計の場所(JRA-VAN)と、
-    最終追い切りの追い方・併せ馬(netkeiba)。調教の特徴量と同じく、レース前日までの直近14日の追い切りで見る。"""
-    out = pd.DataFrame(index=t.index, columns=["train_center", "train_last_place", "train_best_place",
-                                               "train_load", "train_partner"], dtype=object)
+    """出走馬ごとに、トレセン・最後の追い切りと一番時計の場所(JRA-VAN)。JRA-VAN にない馬は netkeiba のコース。
+    調教の特徴量と同じく、レース前日までの直近14日の追い切りで見る。
+    追い方・併せ馬は、netkeiba の未ログインのページでは各レースの先頭3頭しか出ず取っていないので、出さない。"""
+    out = pd.DataFrame(index=t.index, columns=["train_center", "train_last_place", "train_best_place"], dtype=object)
     ids = [h for h in set(t["horse_id"]) if isinstance(h, str)]
     day = pd.Timestamp(date)
     if ids:
@@ -347,13 +345,11 @@ def _training_places(conn: sqlite3.Connection, t: pd.DataFrame, date: str) -> pd
             out["train_best_place"] = t["horse_id"].map(best["place"])
     races = list(set(t["race_id"]))
     nk = pd.read_sql_query(
-        f"SELECT race_id, number, course, load, partner FROM training WHERE seq = 0 "
+        f"SELECT race_id, number, course FROM training WHERE seq = 0 "
         f"AND race_id IN ({','.join('?' * len(races))})", conn, params=races) if races else pd.DataFrame()
     if not nk.empty:
         got = t[["race_id", "number"]].merge(nk, on=["race_id", "number"], how="left")
         got.index = t.index
-        out["train_load"] = got["load"]
-        out["train_partner"] = got["partner"]
         out["train_last_place"] = out["train_last_place"].fillna(got["course"])  # JRA-VAN にない馬は netkeiba のコース
     return out
 
