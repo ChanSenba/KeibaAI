@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS entries (
     body_weight INTEGER, body_weight_diff INTEGER, win_odds REAL, popularity INTEGER,
     PRIMARY KEY (race_id, number)
 );
+-- 発走前のオッズを時刻つきで溜める(確定オッズしかないと、オッズの動きは後から取れない)。snapped_at は取得した時刻、official_at は netkeiba が示すオッズの時刻
+CREATE TABLE IF NOT EXISTS odds_snapshots (
+    race_id TEXT NOT NULL, number INTEGER NOT NULL, snapped_at TEXT NOT NULL, official_at TEXT,
+    win_odds REAL, popularity INTEGER,
+    PRIMARY KEY (race_id, number, snapped_at)
+);
 -- 発走前に出した予想をそのまま残す(あとから結果と照合する)。レースが終わってからは書き換えない
 CREATE TABLE IF NOT EXISTS predictions (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, saved_at TEXT,
@@ -54,6 +60,12 @@ CREATE TABLE IF NOT EXISTS pedigree (
     horse_id TEXT PRIMARY KEY,
     sire_id TEXT, sire TEXT, dam_id TEXT, dam TEXT, damsire_id TEXT, damsire TEXT,
     sire_sire_id TEXT, sire_sire TEXT, sire_line TEXT
+);
+-- 5代血統(JRA-VAN の産駒マスタ・繁殖馬マスタから)。pos は 1=父, 2=母, 3=父の父, 4=父の母, 5=母の父, …(親は 2k+1 と 2k+2)で 1〜62。
+-- たどれない先祖は ancestor_id が空。ancestor_id は JRA-VAN の繁殖登録番号
+CREATE TABLE IF NOT EXISTS pedigree5 (
+    horse_id TEXT NOT NULL, pos INTEGER NOT NULL, ancestor_id TEXT, name TEXT,
+    PRIMARY KEY (horse_id, pos)
 );
 -- 調教(追い切り)。1頭に調教が何本もある(seq=0 が最終追い切り)。評価だけのページでは seq=0 の1行で、タイムは空
 CREATE TABLE IF NOT EXISTS training (

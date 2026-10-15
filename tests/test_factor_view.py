@@ -117,6 +117,36 @@ def test_training_values_and_status_follow_what_is_collected(conn):
         conn.commit()
 
 
+def test_training_place_names():
+    assert fv.training_place("slope", "1", None, None) == "坂路"
+    assert fv.training_place("wood", "1", "2", "0") == "CW(右)"
+    assert fv.training_place("wood", "0", "3", "1") == "ウッドD(左)"
+
+
+def test_training_places_in_one_section(conn):
+    race_id, number, horse = conn.execute(
+        "SELECT race_id, number, horse_id FROM entries WHERE race_id IN "
+        "(SELECT race_id FROM entry_races WHERE date = ?) ORDER BY race_id, number LIMIT 1", (DAY,)).fetchone()
+    rows = [(horse, "2029-12-28", "0700", "wood", "1", "2", "0", 52.0),  # 一番時計
+            (horse, "2030-01-02", "0700", "slope", "1", None, None, 53.5),  # 最後の追い切り
+            (horse, "2030-01-04", "0700", "slope", "1", None, None, 64.0),  # 遅い(流し)ので数えない
+            (horse, "2029-12-01", "0700", "wood", "1", "2", "0", 50.0)]  # 14日より前
+    conn.executemany("INSERT INTO jv_training (horse_id, date, time, kind, center, course, turn, f4) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.execute("INSERT INTO training (race_id, number, seq, course) VALUES (?, ?, 0, '栗坂')", (race_id, number))
+    conn.commit()
+    try:
+        v = fv.factor_values(conn, DAY)
+        r = v[(v["race_id"] == race_id) & (v["number"] == number)].iloc[0]
+        assert (r["train_center"], r["train_last_place"], r["train_best_place"]) == ("栗東", "坂路", "CW(右)")
+        assert {s["name"]: s for s in fv.section_status(conn)}["調教"]["state"] == "ready"
+        names = [s["name"] for s in fv.SECTIONS]
+        assert names.count("調教") == 1 and not any("JRA-VAN" in n for n in names)
+    finally:
+        conn.execute("DELETE FROM jv_training")
+        conn.execute("DELETE FROM training")
+        conn.commit()
+
 def test_no_entries_raises(conn):
     with pytest.raises(ValueError):
         fv.factor_values(conn, "2031-01-01")
