@@ -8,8 +8,10 @@
   SK(産駒マスタ, 208バイト): 11-20 血統登録番号(netkeiba の馬 ID と同じ), 66- 3代血統の繁殖登録番号(10桁)が14頭ぶん。
       並びは 父, 母, 父の父, 父の母, 母の父, 母の母, …(UM と同じ)
   BT(系統情報, 6889バイト): 11-20 繁殖登録番号, 21-50 系統ID, 51-86 系統名, 87- 系統説明
+      系統の祖になった種牡馬だけの表(2026-10 時点で 92 頭)。系統名はその馬の名前で、系統ID は 2 桁ずつ親の系統につながる
+      (例: 01 ダーレーアラビアン → … → 0101080201010201 サンデーサイレンス → 010108020101020107 ディープインパクト)。
 
-位置は書き出したデータで確かめた(JV-Data 仕様書は手元になかった)。
+位置は書き出したデータ(HN 249・SK 206・BT 6887 文字。末尾の改行を除く)の中身から推定して確かめた(JV-Data 仕様書は手元になかった)。
 """
 from __future__ import annotations
 
@@ -90,12 +92,12 @@ class Blood:
             self.bt[r[0]] = r[1:3]
 
     def sire_line(self, sire_id: str | None) -> str | None:
-        """父の系統名。父に系統情報がなければ、父の父、その父…とさかのぼって最初に見つかった系統。"""
+        """父の系統名(「ディープインパクト系」など)。父が系統の祖でなければ、父の父、その父…とさかのぼって最初に見つかった祖の系統。"""
         seen = set()
         hid = sire_id
         while hid and hid not in seen and len(seen) < MAX_SIRE_LINE_DEPTH:
             if hid in self.bt:
-                return self.bt[hid][1]
+                return self.bt[hid][1] + "系"
             seen.add(hid)
             hid = (self.hn.get(hid) or (None, None, None))[1]
         return None

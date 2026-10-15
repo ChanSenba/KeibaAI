@@ -38,9 +38,9 @@ def test_parse_records():
 
 
 def test_sire_line_walks_up_the_male_line():
-    b = blood_of([hn("1100000013", "孫", "1100000012", ""), hn("1100000012", "子", "1100000011", ""), hn("1100000011", "祖", "", ""), bt("1100000011", "01", "祖系")])
+    b = blood_of([hn("1100000013", "孫", "1100000012", ""), hn("1100000012", "子", "1100000011", ""), hn("1100000011", "祖", "", ""), bt("1100000011", "01", "祖")])
     assert b.sire_line("1100000013") == "祖系"
-    b.add(bt("1100000012", "0101", "子系")[:-2])
+    b.add(bt("1100000012", "0101", "子")[:-2])
     assert b.sire_line("1100000013") == "子系"
     assert b.sire_line("1100009999") is None
 
@@ -72,7 +72,7 @@ def test_import_blood_fills_sire_line_and_pedigree5(tmp_path):
     conn.execute("INSERT INTO pedigree (horse_id, sire_id, dam_id, sire_line) VALUES ('2017100001','1100000001','1200000002',NULL), "
                  "('2017100002','1100000099','1200000099','前の値')")
     write(tmp_path, "BLDN.txt", [sk("2017100001", ["1100000001", "1200000002"]), hn("1100000001", "父", "1100000003", "1200000004"), hn("1100000003", "父の父"),
-                                 bt("1100000003", "01", "父父系")])
+                                 bt("1100000003", "01", "父父")])
     r = import_blood(conn, tmp_path)
     assert r["horses"] == 2 and r["sire_line"] == 1
     lines = dict(conn.execute("SELECT horse_id, sire_line FROM pedigree"))

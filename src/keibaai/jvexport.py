@@ -25,6 +25,7 @@ BUFFER = 110000
 KEEP = {"RACE": ("RA", "SE"), "DIFN": ("UM",), "BLDN": ("HN", "SK", "BT")}
 # 読み取りの大きさ。大きすぎると1件ごとの読み取りが極端に遅くなる(RA 1272・SE 555・UM 1609 文字)
 SMALL_BUFFER = 4000
+BUFFERS = {"BLDN": 8000}  # 血統(HN 251・SK 208・BT 6889 文字)
 
 
 def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
