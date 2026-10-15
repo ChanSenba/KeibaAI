@@ -129,10 +129,14 @@ def main(argv=None) -> None:
     tr_.add_argument("--date", help="YYYY-MM-DD。出馬表を取った日のレースだけ取り直す(発走前の予想用)")
     tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
     jv_ = sub.add_parser("jv", help="JRA-VAN から取り込む(調教タイム・過去の成績・血統)。32bit Python で JV-Link から書き出し、DB に入れる")
-    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree", "blood"], default=["training"],
+    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree", "blood", "odds"], default=["training"],
                      help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(上書き)、"
-                          "blood=血統データ(父の系統 sire_line と5代血統 pedigree5。先に pedigree を入れておく)")
+                          "blood=血統データ(父の系統 sire_line と5代血統 pedigree5。先に pedigree を入れておく)、"
+                          "odds=全券種の確定オッズと払戻(--odds-db に入れる)")
     jv_.add_argument("--blood-from", default="19860101", help="blood: 取得を始める日 YYYYMMDD(血統は全期間が要る)")
+    jv_.add_argument("--odds-from", default="20190101", help="odds: 取得を始める日 YYYYMMDD")
+    jv_.add_argument("--odds-raw", default="data/jv_raw_odds", help="odds: 書き出し先(成績の RACE.txt と分ける)")
+    jv_.add_argument("--odds-db", default="data/jravan_odds.db", help="odds: 入れる先(keiba.db とは別のファイル)")
     jv_.add_argument("--replace", action="store_true",
                      help="races: すでに DB にあるレースも JRA-VAN の内容で入れ替える(既定は、無いレースだけ足す)")
     jv_.add_argument("--rt-days", type=int, default=0,
@@ -267,6 +271,9 @@ def main(argv=None) -> None:
             if "blood" in args.what:  # 血統は取得を始める日が違うので、別に書き出す
                 runs.append([args.python32, "-m", "keibaai.jvexport", "--from", args.blood_from, "--out", args.raw,
                              "--option", str(args.option), "--specs", "BLDN"])
+            if "odds" in args.what:
+                runs.append([args.python32, "-m", "keibaai.jvexport", "--from", args.odds_from, "--out", args.odds_raw,
+                             "--option", str(args.option), "--specs", "RACE", "--odds"])
             for i, cmd in enumerate(runs):
                 if i:
                     time.sleep(jvexport.RT_INTERVAL)  # 続けて開き直すと JV-Link の内部サービスが落ちることがあった
@@ -290,6 +297,15 @@ def main(argv=None) -> None:
                 print(f"done: 5代血統 {r['horses']} 頭(先祖の欠け {r['missing_rate']:.1%})、"
                       f"父の系統 {r['sire_line']}/{r['pedigree']} 頭を取り込みました")
                 print("  多い系統: " + "、".join(f"{k} {v}" for k, v in r["top_lines"]))
+        if "odds" in args.what:
+            from . import jvodds
+
+            oconn = jvodds.connect(args.odds_db)
+            counts = jvodds.import_odds(oconn, args.odds_raw, args.odds_from)
+            for k, (n_race, n_rows) in counts.items():
+                print(f"done: {k} {n_race} レース・{n_rows} 件")
+            for k, (n, ok, bad) in jvodds.check_payouts(oconn).items():
+                print(f"  払戻との照合 {k}: {ok}/{n} 一致(同着以外の不一致 {bad})")
         return
     if args.cmd == "training":
         from .training import collect_training, fetch_entry_training, pending_race_ids, reparse_training
