@@ -125,3 +125,12 @@ def test_more_candidates_ignore_results_of_the_same_and_later_days(raw):
     kb = b[keep].sort_values(["race_id", "number"])[cols].reset_index(drop=True)
     pd.testing.assert_frame_equal(ka, kb)
     assert a["meet_day"].notna().all() and a["jockey_rank_365"].notna().any()
+
+
+def test_ability_model_uses_the_shrunk_trainer_jockey_rate(raw):
+    from keibaai.features import ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, TJ_SHRINK_K
+
+    assert "tj_top3_shr" in ABILITY_MODEL_FEATURES and "tj_top3_rate" not in ABILITY_MODEL_FEATURES
+    assert "tj_top3_rate" in MARKET_MODEL_FEATURES and "tj_top3_shr" not in MARKET_MODEL_FEATURES
+    df = candidates(raw)  # 検証用の計算(k ごと)と、予想に使う列が一致する
+    assert np.allclose(df["tj_top3_shr"], df[f"tj_top3_shr{TJ_SHRINK_K}"], equal_nan=True)
