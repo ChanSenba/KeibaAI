@@ -2,7 +2,7 @@
 
 JV-Link は 32bit の COM 部品なので、64bit の Python からは呼べない。このファイルは標準ライブラリと pywin32 だけを使い、
 JV-Link から読んだレコードを1行1レコードのテキストに書き出すだけにする。中身を読んで DB に入れるのは 64bit 側
-(調教は jvtraining.py、成績と血統は jvrace.py)。データ種別は --specs で選ぶ(SLOP・WOOD=調教、RACE=成績、DIFN=馬のマスタ)。
+(調教は jvtraining.py、成績と血統は jvrace.py)。データ種別は --specs で選ぶ(SLOP・WOOD=調教、RACE=成績、DIFN=馬のマスタ、BLDN=血統)。
 
 日本語を含むレコード(RACE・DIFN)は、JV-Link が Shift_JIS の1バイトを1文字として返すので、そのまま書き出す。
 文字に戻すのは読む側(jvrace.to_bytes)。
@@ -22,7 +22,7 @@ SPECS = ("SLOP", "WOOD")  # 坂路調教・ウッドチップ調教
 BUFFER = 110000
 # データ種別ごとに、書き出すレコード種別。ここにない種別は全部書く。
 # RACE にはオッズや票数(1件が数万文字)も入っているので、成績(RA・SE)だけにして残りのファイルは読み飛ばす。
-KEEP = {"RACE": ("RA", "SE"), "DIFN": ("UM",)}
+KEEP = {"RACE": ("RA", "SE"), "DIFN": ("UM",), "BLDN": ("HN", "SK", "BT")}
 # 読み取りの大きさ。大きすぎると1件ごとの読み取りが極端に遅くなる(RA 1272・SE 555・UM 1609 文字)
 SMALL_BUFFER = 4000
 
@@ -30,7 +30,7 @@ SMALL_BUFFER = 4000
 def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
     """1種類のデータを読んで out に書き出す。書いたレコード数を返す。"""
     keep = KEEP.get(spec)
-    buffer = SMALL_BUFFER if keep else BUFFER
+    buffer = BUFFERS.get(spec) or (SMALL_BUFFER if keep else BUFFER)
     ret = jv.JVOpen(spec, f"{from_date}000000", option, 0, 0, "")
     if isinstance(ret, tuple) and ret[0] == -2:  # 最初の1回だけ失敗することがあった。もう一度だけ試す
         jv.JVClose()

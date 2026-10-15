@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS pedigree (
     sire_id TEXT, sire TEXT, dam_id TEXT, dam TEXT, damsire_id TEXT, damsire TEXT,
     sire_sire_id TEXT, sire_sire TEXT, sire_line TEXT
 );
+-- 5代血統(JRA-VAN の産駒マスタ・繁殖馬マスタから)。pos は 1=父, 2=母, 3=父の父, 4=父の母, 5=母の父, …(親は 2k+1 と 2k+2)で 1〜62。
+-- たどれない先祖は ancestor_id が空。ancestor_id は JRA-VAN の繁殖登録番号
+CREATE TABLE IF NOT EXISTS pedigree5 (
+    horse_id TEXT NOT NULL, pos INTEGER NOT NULL, ancestor_id TEXT, name TEXT,
+    PRIMARY KEY (horse_id, pos)
+);
 -- 調教(追い切り)。1頭に調教が何本もある(seq=0 が最終追い切り)。評価だけのページでは seq=0 の1行で、タイムは空
 CREATE TABLE IF NOT EXISTS training (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, seq INTEGER NOT NULL,

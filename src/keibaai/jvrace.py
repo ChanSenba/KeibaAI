@@ -273,8 +273,11 @@ def import_pedigree(conn: sqlite3.Connection, raw_dir: str | Path) -> int:
     if not best:
         return 0
     with conn:
+        # INSERT OR REPLACE だと行ごと入れ替わり、血統データ(jvblood)で入れた sire_line が消えるので、列だけ更新する
+        update = ", ".join(f"{c} = excluded.{c}" for c in PEDIGREE_COLS[1:])
         conn.executemany(
-            f"INSERT OR REPLACE INTO pedigree ({','.join(PEDIGREE_COLS)}) VALUES ({','.join('?' * len(PEDIGREE_COLS))})",
+            f"INSERT INTO pedigree ({','.join(PEDIGREE_COLS)}) VALUES ({','.join('?' * len(PEDIGREE_COLS))}) "
+            f"ON CONFLICT(horse_id) DO UPDATE SET {update}",
             [row for _, row in best.values()])
         conn.execute(f"DELETE FROM pedigree WHERE {NETKEIBA_ID}")
     return len(best)
