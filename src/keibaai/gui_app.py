@@ -163,6 +163,28 @@ def _progress_total(db_path: str, kind: str) -> int | None:
     return progress.read_total(db_path, progress.KINDS[kind][2])
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _data_status(db_path: str):
+    return progress.read_data_status(db_path)
+
+
+def _show_data_status() -> None:
+    s = _data_status(st.session_state["db_path"])
+    with st.container(border=True):
+        st.markdown("#### データの揃い具合(JRA-VAN)")
+        if s is None:
+            st.caption("DB を読めませんでした(取り込み中の可能性があります)。少しあとで開き直してください。")
+            return
+        c1, c2, c3 = st.columns(3)
+        c1.metric("成績", f"{s.races:,} レース", help=f"最新 {s.last_race_date or '-'}")
+        frac = s.pedigree_fraction
+        c2.metric("血統", f"{frac:.0%}" if frac is not None else "-",
+                  help=f"成績に出てくる {s.horses:,} 頭のうち {s.horses_with_pedigree:,} 頭")
+        c3.metric("調教タイム", f"約{s.training_rows / 10000:,.0f}万本", help=f"最新 {s.last_training_date or '-'}")
+        st.caption(f"成績の最新 {s.last_race_date or '-'} ・ 血統 {s.horses_with_pedigree:,} / {s.horses:,} 頭 ・ "
+                   f"調教タイムの最新 {s.last_training_date or '-'}。毎週 `keibaai jv` の差分の取り込みで増えます。")
+
+
 def _show_progress(kind: str) -> None:
     p = progress.progress_of(kind, st.session_state["cache_dir"], _progress_total(st.session_state["db_path"], kind))
     with st.container(border=True):
@@ -172,8 +194,8 @@ def _show_progress(kind: str) -> None:
             c2.markdown(":green[:material/play_circle: 動いています]")
         elif p.last_saved is None:
             c2.markdown(":gray[:material/hourglass_empty: まだ始まっていません]")
-        else:
-            c2.markdown(":orange[:material/pause_circle: 止まっています]")
+        else:  # 調教の評価は、JRA-VAN の調教タイムが入ったので全レースぶん集める必要がなく、止めてある
+            c2.markdown(":gray[:material/pause_circle: 止めています]")
         if p.fraction is not None:
             st.progress(p.fraction, f"{p.done:,} / {p.total:,}  ({p.fraction:.0%})")
         else:
@@ -194,10 +216,13 @@ def page_progress() -> None:
            "バックグラウンドで動いている取得の進み具合です。DB には触れず、保存済みページの数から出しているので、"
            "取得の邪魔になりません。")
 
+    _show_data_status()
+
     @st.fragment(run_every=30)
     def body() -> None:
+        # 血統は JRA-VAN から全頭ぶん入るので、netkeiba からの血統の取得(保存済みページの数)はもう出さない。
+        # 出すと、使っていない古いページの数(約1万)が「止まっている取得」に見えてしまう
         _show_progress("training")
-        _show_progress("pedigree")
         logs = sorted(Path("data").glob("out-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:1]
         if logs:
             with st.expander(f"ログの最後 ({logs[0].name})"):
@@ -206,7 +231,7 @@ def page_progress() -> None:
 
     body()
     st.caption(":material/info: 総数は DB から1時間に1回だけ読み取り専用で読みます。"
-               "血統は、JRA-VAN の取り込みで済んだ馬はここに数えられません。")
+               "下の「調教の評価」は netkeiba からの任意の取得で、JRA-VAN の調教タイムが入ったので止めてあります。")
 
 
 # ---------------------------------------------------------------- 再解析

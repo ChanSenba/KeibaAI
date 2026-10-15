@@ -16,7 +16,7 @@ RATE_WINDOW_SEC = 1800  # 速さは直近30分から出す
 
 # 取得の種類: (画面での名前, 保存済みページの下位フォルダ, 総数を数える SQL)
 KINDS = {
-    "training": ("調教の評価", "oikiri", "SELECT COUNT(*) FROM races"),
+    "training": ("調教の評価(netkeiba・任意)", "oikiri", "SELECT COUNT(*) FROM races"),
     "pedigree": ("血統", "ped", "SELECT COUNT(DISTINCT horse_id) FROM results WHERE horse_id IS NOT NULL"),
 }
 
@@ -69,6 +69,43 @@ def read_total(db_path: str | Path, sql: str) -> int | None:
         conn = sqlite3.connect(f"file:{Path(db_path).resolve().as_posix()}?mode=ro", uri=True, timeout=1)
         try:
             return conn.execute(sql).fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+@dataclass
+class DataStatus:
+    """DB にあるデータの揃い具合(JRA-VAN から入れたもの)。"""
+    races: int
+    last_race_date: str | None
+    horses: int  # 成績に出てくる馬
+    horses_with_pedigree: int
+    training_rows: int
+    last_training_date: str | None
+
+    @property
+    def pedigree_fraction(self) -> float | None:
+        return self.horses_with_pedigree / self.horses if self.horses else None
+
+
+def read_data_status(db_path: str | Path) -> DataStatus | None:
+    """揃い具合を読み取り専用で1回だけ読む。DB が使えなければ None。"""
+    try:
+        conn = sqlite3.connect(f"file:{Path(db_path).resolve().as_posix()}?mode=ro", uri=True, timeout=1)
+        try:
+            one = lambda sql: conn.execute(sql).fetchone()
+            races, last_race = one("SELECT COUNT(*), MAX(date) FROM races")
+            horses, with_ped = one(
+                "SELECT COUNT(*), COUNT(p.horse_id) FROM (SELECT DISTINCT horse_id FROM results WHERE horse_id IS NOT NULL) h "
+                "LEFT JOIN pedigree p USING (horse_id)")
+            try:  # 調教タイムの表がない古い DB もある
+                rows = one("SELECT COALESCE(MAX(rowid), 0) FROM jv_training")[0]  # 件数の目安(数えるより速い)
+                last_tr = one("SELECT MAX(date) FROM jv_training")[0]
+            except sqlite3.Error:
+                rows, last_tr = 0, None
+            return DataStatus(races, last_race, horses, with_ped, rows, last_tr)
         finally:
             conn.close()
     except sqlite3.Error:
