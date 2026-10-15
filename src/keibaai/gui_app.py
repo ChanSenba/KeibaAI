@@ -114,15 +114,29 @@ def _apply_preset() -> None:
         st.session_state["start"], st.session_state["end"] = gui.preset_range(name, dt.date.today())
 
 
+SOURCES = {"jv": "JRA-VAN", "netkeiba": "netkeiba"}
+
+
+def source_picker(key: str) -> str:
+    """取得元を選ぶ欄。JV-Link を呼べる PC では JRA-VAN が既定。"jv" か "netkeiba" を返す。"""
+    from . import jvlink
+
+    if not jvlink.available():
+        return "netkeiba"
+    return st.segmented_control("取得元", list(SOURCES), default="jv", format_func=SOURCES.get, key=key,
+                                help="JRA-VAN は JV-Link から取るので、netkeiba のようなアクセス間隔の待ちがありません") or "jv"
+
+
 def page_collect() -> None:
     header("Collect", "データ取得",
-           "選んだ期間の土日・月曜の JRA レース結果を netkeiba から取得します。"
+           "選んだ期間の JRA レース結果を取得します(JV-Link があれば JRA-VAN から、なければ netkeiba から)。"
            "取得済みのレースは飛ばすので、同じ期間を何度実行しても大丈夫です。")
     today = dt.date.today()
     st.session_state.setdefault("start", gui.preset_range("先週末", today)[0])
     st.session_state.setdefault("end", gui.preset_range("先週末", today)[1])
 
     with st.container(border=True):
+        source = source_picker("collect_source")
         st.segmented_control("よく使う期間", gui.PRESETS, key="preset", on_change=_apply_preset)
         c1, c2 = st.columns(2)
         start = c1.date_input("開始日", key="start", format="YYYY/MM/DD", max_value=today)
@@ -130,6 +144,8 @@ def page_collect() -> None:
         days = gui.race_days(start, end) if start <= end else []
         if start > end:
             st.error("終了日が開始日より前になっています。")
+        elif source == "jv":
+            st.caption(f":material/event: 対象 {len(days)} 日 ・ :material/schedule: 1〜数分(JV-Link からまとめて取ります)")
         else:
             st.caption(f":material/event: 対象 {len(days)} 日 ・ :material/schedule: 最大で約 {len(days) * 2} 分"
                        "(サーバーに負荷をかけないよう 1 ページごとに 3 秒以上あけます)")
@@ -149,7 +165,14 @@ def page_collect() -> None:
 
             try:
                 with contextlib.redirect_stdout(log):
-                    total = gui.collect(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), start, end, on_day)
+                    if source == "jv":
+                        from . import jvlink
+
+                        bar.progress(0.1, "JV-Link から書き出しています")
+                        total, _ = jvlink.fetch_results(conn, start, end)
+                        bar.progress(1.0, "完了")
+                    else:
+                        total = gui.collect(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), start, end, on_day)
             except Exception as e:  # 連続失敗(アクセス制限の可能性)や通信エラー。途中までの分は保存済み
                 status.update(label="取得が止まりました", state="error")
                 st.error(str(e))
@@ -389,8 +412,12 @@ def page_predict() -> None:
                        f"(オッズあり {info['with_odds']} 頭) ・ 取得 {info['fetched_at']}")
         else:
             st.caption(":material/info: この日の出馬表はまだ取得していません")
-        single = st.segmented_control("範囲", SCOPES, default=SCOPES[0], key="pred_scope",
-                                      width="stretch") == SCOPES[1]
+        source = source_picker("pred_source")
+        single = source == "netkeiba" and st.segmented_control(
+            "範囲", SCOPES, default=SCOPES[0], key="pred_scope", width="stretch") == SCOPES[1]
+        if source == "jv":
+            st.caption(":material/info: JRA-VAN からは、その日の全レースをまとめて取ります(1〜3分)。"
+                       "馬番は金曜の枠順の発表後、オッズは発売開始後に入ります。")
         if not single:
             c1, c2 = st.columns(2)
             fetch = c1.button("全レースの出馬表とオッズを取得", icon=":material/download:", width="stretch")
@@ -406,7 +433,7 @@ def page_predict() -> None:
                "オッズが更新されたら、もう一度取得してください。")
 
     if fetch:
-        fetch_entries(conn, date, None if picked is None else [picked["race_id"]])
+        fetch_entries(conn, date, None if picked is None else [picked["race_id"]], source)
 
     if predict:
         try:
@@ -486,7 +513,7 @@ def single_race_controls(conn, date: dt.date):
     return picked, fetch, predict
 
 
-def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
+def fetch_entries(conn, date: dt.date, race_ids: list[str] | None, source: str = "netkeiba") -> None:
     with st.status("取得しています…", expanded=True) as status:
         bar = st.progress(0.0)
         log = LogBox()
@@ -496,8 +523,16 @@ def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
 
         try:
             with contextlib.redirect_stdout(log):
-                n = gui.fetch_entries_for(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), date, on_race,
-                                          race_ids)
+                if source == "jv":
+                    from . import jvlink
+
+                    bar.progress(0.1, "JV-Link から書き出しています")
+                    n = jvlink.fetch_entries(conn, date.isoformat())
+                    if not n:
+                        print("馬番がまだ確定していないか、出馬表がまだ出ていません(馬番は枠順の発表後に入ります)")
+                else:
+                    n = gui.fetch_entries_for(conn, Fetcher(cache_dir=st.session_state["cache_dir"]), date, on_race,
+                                              race_ids)
         except Exception as e:
             status.update(label="取得が止まりました", state="error")
             st.error(str(e))

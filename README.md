@@ -100,8 +100,8 @@ keibaai factors --test-from 2026-01-01
 ## 3. 今週のレースを予想する
 
 ```
-keibaai entries --date 2026-10-17     # 出馬表と単勝オッズを取得して保存
-keibaai entries --date 2026-10-17 --source jv --python32 C:\Python311-32\python.exe   # 同じことを JRA-VAN の速報から（netkeiba を使わない）
+keibaai entries --date 2026-10-17     # 出馬表と単勝オッズを取得して保存（JV-Link のある PC では JRA-VAN から）
+keibaai entries --date 2026-10-17 --source netkeiba   # netkeiba から取る
 keibaai predict --date 2026-10-17     # 各馬の勝率と期待値を表示
 ```
 
@@ -184,5 +184,8 @@ schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "\"C:\
 - 429/503 が返ったら待って打ち切る。連続実行は避ける
 - ログインやパスワードは扱わない
 
-`keibaai collect`（レース結果）、`keibaai training`（調教の評価 A〜D）、`keibaai pedigree`（血統）は netkeiba からの取得で、
+`keibaai collect`（レース結果）・`entries`（出馬表と単勝オッズ）・`weekly` は、JV-Link のある PC では JRA-VAN から取ります
+（`--source auto` が既定。`--source netkeiba` で netkeiba に戻せます。32bit Python は `C:\Python311-32\` から探し、環境変数 `KEIBAAI_PYTHON32` でも指定できます）。
+画面の「データ取得」「予想」にも取得元の切り替えがあります（既定は JRA-VAN）。
+netkeiba だけから取るのは、`keibaai training`（調教の評価 A〜D。JRA-VAN にない項目）と、買い目ページの全券種のオッズ（JRA-VAN への切り替えは準備中）です。
 成績・血統・調教タイムは JRA-VAN に切り替え済みです。`pedigree` は JRA-VAN の血統と番号が合わないため使いません。

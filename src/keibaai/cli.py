@@ -74,6 +74,25 @@ def warn_if_race_time(now: dt.datetime | None = None) -> bool:
     return hit
 
 
+def resolve_source(source: str, python32: str | None) -> str:
+    """取得元の auto を決める。JV-Link を呼べる PC なら JRA-VAN、そうでなければ netkeiba。"""
+    if source != "auto":
+        return source
+    from . import jvlink
+
+    return "jv" if jvlink.available(python32 or jvlink.PYTHON32) else "netkeiba"
+
+
+def _add_source(parser, what: str) -> None:
+    from .jvlink import PYTHON32, RAW_DIR
+
+    parser.add_argument("--source", choices=["auto", "jv", "netkeiba"], default="auto",
+                        help=f"{what}の取得元。jv は JRA-VAN(JV-Link)で、アクセス間隔の待ちがない。"
+                             "auto(既定)は JV-Link を呼べる PC なら jv、そうでなければ netkeiba")
+    parser.add_argument("--raw", default=RAW_DIR, help="jv: 書き出し先(生データ)")
+    parser.add_argument("--python32", default=PYTHON32, help="jv: pywin32 を入れた32bit Python")
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="keibaai")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -82,6 +101,7 @@ def main(argv=None) -> None:
     c.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD")
     c.add_argument("--db", default="data/keiba.db")
     c.add_argument("--cache", default="data/cache")
+    _add_source(c, "成績")
     r = sub.add_parser("reparse", help="キャッシュ済みページを解析し直してDBを更新（通信なし）")
     r.add_argument("--db", default="data/keiba.db")
     r.add_argument("--cache", default="data/cache")
@@ -92,10 +112,7 @@ def main(argv=None) -> None:
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
     e.add_argument("--cache", default="data/cache")
-    e.add_argument("--source", choices=["netkeiba", "jv"], default="netkeiba",
-                   help="取得元。jv は JRA-VAN の速報(JV-Link)。アクセス間隔の待ちがなく、netkeiba を使わない")
-    e.add_argument("--raw", default="data/jv_raw", help="jv: 書き出し先(生データ)")
-    e.add_argument("--python32", default=r"C:\Python311-32\jvenv\Scripts\python.exe", help="jv: pywin32 を入れた32bit Python")
+    _add_source(e, "出馬表とオッズ")
     e.add_argument("--no-odds", action="store_true", help="jv: オッズを取らず、出馬表だけ保存する(レースごとに開くので時間がかかるため)")
     pd_ = sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
     pd_.add_argument("--db", default="data/keiba.db")
@@ -136,6 +153,7 @@ def main(argv=None) -> None:
     wk.add_argument("--cache", default="data/cache")
     wk.add_argument("--reviews", default="data/reviews", help="回顧のファイルを置くフォルダ")
     wk.add_argument("--today", help="今日の日付(YYYY-MM-DD)。試すとき用")
+    _add_source(wk, "成績と出馬表")
     bt = sub.add_parser("backtest", help="過去のレースで単勝の買い方ルールを再現し、回収率などを表示")
     bt.add_argument("--test-from", required=True, help="この日以後を買う期間にする(YYYY-MM-DD)")
     bt.add_argument("--db", default="data/keiba.db")
@@ -152,34 +170,16 @@ def main(argv=None) -> None:
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
 
-    if args.cmd in ("entries", "collect", "weekly", "pedigree", "bets", "training"):
+    source = resolve_source(getattr(args, "source", "netkeiba"), getattr(args, "python32", None))
+    if args.cmd in ("pedigree", "bets", "training") or (args.cmd in ("entries", "collect", "weekly") and source == "netkeiba"):
         warn_if_race_time()
-    if args.cmd == "entries" and args.source == "jv":
-        import os
-        import subprocess
-        from pathlib import Path
+    if args.cmd == "entries" and source == "jv":
+        from . import jvlink
 
-        from .jventries import import_entries, race_keys
-
-        env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
-        ymd = args.date.replace("-", "")
-        raw = str(Path(args.raw) / "entries")  # 成績の取り込み(jv --what races)が使う RACE.txt と混ぜない
-        week = (dt.date.fromisoformat(args.date) - dt.timedelta(days=7)).strftime("%Y%m%d")
-        # 木曜〜金曜の出走馬名表・出馬表は「今週のデータ」(RACE, option 2)に、当日の出馬表は速報(0B15)に出る。両方取る
-        cmd = [args.python32, "-m", "keibaai.jvexport", "--from", week, "--out", raw, "--option", "2",
-               "--specs", "RACE", "--rt", f"0B15:{ymd}"]
-        if subprocess.run(cmd, env=env).returncode:
-            raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
-        keys = race_keys(raw, args.date)
-        odds_file = Path(raw) / "RT_0B31.txt"
-        if odds_file.exists():
-            odds_file.unlink()  # 前に取った別の日のオッズを混ぜない
-        if keys and not args.no_odds:
-            cmd = [args.python32, "-m", "keibaai.jvexport", "--from", ymd, "--out", raw, "--specs", "--rt",
-                   *[f"0B31:{k}" for k in keys]]
-            if subprocess.run(cmd, env=env).returncode:
-                print("オッズの書き出しに失敗しました。出馬表だけ保存します")
-        n = import_entries(db.connect(args.db), raw, args.date, dt.datetime.now().isoformat(timespec="seconds"))
+        try:
+            n = jvlink.fetch_entries(db.connect(args.db), args.date, not args.no_odds, args.raw, args.python32)
+        except jvlink.JVError as e:
+            raise SystemExit(str(e))
         if not n:
             print(f"{args.date} の出馬表は、馬番がまだ確定していないか、まだ出ていません(馬番は枠順の発表後に入ります)")
         print(f"done: {n} races")
@@ -279,7 +279,8 @@ def main(argv=None) -> None:
         from .weekly import run_weekly
 
         today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
-        out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews)
+        out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews,
+                         jv=(args.raw, args.python32) if source == "jv" else None)
         print(f"reviewed: {', '.join(out['reviewed']) or 'なし'}")
         for d, n in out["forecast"].items():
             print(f"forecast {d}: {n}頭" if n else f"forecast {d}: 出馬表がまだありません")
@@ -344,6 +345,16 @@ def main(argv=None) -> None:
         return
 
     conn = db.connect(args.db)
+    if source == "jv":
+        from . import jvlink
+
+        try:
+            n_race, n_res = jvlink.fetch_results(conn, dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end),
+                                                 args.raw, args.python32)
+        except jvlink.JVError as e:
+            raise SystemExit(str(e))
+        print(f"done: {n_race} races ({n_res} 頭)")
+        return
     fetcher = Fetcher(cache_dir=args.cache)
     total = 0
     failures: list[str] = []

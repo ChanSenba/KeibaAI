@@ -43,12 +43,16 @@ def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.date
     return len(t)
 
 
-def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datetime | None = None) -> int:
-    """出馬表を取り直して予想を作り、保存する。出馬表がまだなら 0 を返す。"""
+def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datetime | None = None,
+                 jv: tuple[str, str] | None = None) -> int:
+    """出馬表を取り直して予想を作り、保存する。出馬表がまだなら 0 を返す。jv=(書き出し先, 32bit Python) なら JRA-VAN から取る。"""
+    from . import jvlink
     from .predict import fetch_entries, predict_day
 
     now = now or dt.datetime.now()
-    if fetch_entries(conn, fetcher, date.isoformat(), now=now) == 0:
+    n = (jvlink.fetch_entries(conn, date.isoformat(), True, jv[0], jv[1], now=now) if jv
+         else fetch_entries(conn, fetcher, date.isoformat(), now=now))
+    if n == 0:
         return 0
     return save_predictions(conn, predict_day(conn, date.isoformat()), now)
 
@@ -138,8 +142,12 @@ def render_markdown(r: Review) -> str:
 
 
 def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: str | Path,
-               now: dt.datetime | None = None) -> dict:
-    """毎週の処理。何度実行しても、済んだ分は飛ばす(木〜金と月曜の両方に同じ命令を登録できる)。"""
+               now: dt.datetime | None = None, jv: tuple[str, str] | None = None) -> dict:
+    """毎週の処理。何度実行しても、済んだ分は飛ばす(木〜金と月曜の両方に同じ命令を登録できる)。
+
+    jv=(書き出し先, 32bit Python) なら、成績と出馬表を JRA-VAN から取る(なければ netkeiba)。
+    """
+    from . import jvlink
     from .cli import collect_day
 
     now = now or dt.datetime.now()
@@ -147,13 +155,17 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
     reviews_dir.mkdir(parents=True, exist_ok=True)
     out = {"reviewed": [], "forecast": {}}
     for d in unreviewed_dates(conn, today, reviews_dir):
-        collect_day(conn, fetcher, d.replace("-", ""))
+        if jv:
+            day = dt.date.fromisoformat(d)
+            jvlink.fetch_results(conn, day, day, jv[0], jv[1], today=today)
+        else:
+            collect_day(conn, fetcher, d.replace("-", ""))
         r = review_day(conn, d)
         if r.summary["races"]:  # 結果がまだなら、次回に回す
             (reviews_dir / f"{d}.md").write_text(render_markdown(r), encoding="utf-8")
             out["reviewed"].append(d)
     for d in _upcoming_weekend(today):
-        out["forecast"][d.isoformat()] = forecast_day(conn, fetcher, d, now)
+        out["forecast"][d.isoformat()] = forecast_day(conn, fetcher, d, now, jv)
     return out
 
 
