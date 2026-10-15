@@ -129,8 +129,10 @@ def main(argv=None) -> None:
     tr_.add_argument("--date", help="YYYY-MM-DD。出馬表を取った日のレースだけ取り直す(発走前の予想用)")
     tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
     jv_ = sub.add_parser("jv", help="JRA-VAN から取り込む(調教タイム・過去の成績・血統)。32bit Python で JV-Link から書き出し、DB に入れる")
-    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree"], default=["training"],
-                     help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(上書き)")
+    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree", "blood"], default=["training"],
+                     help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(上書き)、"
+                          "blood=血統データ(父の系統 sire_line と5代血統 pedigree5。先に pedigree を入れておく)")
+    jv_.add_argument("--blood-from", default="19860101", help="blood: 取得を始める日 YYYYMMDD(血統は全期間が要る)")
     jv_.add_argument("--replace", action="store_true",
                      help="races: すでに DB にあるレースも JRA-VAN の内容で入れ替える(既定は、無いレースだけ足す)")
     jv_.add_argument("--rt-days", type=int, default=0,
@@ -244,18 +246,32 @@ def main(argv=None) -> None:
         from .jvrace import import_pedigree, import_races
         from .jvtraining import import_raw
 
+        import time
+
+        from . import jvexport
+        from .jvblood import import_blood
+
         specs = {"training": ["SLOP", "WOOD"], "races": ["RACE"], "pedigree": ["DIFN"]}
         if not args.import_only:
             src = str(Path(__file__).resolve().parent.parent)
             env = {**os.environ, "PYTHONPATH": src}
-            cmd = [args.python32, "-m", "keibaai.jvexport", "--from", args.from_date, "--out", args.raw,
-                   "--option", str(args.option), "--specs", *[s for w in args.what for s in specs[w]]]
-            if "races" in args.what and args.rt_days > 0:
-                today = dt.date.today()
-                days = [today - dt.timedelta(days=i) for i in range(args.rt_days - 1, -1, -1)]
-                cmd += ["--rt", *[f"0B15:{d:%Y%m%d}" for d in days]]
-            if subprocess.run(cmd, env=env).returncode:
-                raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
+            runs = []
+            if [w for w in args.what if w in specs]:
+                cmd = [args.python32, "-m", "keibaai.jvexport", "--from", args.from_date, "--out", args.raw,
+                       "--option", str(args.option), "--specs", *[s for w in args.what for s in specs.get(w, [])]]
+                if "races" in args.what and args.rt_days > 0:
+                    today = dt.date.today()
+                    days = [today - dt.timedelta(days=i) for i in range(args.rt_days - 1, -1, -1)]
+                    cmd += ["--rt", *[f"0B15:{d:%Y%m%d}" for d in days]]
+                runs.append(cmd)
+            if "blood" in args.what:  # 血統は取得を始める日が違うので、別に書き出す
+                runs.append([args.python32, "-m", "keibaai.jvexport", "--from", args.blood_from, "--out", args.raw,
+                             "--option", str(args.option), "--specs", "BLDN"])
+            for i, cmd in enumerate(runs):
+                if i:
+                    time.sleep(jvexport.RT_INTERVAL)  # 続けて開き直すと JV-Link の内部サービスが落ちることがあった
+                if subprocess.run(cmd, env=env).returncode:
+                    raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
         conn = db.connect(args.db)
         if "training" in args.what:
             print(f"done: 調教 {import_raw(conn, args.raw)} 件を取り込みました")
@@ -266,6 +282,14 @@ def main(argv=None) -> None:
             print(f"done: 成績 {n_race} レース・{n_res} 頭を取り込みました")
         if "pedigree" in args.what:
             print(f"done: 血統 {import_pedigree(conn, args.raw)} 頭を取り込みました")
+        if "blood" in args.what:
+            r = import_blood(conn, args.raw)
+            if not r["horses"]:
+                print("done: 血統データ(BLDN.txt)がありませんでした")
+            else:
+                print(f"done: 5代血統 {r['horses']} 頭(先祖の欠け {r['missing_rate']:.1%})、"
+                      f"父の系統 {r['sire_line']}/{r['pedigree']} 頭を取り込みました")
+                print("  多い系統: " + "、".join(f"{k} {v}" for k, v in r["top_lines"]))
         return
     if args.cmd == "training":
         from .training import collect_training, fetch_entry_training, pending_race_ids, reparse_training
