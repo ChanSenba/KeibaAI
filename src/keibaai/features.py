@@ -25,12 +25,16 @@ BASE_FEATURES = [
 MARKET_FEATURES = ["win_odds", "popularity"]
 # 記事(予想ファクター)に沿った特徴量。すべて「そのレースより前」の情報だけで作る
 APTITUDE_FEATURES = ["horse_ct_top3_rate", "horse_venue_top3_rate", "horse_dir_top3_rate", "horse_ground_top3_rate",
-                     "prev_same_ct_finish"]
+                     "prev_same_ct_finish",
+                     # 組み合わせの条件: 競馬場×芝ダ×距離帯のコース、芝ダ×馬場状態、同じレース名。件数も付ける
+                     "horse_course_top3_rate", "horse_course_n", "horse_ctground_top3_rate",
+                     "horse_race_top3_rate", "horse_race_n"]
 FORM_FEATURES = ["l3f_rank_3", "time_diff_5", "pos_gain_3", "bw_vs_avg", "weight_ratio", "weight_change",
                  "prev_pop_gap", "dist_shorten300", "dist_extend300"]
 ROTATION_FEATURES = ["weeks_since_last", "is_layoff", "runs_since_layoff", "is_renso"]
 HUMAN_EXTRA = ["jockey_ct_top3_rate", "jockey_dist_top3_rate", "jockey_venue_top3_rate", "jockey_roi",
-               "pair_n", "pair_top3_rate", "tj_n", "tj_top3_rate"]
+               "pair_n", "pair_top3_rate", "tj_n", "tj_top3_rate",
+               "jockey_course_top3_rate", "jockey_course_n", "jockey_ctground_top3_rate", "jockey_class_top3_rate"]
 PACE_FEATURES = ["style_front_rate", "style_closer_rate", "n_front_runners", "front_share", "field_style_mean",
                  "style_vs_field", "inner_pos"]
 # ラップ: 過去のレースのペース(前半3F − 後半3F。正なら後傾=スロー)と、自分の上がりが場のラップよりどれだけ速かったか
@@ -165,6 +169,11 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     for col, key in (("horse_ct_top3_rate", "course_type"), ("horse_venue_top3_rate", "venue"),
                      ("horse_dir_top3_rate", "direction"), ("horse_ground_top3_rate", "ground")):
         df[col] = _expanding_rate(df, ["horse_id", key], "top3")[1]
+    df["dist_bucket_s"] = df["dist_bucket"].astype("float")
+    course = ["venue", "course_type", "dist_bucket_s"]
+    df["horse_course_n"], df["horse_course_top3_rate"] = _expanding_rate(df, ["horse_id", *course], "top3")
+    df["horse_ctground_top3_rate"] = _expanding_rate(df, ["horse_id", "course_type", "ground"], "top3")[1]
+    df["horse_race_n"], df["horse_race_top3_rate"] = _expanding_rate(df, ["horse_id", "race_name"], "top3")
     same_ct = df.groupby(["horse_id", "course_type"], sort=False)["finish"]
     df["prev_same_ct_finish"] = same_ct.shift(1)
 
@@ -192,10 +201,12 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["is_renso"] = (df["days_since_last"] <= 8).astype(float).where(df["days_since_last"].notna())
 
     # --- 騎手・厩舎(同じ日の他レースは含めない) ---
-    df["dist_bucket_s"] = df["dist_bucket"].astype("float")
     df["jockey_ct_top3_rate"] = _expanding_rate(df, ["jockey_id", "course_type"], "top3")[1]
     df["jockey_dist_top3_rate"] = _expanding_rate(df, ["jockey_id", "dist_bucket_s"], "top3")[1]
     df["jockey_venue_top3_rate"] = _expanding_rate(df, ["jockey_id", "venue"], "top3")[1]
+    df["jockey_course_n"], df["jockey_course_top3_rate"] = _expanding_rate(df, ["jockey_id", *course], "top3")
+    df["jockey_ctground_top3_rate"] = _expanding_rate(df, ["jockey_id", "course_type", "ground"], "top3")[1]
+    df["jockey_class_top3_rate"] = _expanding_rate(df, ["jockey_id", "race_class"], "top3")[1]
     df["_ret"] = df["win"] * df["win_odds"]  # 単勝を買い続けたときの払戻(倍)。オッズがなければ NaN
     df["jockey_roi"] = _expanding_rate(df, "jockey_id", "_ret")[1]
     df["pair_n"], df["pair_top3_rate"] = _expanding_rate(df, ["horse_id", "jockey_id"], "top3")
