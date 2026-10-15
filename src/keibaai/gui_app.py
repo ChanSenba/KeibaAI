@@ -435,11 +435,13 @@ def page_predict() -> None:
         key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
         top = table.dropna(subset=[key]).nlargest(8, key)
         with st.container(border=True):
-            st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R")[
-                ["race", "mark", "star", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market",
+            st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R",
+                       course=top.apply(gui.course_text, axis=1))[
+                ["race", "course", "mark", "star", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market",
                  "ev_ability", "ev_market"]].style.map(mark_style, subset=["mark"]),
                 hide_index=True, width="stretch", column_config={
-                    **PRED_COLUMNS, "race": st.column_config.TextColumn("レース", help="競馬場とレース番号")})
+                    **PRED_COLUMNS, "race": st.column_config.TextColumn("レース", help="競馬場とレース番号"),
+                    "course": st.column_config.TextColumn("コース", help="芝・ダート、回り、距離")})
             st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
                        "過去のレースでの検証はこれからで、今は参考表示です。")
 

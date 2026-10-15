@@ -119,7 +119,7 @@ def entries_summary(conn: sqlite3.Connection, date: str) -> dict:
 def day_races(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     """出馬表を取得済みのレース一覧。競馬場は race_id の場コード順(札幌→小倉)、その中はレース番号順。"""
     return pd.read_sql_query(
-        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.distance, c.ground, c.start_time, "
+        "SELECT c.race_id, c.venue, c.round, c.name, c.course_type, c.direction, c.distance, c.ground, c.start_time, "
         "COUNT(e.number) AS runners FROM entry_races c LEFT JOIN entries e USING (race_id) "
         "WHERE c.date = ? GROUP BY c.race_id ORDER BY substr(c.race_id, 5, 2), c.round",
         conn, params=(date,),
@@ -190,17 +190,28 @@ def text_or_blank(v) -> str:
     return "" if v is None or v != v else str(v)
 
 
+def course_text(race) -> str:
+    """コースの表記。芝・ダート(障害)、回り(左回り・右回り・直線)、距離。例: 芝・左回り 1600m。"""
+    distance = pd.to_numeric(race.get("distance"), errors="coerce")
+    kind = text_or_blank(race.get("course_type"))
+    way = text_or_blank(race.get("direction"))
+    way = way if way == "直線" else (f"{way}回り" if way else "")
+    parts = [p for p in (kind, way) if p]
+    head = "・".join(parts)
+    far = f"{int(distance)}m" if distance == distance else ""
+    return f"{head} {far}".strip()
+
+
 def race_head_html(race) -> str:
-    """レース番号・名前・条件の見出しの HTML。出馬表に欠けた項目(レース名など)があっても落ちない。"""
+    """競馬場・レース番号・名前・コースの見出しの HTML。出馬表に欠けた項目(レース名など)があっても落ちない。"""
     import html
 
-    distance = pd.to_numeric(race.get("distance"), errors="coerce")
     runners = pd.to_numeric(race.get("runners"), errors="coerce")
     start = text_or_blank(race.get("start_time"))
-    meta = [f"{text_or_blank(race.get('course_type'))}{int(distance)}m" if distance == distance else None,
-            text_or_blank(race.get("ground")), f"{start} 発走" if start else None,
+    meta = [course_text(race), text_or_blank(race.get("ground")), f"{start} 発走" if start else None,
             f"{int(runners)}頭" if runners == runners else None]
-    return (f'<div class="kb-race-head"><span class="kb-race-no">{int(race["round"])}R</span>'
+    place = f"{text_or_blank(race.get('venue'))}{int(race['round'])}R"
+    return (f'<div class="kb-race-head"><span class="kb-race-no">{html.escape(place)}</span>'
             f'<span class="kb-race-name">{html.escape(text_or_blank(race.get("name")))}</span></div>'
             f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
 

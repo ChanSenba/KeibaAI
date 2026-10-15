@@ -144,10 +144,13 @@ def test_backtest_run_returns_table_and_curves():
 def test_race_head_html_survives_missing_fields():
     import pandas as pd
 
-    full = pd.Series({"round": 11, "name": "スワンS", "course_type": "芝", "distance": 1400, "ground": "良",
-                      "start_time": "15:45", "runners": 18})
-    assert "スワンS" in gui.race_head_html(full) and "芝1400m ・ 良 ・ 15:45 発走 ・ 18頭" in gui.race_head_html(full)
-    empty = pd.Series({"round": 1, "name": float("nan"), "course_type": None, "distance": float("nan"),
+    full = pd.Series({"venue": "京都", "round": 11, "name": "スワンS", "course_type": "芝", "direction": "右",
+                      "distance": 1400, "ground": "良", "start_time": "15:45", "runners": 18})
+    out = gui.race_head_html(full)
+    assert "京都11R" in out and "スワンS" in out and "芝・右回り 1400m ・ 良 ・ 15:45 発走 ・ 18頭" in out
+    assert gui.course_text(pd.Series({"course_type": "芝", "direction": "直線", "distance": 1000})) == "芝・直線 1000m"
+    assert gui.course_text(pd.Series({"course_type": "障", "direction": None, "distance": 2910})) == "障 2910m"
+    empty = pd.Series({"venue": None, "round": 1, "name": float("nan"), "course_type": None, "distance": float("nan"),
                        "ground": float("nan"), "start_time": float("nan"), "runners": float("nan")})
     out = gui.race_head_html(empty)
     assert "1R" in out and "nan" not in out and "None" not in out
