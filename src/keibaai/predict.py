@@ -123,8 +123,10 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
         rows = conn.execute(
             "SELECT e.* FROM entries e JOIN entry_races c USING (race_id) WHERE c.date = ? ORDER BY e.race_id, e.number",
             (date,)).fetchall()
-        races = conn.execute("SELECT * FROM entry_races WHERE date = ? ORDER BY race_id", (date,)).fetchall()
-        parts += [rows, [r[:-1] for r in races]]  # 取得時刻(最後の列)だけ変わっても、中身が同じなら使い回す
+        # 取得時刻だけ変わっても、中身が同じなら使い回す(列はあとから足されるので、名前で外す)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(entry_races)") if r[1] != "fetched_at"]
+        races = conn.execute(f"SELECT {','.join(cols)} FROM entry_races WHERE date = ? ORDER BY race_id", (date,)).fetchall()
+        parts += [rows, races]
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, default=str).encode()).hexdigest()[:20]
 
 

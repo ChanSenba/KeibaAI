@@ -53,7 +53,7 @@ def test_bytes_round_trip():
 def test_parse_race():
     r = parse_ra(ra())
     assert r == ("202605040111", "富士ステークス(GII)", "2026-10-03", "東京", 11, "芝", "左", 1600, "晴", "稍重",
-                 "15:45", "12.3-11.0-11.8", 34.5, 33.9)
+                 "15:45", "12.3-11.0-11.8", 34.5, 33.9, None)
     assert parse_class(r[1]) == 7.0
 
 
@@ -142,3 +142,11 @@ def test_import_without_files_does_nothing(tmp_path):
     assert import_races(conn, tmp_path) == (0, 0)
     assert import_pedigree(conn, tmp_path) == 0
     assert conn.execute("SELECT COUNT(*) FROM pedigree").fetchone()[0] == 1
+
+
+def test_course_inner_outer_from_track_code():
+    assert parse_ra(ra(track="18", race="2026100308040111"))[3:7] == ("京都", 11, "芝", "右")
+    assert parse_ra(ra(track="18", race="2026100308040111"))[14] == "外"
+    assert parse_ra(ra(track="17", race="2026100308040111"))[14] == "内"  # 京都は内外の別がある
+    assert parse_ra(ra(track="11"))[14] is None  # 東京は内外の別がない
+    assert parse_ra(ra(track="20", race="2026100306040111"))[14] == "外-内"

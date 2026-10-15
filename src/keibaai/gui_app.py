@@ -194,8 +194,10 @@ def _show_progress(kind: str) -> None:
             c2.markdown(":green[:material/play_circle: 動いています]")
         elif p.last_saved is None:
             c2.markdown(":gray[:material/hourglass_empty: まだ始まっていません]")
-        else:  # 調教の評価は、JRA-VAN の調教タイムが入ったので全レースぶん集める必要がなく、止めてある
-            c2.markdown(":gray[:material/pause_circle: 止めています]")
+        elif p.total and p.done >= p.total:
+            c2.markdown(":green[:material/check_circle: 完了]")
+        else:
+            c2.markdown(":orange[:material/pause_circle: 止まっています]")
         if p.fraction is not None:
             st.progress(p.fraction, f"{p.done:,} / {p.total:,}  ({p.fraction:.0%})")
         else:
@@ -231,7 +233,7 @@ def page_progress() -> None:
 
     body()
     st.caption(":material/info: 総数は DB から1時間に1回だけ読み取り専用で読みます。"
-               "下の「調教の評価」は netkeiba からの任意の取得で、JRA-VAN の調教タイムが入ったので止めてあります。")
+               "「調教の評価」(短評と A〜D)は netkeiba からの取得です(JRA-VAN にはない項目)。")
 
 
 # ---------------------------------------------------------------- 再解析

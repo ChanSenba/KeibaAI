@@ -63,3 +63,9 @@ def test_course_variants(text, dist):
 def test_trainer_name_keeps_leading_character_that_looks_like_a_region():
     html = HTML.replace("[西] 友道康夫", "[東] 西村真幸")
     assert parse_race(html, "202405050812").results[0].trainer == "西村真幸"
+
+
+@pytest.mark.parametrize("text,course", [("芝右 外1600m", "外"), ("障芝外-内3170m", "外-内"), ("芝右外2周3200m", "外2周"),
+                                         ("芝左2400m", None)])
+def test_course_inner_outer(text, course):
+    assert parse_race(HTML.replace("芝左2400m", text), "202408060704").race.course == course
