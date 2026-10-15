@@ -134,3 +134,42 @@ def test_ability_model_uses_the_shrunk_trainer_jockey_rate(raw):
     assert "tj_top3_rate" in MARKET_MODEL_FEATURES and "tj_top3_shr" not in MARKET_MODEL_FEATURES
     df = candidates(raw)  # 検証用の計算(k ごと)と、予想に使う列が一致する
     assert np.allclose(df["tj_top3_shr"], df[f"tj_top3_shr{TJ_SHRINK_K}"], equal_nan=True)
+
+
+def test_gen_side_of_five_generation_positions():
+    assert ft._gen_side(1) == (1, 1) and ft._gen_side(2) == (1, 2)
+    assert ft._gen_side(7) == (3, 1) and ft._gen_side(13) == (3, 2)
+    assert ft._gen_side(31) == (5, 1) and ft._gen_side(62) == (5, 2)
+
+
+def test_cross_by_hand():
+    ped5 = pd.DataFrame({"horse_id": ["H"] * 6 + ["G"] * 2,
+                         "pos": [1, 2, 7, 13, 31, 61, 7, 8],
+                         "ancestor_id": ["S", "D", "X", "X", "Y", "Y", "X", "X"]})
+    out = ft.cross_features(ped5).set_index("horse_id")
+    # H: X が 3×3(25%)、Y が 5×5(6.25%)。G は父側だけに2回なのでクロスではない
+    assert out.loc["H", "cross_n"] == 2 and out.loc["H", "cross_max_pct"] == pytest.approx(25.0)
+    assert out.loc["H", "cross_min_gensum"] == 6
+    assert out.loc["G", "cross_n"] == 0 and np.isnan(out.loc["G", "cross_min_gensum"])
+
+
+def test_pedigree_candidates_use_only_earlier_days(raw):
+    horses = raw["horse_id"].unique()
+    ped = pd.DataFrame({"horse_id": horses, "sire_id": [f"s{i % 5}" for i in range(len(horses))],
+                        "sire_line": [f"L{i % 3}系" for i in range(len(horses))]})
+    ped5 = pd.DataFrame({"horse_id": np.repeat(horses, 2), "pos": [7, 13] * len(horses),
+                         "ancestor_id": ["X", "X"] * len(horses)})
+    r = raw.drop(columns=["sire_id", "damsire_id"], errors="ignore").merge(
+        ped[["horse_id", "sire_id"]], on="horse_id").assign(damsire_id=lambda d: d["sire_id"])
+    day = r["date"].sort_values().unique()[30]
+    a = ft.add_pedigree_candidates(candidates(r), ped, ped5)
+    b_raw = r.copy()
+    m = b_raw["date"] >= day
+    b_raw.loc[m, "finish"] = np.random.default_rng(4).integers(1, 11, int(m.sum()))
+    b = ft.add_pedigree_candidates(candidates(b_raw), ped, ped5)
+    cols = ft.LINE_COLUMNS + ft.WET_COLUMNS + ft.CROSS_COLUMNS
+    keep = a["date"] <= day
+    ka = a[keep].sort_values(["race_id", "number"])[cols].reset_index(drop=True)
+    kb = b[keep].sort_values(["race_id", "number"])[cols].reset_index(drop=True)
+    pd.testing.assert_frame_equal(ka, kb)
+    assert a["line_ctdist_top3_shr"].notna().mean() > 0.9 and (a["cross_max_pct"] == 25.0).all()

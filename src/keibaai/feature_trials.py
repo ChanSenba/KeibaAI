@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import time
@@ -301,6 +302,106 @@ def more_variants() -> dict[str, tuple[list[str], list[str]]]:
     }
 
 
+# ---------------------------------------------------------------- 血統(父の系統・雨の日・クロス)
+
+def _gen_side(pos: int) -> tuple[int, int]:
+    """5代血統の位置 pos(1=父, 2=母, 親は 2k+1・2k+2)の、世代(1〜5)と、父側(1)か母側(2)か。"""
+    gen, p = 1, pos
+    while p > 2:
+        p = (p - 1) // 2
+        gen += 1
+    return gen, p
+
+
+def cross_features(ped5: pd.DataFrame) -> pd.DataFrame:
+    """5代血統から、父側と母側の両方に出る先祖(クロス)の血量。
+
+    血量は、出てくる位置ごとに (1/2)^世代 を足したもの(5×3 なら 1/32 + 1/8 = 15.6%)。
+    cross_max_pct: いちばん濃いクロスの血量(%)。cross_n: クロスになる先祖の数。
+    cross_min_gensum: いちばん近いクロスの世代の和(3×4 なら 7。小さいほど近い)。
+    """
+    d = ped5.dropna(subset=["ancestor_id"]).copy()
+    d = d[d["ancestor_id"].astype(str).str.strip() != ""]
+    gs = d["pos"].astype(int).map(_gen_side)
+    d["gen"], d["side"] = gs.str[0], gs.str[1]
+    d["w"] = 0.5 ** d["gen"]
+    d["g1"] = d["gen"].where(d["side"] == 1)
+    d["g2"] = d["gen"].where(d["side"] == 2)
+    a = d.groupby(["horse_id", "ancestor_id"]).agg(both=("side", "nunique"), pct=("w", "sum"),
+                                                   g1=("g1", "min"), g2=("g2", "min")).reset_index()
+    a = a[a["both"] == 2]
+    out = a.groupby("horse_id").agg(cross_max_pct=("pct", "max"), cross_n=("ancestor_id", "count"))
+    out["cross_max_pct"] *= 100
+    out["cross_min_gensum"] = (a["g1"] + a["g2"]).groupby(a["horse_id"]).min()
+    horses = pd.Index(ped5["horse_id"].unique(), name="horse_id")
+    out = out.reindex(horses)
+    out["cross_n"] = out["cross_n"].fillna(0.0)
+    out["cross_max_pct"] = out["cross_max_pct"].fillna(0.0)
+    return out.reset_index()
+
+
+def add_pedigree_candidates(df: pd.DataFrame, ped: pd.DataFrame, ped5: pd.DataFrame | None) -> pd.DataFrame:
+    """父の系統・母の父の系統ごとの成績(雨の日=芝ダ×馬場状態を含む)と、クロス。
+
+    ped は pedigree 表(horse_id, sire_id, sire_line)。母の父の系統は、その馬を父に持つ馬の sire_line から引く。
+    率はどれも『そのレースより前』だけで、回数が少ないときは全体の率に寄せる(k=50)。
+    """
+    line = ped.dropna(subset=["sire_line"]).drop_duplicates("horse_id").set_index("horse_id")["sire_line"]
+    df = df.copy()
+    df["sire_line"] = df["horse_id"].map(line)
+    by_sire = ped.dropna(subset=["sire_line", "sire_id"]).groupby("sire_id")["sire_line"].agg(lambda s: s.mode().iloc[0])
+    df["damsire_line"] = df["damsire_id"].map(by_sire)
+    df["_all"] = 0
+    prior = _expanding_rate(df, "_all", "top3")[1]
+    df["_db"] = df["dist_bucket"].astype(float)
+    wet = df["ground"].astype(object).map({"良": 0, "稍重": 1, "重": 2, "不良": 2})
+    df["_wet"] = wet
+    cols = {}
+    k = 50
+    cols["line_top3_shr"] = shrunk_rate(df, ["sire_line"], "top3", k, prior)
+    cols["line_ctdist_top3_shr"] = shrunk_rate(df, ["sire_line", "course_type", "_db"], "top3", k, prior)
+    cols["damline_ctdist_top3_shr"] = shrunk_rate(df, ["damsire_line", "course_type", "_db"], "top3", k, prior)
+    cols["line_ctwet_top3_shr"] = shrunk_rate(df, ["sire_line", "course_type", "_wet"], "top3", k, prior)
+    cols["damline_ctwet_top3_shr"] = shrunk_rate(df, ["damsire_line", "course_type", "_wet"], "top3", k, prior)
+    # 道悪の日の系統の成績から、良馬場での成績を引いた差(道悪の得意・不得意)
+    good = shrunk_rate(df.assign(_wet=0), ["sire_line", "course_type", "_wet"], "top3", k, prior)
+    cols["line_wet_gain"] = (cols["line_ctwet_top3_shr"] - good).where(df["_wet"] > 0)
+    for c in cols:
+        src = "damsire_line" if c.startswith("damline") else "sire_line"
+        cols[c] = cols[c].where(df[src].notna())
+    out = pd.concat([df.drop(columns=["_all", "_db", "_wet"]), pd.DataFrame(cols, index=df.index)], axis=1)
+    if ped5 is not None and len(ped5):
+        out = out.merge(cross_features(ped5), on="horse_id", how="left")
+    for c in CROSS_COLUMNS:
+        if c not in out:
+            out[c] = np.nan
+    return out
+
+
+LINE_COLUMNS = ["line_top3_shr", "line_ctdist_top3_shr", "damline_ctdist_top3_shr"]
+WET_COLUMNS = ["line_ctwet_top3_shr", "damline_ctwet_top3_shr", "line_wet_gain"]
+CROSS_COLUMNS = ["cross_max_pct", "cross_n", "cross_min_gensum"]
+
+
+def pedigree_variants() -> dict[str, tuple[list[str], list[str]]]:
+    return {
+        "base": ([], []),
+        "父の系統・母の父の系統(コース・距離帯ごとの成績)": (LINE_COLUMNS, []),
+        "雨の日の血統(系統×芝ダ×馬場状態)": (WET_COLUMNS, []),
+        "クロス(5代血統の血量)": (CROSS_COLUMNS, []),
+        "血統の候補すべて": (LINE_COLUMNS + WET_COLUMNS + CROSS_COLUMNS, []),
+    }
+
+
+def load_pedigree(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    ped = pd.read_sql_query("SELECT * FROM pedigree", conn)
+    if "sire_line" not in ped:
+        ped["sire_line"] = np.nan
+    has5 = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pedigree5'").fetchone()
+    ped5 = pd.read_sql_query("SELECT horse_id, pos, ancestor_id FROM pedigree5", conn) if has5 else None
+    return ped, ped5
+
+
 # ---------------------------------------------------------------- 比べ方
 
 def _fit_predict(train: pd.DataFrame, test: pd.DataFrame, features: list[str], seed: int, rounds: int) -> np.ndarray:
@@ -357,7 +458,8 @@ def run(df: pd.DataFrame, variants: dict[str, tuple[list[str], list[str]]], seed
                 feats = variant_features(base, add, drop)
                 per_seed, race_ll = [], []
                 for s in range(seeds):
-                    key = f"{period}|{int(market)}|{name}|{s}"
+                    fhash = hashlib.sha1("|".join(feats).encode()).hexdigest()[:10]  # 特徴量の組が変われば別の保存
+                    key = f"{period}|{int(market)}|{fhash}|{s}"
                     ll_file = out_dir / f"ll_{key.replace('|', '_')}.pkl"
                     if key in cache and ll_file.exists():
                         per_seed.append(cache[key])
@@ -372,7 +474,7 @@ def run(df: pd.DataFrame, variants: dict[str, tuple[list[str], list[str]]], seed
                     cache_file.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
                     per_seed.append(m)
                     race_ll.append(rl)
-                    print(f"  {key}: AUC {m['auc']:.4f} LL {m['logloss']:.5f} ({time.time() - t0:.0f}s)", flush=True)
+                    print(f"  {period} {'オッズあり' if market else '能力のみ'} {name} 乱数{s}: AUC {m['auc']:.4f} LL {m['logloss']:.5f} ({time.time() - t0:.0f}s)", flush=True)
                 avg = {k: float(np.mean([m[k] for m in per_seed])) for k in per_seed[0]}
                 rl_mean = sum(race_ll) / len(race_ll)
                 if name == "base":
@@ -454,7 +556,9 @@ def prepare(conn: sqlite3.Connection) -> pd.DataFrame:
     q = market_top3(df, TEST_PERIODS[0])
     df = add_bias_candidates(df, q)
     df = add_affinity_candidates(df)
-    return add_more_candidates(df)
+    df = add_more_candidates(df)
+    ped, ped5 = load_pedigree(conn)
+    return add_pedigree_candidates(df, ped, ped5)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -463,7 +567,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="data/feature_trials")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--rounds", type=int, default=300)
-    ap.add_argument("--only", choices=["bias", "affinity", "more"], default=None)
+    ap.add_argument("--only", choices=["bias", "affinity", "more", "pedigree"], default=None)
     args = ap.parse_args(argv)
 
     out = Path(args.out)
@@ -473,7 +577,7 @@ def main(argv: list[str] | None = None) -> None:
     df = prepare(conn)
     print(f"特徴量を作りました: {len(df):,} 行, {time.time() - t0:.0f}s", flush=True)
     cand = [c for c in BIAS_COLUMNS + ["tj_top3_shr10", "js_top3_shr10", "ts_top3_shr10", "js_n"] + MORE_COLUMNS
-            if c in df]
+            + LINE_COLUMNS + WET_COLUMNS + CROSS_COLUMNS if c in df]
     print(df.loc[df["date"] >= TEST_PERIODS[0], cand].describe().T[["count", "mean", "std"]].to_string(), flush=True)
 
     parts = []
@@ -487,6 +591,9 @@ def main(argv: list[str] | None = None) -> None:
         parts.append((f"相性: k={k} での版と、騎手×種牡馬・調教師×種牡馬", r2))
     if args.only in (None, "more"):
         parts.append(("設計スレッドの足せるもの", run(df, more_variants(), args.seeds, args.rounds, out, TEST_PERIODS)))
+    if args.only in (None, "pedigree"):
+        parts.append(("血統: 父の系統・雨の日・クロス", run(df, pedigree_variants(), args.seeds, args.rounds, out,
+                                                     TEST_PERIODS)))
     text = "\n\n".join(f"## {title}\n{to_markdown(r)}" for title, r in parts)
     (out / "results.md").write_text(text, encoding="utf-8")
     pd.concat([r.assign(part=t) for t, r in parts]).to_csv(out / "results.csv", index=False, encoding="utf-8-sig")
