@@ -31,7 +31,10 @@ APTITUDE_FEATURES = ["horse_ct_top3_rate", "horse_venue_top3_rate", "horse_dir_t
                      "horse_race_top3_rate", "horse_race_n"]
 FORM_FEATURES = ["l3f_rank_3", "time_diff_5", "pos_gain_3", "bw_vs_avg", "weight_ratio", "weight_change",
                  "prev_pop_gap", "dist_shorten300", "dist_extend300"]
-ROTATION_FEATURES = ["weeks_since_last", "is_layoff", "runs_since_layoff", "is_renso"]
+ROTATION_FEATURES = ["weeks_since_last", "is_layoff", "runs_since_layoff", "is_renso",
+                     # 前走の内容(タイム差・前半のペース・距離)と、今回までの間隔の組み合わせ
+                     "prev_time_diff", "prev_pace_z", "prev_distance", "hard_prev", "load_x_short", "load_per_day",
+                     "hard_prev_short", "dist_x_short"]
 HUMAN_EXTRA = ["jockey_ct_top3_rate", "jockey_dist_top3_rate", "jockey_venue_top3_rate", "jockey_roi",
                "pair_n", "pair_top3_rate", "tj_n", "tj_top3_rate",
                "jockey_course_top3_rate", "jockey_course_n", "jockey_ctground_top3_rate", "jockey_class_top3_rate"]
@@ -199,6 +202,21 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     seg = new_seg.groupby(h).cumsum()
     df["runs_since_layoff"] = df.groupby([h, seg]).cumcount() + 1  # 休み明け(または初戦)を1とする
     df["is_renso"] = (df["days_since_last"] <= 8).astype(float).where(df["days_since_last"].notna())
+    # 前走の内容。タイム差は勝ち馬との差(秒)、前半3Fは同じ芝ダ・距離帯の中でのz値(小さいほど速いペース)
+    first3f = pd.to_numeric(df["pace_first3f"], errors="coerce")  # DB の NULL は object で来る
+    pace_grp = first3f.groupby([df["course_type"], df["dist_bucket"]], observed=True)
+    pace_z = ((first3f - pace_grp.transform("mean")) / pace_grp.transform("std")).astype(float)
+    df["prev_time_diff"] = df.groupby("horse_id", sort=False)["time_diff"].shift(1).astype(float)
+    df["prev_pace_z"] = pace_z.groupby(df["horse_id"], sort=False).shift(1)
+    df["prev_distance"] = g["distance"].shift(1)
+    short = (df["days_since_last"] <= 21).astype(float).where(df["days_since_last"].notna())  # 3週以内
+    hard = ((df["prev_time_diff"] <= 0.3) | (df["prev_pace_z"] <= -1)).astype(float).where(
+        df["prev_time_diff"].notna() | df["prev_pace_z"].notna())
+    df["hard_prev"] = hard
+    df["load_x_short"] = df["prev_pace_z"] * short
+    df["load_per_day"] = df["prev_pace_z"] / df["days_since_last"].replace(0, np.nan)
+    df["hard_prev_short"] = hard * short
+    df["dist_x_short"] = df["prev_distance"] * short
 
     # --- 騎手・厩舎(同じ日の他レースは含めない) ---
     df["jockey_ct_top3_rate"] = _expanding_rate(df, ["jockey_id", "course_type"], "top3")[1]
