@@ -163,17 +163,25 @@ def main(argv=None) -> None:
 
         env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
         ymd = args.date.replace("-", "")
-        base = [args.python32, "-m", "keibaai.jvexport", "--from", ymd, "--out", args.raw, "--specs", "--rt"]
-        if subprocess.run(base + [f"0B15:{ymd}"], env=env).returncode:
+        raw = str(Path(args.raw) / "entries")  # 成績の取り込み(jv --what races)が使う RACE.txt と混ぜない
+        week = (dt.date.fromisoformat(args.date) - dt.timedelta(days=7)).strftime("%Y%m%d")
+        # 木曜〜金曜の出走馬名表・出馬表は「今週のデータ」(RACE, option 2)に、当日の出馬表は速報(0B15)に出る。両方取る
+        cmd = [args.python32, "-m", "keibaai.jvexport", "--from", week, "--out", raw, "--option", "2",
+               "--specs", "RACE", "--rt", f"0B15:{ymd}"]
+        if subprocess.run(cmd, env=env).returncode:
             raise SystemExit("JV-Link からの書き出しに失敗しました(上のメッセージを確認)")
-        keys = race_keys(args.raw, args.date)
-        odds_file = Path(args.raw) / "RT_0B31.txt"
+        keys = race_keys(raw, args.date)
+        odds_file = Path(raw) / "RT_0B31.txt"
         if odds_file.exists():
             odds_file.unlink()  # 前に取った別の日のオッズを混ぜない
         if keys and not args.no_odds:
-            if subprocess.run(base + [f"0B31:{k}" for k in keys], env=env).returncode:
+            cmd = [args.python32, "-m", "keibaai.jvexport", "--from", ymd, "--out", raw, "--specs", "--rt",
+                   *[f"0B31:{k}" for k in keys]]
+            if subprocess.run(cmd, env=env).returncode:
                 print("オッズの書き出しに失敗しました。出馬表だけ保存します")
-        n = import_entries(db.connect(args.db), args.raw, args.date, dt.datetime.now().isoformat(timespec="seconds"))
+        n = import_entries(db.connect(args.db), raw, args.date, dt.datetime.now().isoformat(timespec="seconds"))
+        if not n:
+            print(f"{args.date} の出馬表は、馬番がまだ確定していないか、まだ出ていません(馬番は枠順の発表後に入ります)")
         print(f"done: {n} races")
         return
     if args.cmd == "entries":
