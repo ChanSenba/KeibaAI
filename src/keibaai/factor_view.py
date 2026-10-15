@@ -10,6 +10,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from .jvtraining import FAST_F4
 from .predict import day_frame
 
 # 画面に出す区分。cols は (列名, 画面での見出し)。
@@ -54,17 +55,17 @@ SECTIONS: list[dict] = [
               ("sire_ctdist_top3_rate", "父産駒・芝ダ×距離帯"), ("sire_ground_top3_rate", "父産駒・芝ダ×馬場"),
               ("damsire_top3_rate", "母父産駒の3着内率"), ("damsire_ctdist_top3_rate", "母父産駒・芝ダ×距離帯")]},
     {"name": "調教",
-     "note": "netkeiba の最終追い切りの評価(短評とA〜D)。前日の午後に公開されます(keibaai training --date で取り直し)。"
-             "メンバー内の差は、A=4〜D=1 とした点数からレースの平均を引いた値です。タイムは会員限定なので使っていません。",
-     "cols": [("train_critic", "短評"), ("train_rank", "評価"), ("train_rank_vs_field", "メンバー内の差")]},
-    {"name": "調教タイム(JRA-VAN)",
-     "note": "JRA-VAN の坂路・ウッドの調教タイム。レース前日までの直近14日の追い切り(坂路4F58秒以内・ウッド56秒以内)から作ります。"
-             "取り込みは keibaai jv。",
-     "cols": [("jv_n14", "追い切りの本数(14日)"), ("jv_best_f4", "一番時計の4F"), ("jv_best_l1", "一番速い最後の1F"),
-              ("jv_last_f4", "最後の4F"), ("jv_last_l1", "最後の1F"), ("jv_days_since", "最後の追い切りから(日)"),
-              ("jv_f4_vs_base", "ふだんとの差(4F)"), ("jv_f4_vs_field", "メンバー内の差(4F)"),
+     "note": "場所とタイムは JRA-VAN の坂路・ウッドの調教タイムから、レース前日までの直近14日の追い切り"
+             "(坂路4F58秒以内・ウッド56秒以内)で作ります(取り込みは keibaai jv)。JRA-VAN にあるのは坂路とウッドだけです。"
+             "追い方・併せ馬・短評・評価は netkeiba の最終追い切りで、取得したレースだけ出ます(keibaai training --date)。"
+             "評価のメンバー内の差は、A=4〜D=1 とした点数からレースの平均を引いた値です。",
+     "cols": [("train_center", "トレセン"), ("train_last_place", "最後の追い切り"), ("train_load", "追い方"),
+              ("train_partner", "併せ馬"), ("jv_last_f4", "最後の4F"), ("jv_last_l1", "最後の1F"),
               ("jv_last_f4_z", "コース基準との差(4F)"), ("jv_last_pct", "コース内の順位(4F)"),
-              ("jv_last_accel", "加速(最初−最後の1F)")]},
+              ("jv_last_accel", "加速(最初−最後の1F)"), ("jv_best_f4", "一番時計の4F"), ("train_best_place", "一番時計の場所"),
+              ("jv_f4_vs_base", "ふだんとの差(4F)"), ("jv_f4_vs_field", "メンバー内の差(4F)"), ("jv_n14", "追い切りの本数(14日)"),
+              ("jv_days_since", "最後の追い切りから(日)"), ("train_critic", "短評"), ("train_rank", "評価"),
+              ("train_rank_vs_field", "評価のメンバー内の差")]},
     {"name": "ラップ・ペース",
      "note": "ペース差 = 前半3F − 後半3F(プラスは後傾=スロー寄り)。RPCI そのものではなく、結果ページのラップからの代用です。",
      "cols": [("prev_pace_diff", "前走のペース差"), ("pace_diff_3", "ペース差(3走平均)"),
@@ -130,6 +131,11 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "damsire_ctdist_top3_rate": ("母の父の産駒の、今回と同じ芝ダ×距離帯での3着内率。高いほど良い", "high"),
     "prev_pace_diff": ("前走の前半3F − 後半3F(秒)。プラスはスロー寄り、マイナスはハイペース寄り", None),
     "pace_diff_3": ("過去3走のペース差の平均。どんなペースを走ってきたか", None),
+    "train_center": ("所属のトレセン(美浦・栗東)。直近14日の追い切りをした場所(JRA-VAN)", None),
+    "train_last_place": ("最後の追い切りの場所。坂路か、ウッドのどのコースか(回り)。JRA-VAN になければ netkeiba のコース", None),
+    "train_best_place": ("直近14日で一番時計を出した追い切りの場所", None),
+    "train_load": ("最終追い切りの追い方(netkeiba)。馬なり・強め・一杯 など。一杯ほど強く追っている", None),
+    "train_partner": ("最終追い切りの併せ馬(netkeiba)。先着・同入・遅れ など", None),
     "train_critic": ("最終追い切りの短評(netkeiba)。気配上昇・仕上良好・前走並み など", None),
     "train_rank": ("最終追い切りの評価。A が最も良く、D に向かって下がる", None),
     "train_rank_vs_field": ("評価を A=4〜D=1 の点にして、レース平均を引いた値。プラスほどメンバーの中で良い", "high"),
@@ -305,6 +311,53 @@ def _pedigree_names(conn: sqlite3.Connection, horse_ids) -> pd.DataFrame:
         f"SELECT horse_id, sire, damsire, sire_line FROM pedigree WHERE horse_id IN ({q})", conn, params=ids)
 
 
+CENTERS = {"0": "美浦", "1": "栗東"}
+WOOD_COURSES = "ABCDE"  # JRA-VAN のウッドのコース(0〜4 が A〜E)。栗東の C が CW
+
+
+def training_place(kind: str, center: str | None, course: str | None, turn: str | None) -> str:
+    """JRA-VAN の調教1本の場所。坂路 / CW(右) / ウッドD(左) など。"""
+    if kind == "slope":
+        return "坂路"
+    letter = WOOD_COURSES[int(course)] if course and course.isdigit() and int(course) < len(WOOD_COURSES) else ""
+    name = "CW" if center == "1" and letter == "C" else f"ウッド{letter}"
+    return name + {"0": "(右)", "1": "(左)"}.get(turn or "", "")
+
+
+def _training_places(conn: sqlite3.Connection, t: pd.DataFrame, date: str) -> pd.DataFrame:
+    """出走馬ごとに、トレセン・最後の追い切りと一番時計の場所(JRA-VAN)と、
+    最終追い切りの追い方・併せ馬(netkeiba)。調教の特徴量と同じく、レース前日までの直近14日の追い切りで見る。"""
+    out = pd.DataFrame(index=t.index, columns=["train_center", "train_last_place", "train_best_place",
+                                               "train_load", "train_partner"], dtype=object)
+    ids = [h for h in set(t["horse_id"]) if isinstance(h, str)]
+    day = pd.Timestamp(date)
+    if ids:
+        q = ",".join("?" * len(ids))
+        tr = pd.read_sql_query(
+            f"SELECT horse_id, date, time, kind, center, course, turn, f4 FROM jv_training "
+            f"WHERE horse_id IN ({q}) AND date >= ? AND date < ? AND f4 IS NOT NULL", conn,
+            params=[*ids, (day - pd.Timedelta(days=14)).date().isoformat(), day.date().isoformat()])
+        tr = tr[tr["f4"] <= tr["kind"].map(FAST_F4)].sort_values(["date", "time"])
+        if not tr.empty:
+            tr["place"] = [training_place(*r) for r in tr[["kind", "center", "course", "turn"]].itertuples(index=False)]
+            last = tr.groupby("horse_id").last()
+            best = tr.loc[tr.groupby("horse_id")["f4"].idxmin()].set_index("horse_id")
+            out["train_center"] = t["horse_id"].map(last["center"].map(CENTERS))
+            out["train_last_place"] = t["horse_id"].map(last["place"])
+            out["train_best_place"] = t["horse_id"].map(best["place"])
+    races = list(set(t["race_id"]))
+    nk = pd.read_sql_query(
+        f"SELECT race_id, number, course, load, partner FROM training WHERE seq = 0 "
+        f"AND race_id IN ({','.join('?' * len(races))})", conn, params=races) if races else pd.DataFrame()
+    if not nk.empty:
+        got = t[["race_id", "number"]].merge(nk, on=["race_id", "number"], how="left")
+        got.index = t.index
+        out["train_load"] = got["load"]
+        out["train_partner"] = got["partner"]
+        out["train_last_place"] = out["train_last_place"].fillna(got["course"])  # JRA-VAN にない馬は netkeiba のコース
+    return out
+
+
 def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     """date の出馬表の各馬について、SECTIONS の列をすべて持つ表を返す(race_id・馬名つき)。"""
     df, hist = day_frame(conn, date)
@@ -324,6 +377,7 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     t = t.merge(_pedigree_names(conn, t["horse_id"]), on="horse_id", how="left")
     t["jockey"] = t["jockey"].astype(object)
     t["train_critic"] = t["train_critic"].astype(object)
+    t = t.join(_training_places(conn, t, date))
     t["venue"] = t["venue"].astype(str)
     keep = ["race_id", "venue", "round", "horse_name", *dict.fromkeys(c for s in SECTIONS for c, _ in s["cols"])]
     return t[[c for c in keep if c in t]].sort_values(["race_id", "number"]).reset_index(drop=True)
@@ -340,11 +394,13 @@ def section_status(conn: sqlite3.Connection) -> list[dict]:
     for s in SECTIONS:
         name = s["name"]
         if name == "調教":
+            n_jv = conn.execute("SELECT COUNT(*) FROM jv_training").fetchone()[0]
             n_tr = conn.execute("SELECT COUNT(*) FROM training_fetched WHERE race_id IN (SELECT race_id FROM races)"
                                 ).fetchone()[0]
-            share = n_tr / n_races if n_races else 0
-            state = "ready" if share >= 0.95 else "partial" if n_tr else "missing"
-            text = f"{n_tr:,} / {n_races:,} レース" if n_tr else "未取得(keibaai training で取得)"
+            nk = f"netkeiba の評価 {n_tr:,} / {n_races:,} レース"
+            state = "ready" if n_jv else "partial" if n_tr else "missing"
+            text = (f"JRA-VAN の調教タイム {n_jv:,} 本・{nk}" if n_jv else
+                    nk + "(場所とタイムは keibaai jv で取得)" if n_tr else "未取得(keibaai jv で取得)")
         elif name == "血統":
             share = n_ped / n_horses if n_horses else 0
             state = "ready" if share >= 0.95 else "partial" if n_ped else "missing"
