@@ -1,7 +1,7 @@
 import pandas as pd
 
 from keibaai import db
-from keibaai.jvtraining import JV_FEATURES, add_jv_features, import_raw, parse_record
+from keibaai.jvtraining import JV_FEATURES, add_course_relative, add_jv_features, import_raw, parse_record
 
 HC = "HC12026100502026100506112022103274064918304661710295151144\r\n"
 
@@ -64,3 +64,16 @@ def test_add_jv_features_without_table_data():
     conn = db.connect(":memory:")
     df = pd.DataFrame({"race_id": ["r"], "horse_id": ["h"], "date": pd.to_datetime(["2026-10-07"])})
     assert add_jv_features(conn, df)[JV_FEATURES].isna().all(axis=None)
+
+
+def test_course_relative_groups_by_center_kind_and_miho_renewal():
+    tr = pd.DataFrame({
+        "date": ["2023-01-01", "2023-01-02", "2023-01-03", "2023-10-05", "2023-10-06", "2023-10-07", "2023-01-01"],
+        "kind": ["slope"] * 6 + ["wood"], "center": ["0", "0", "0", "0", "0", "0", "0"], "course": [None] * 6 + ["A"],
+        "f4": [52.0, 53.0, 54.0, 54.0, 55.0, 56.0, 50.0],
+        "f3": [39.0, 40.0, 41.0, 41.0, 42.0, 43.0, 37.0], "f2": [25.0] * 7, "l1": [12.0, 12.0, 12.0, 13.0, 13.0, 13.0, 11.0]})
+    out = add_course_relative(tr)
+    # 美浦坂路は改修の前(中央値53)と後(中央値55)で別グループ。ウッドは1本だけなので差は0
+    assert out["f4_z"].tolist() == [-1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 0.0]
+    assert out["f4_pct"].iloc[0] < out["f4_pct"].iloc[2]
+    assert out["accel"].iloc[0] == (52.0 - 39.0) - 12.0
