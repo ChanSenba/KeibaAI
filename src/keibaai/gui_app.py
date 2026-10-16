@@ -116,7 +116,7 @@ def _apply_preset() -> None:
 
 def require_jv() -> bool:
     """成績・出馬表は JRA-VAN(JV-Link)から取る。JV-Link を呼べない PC では、その旨を出して False を返す。"""
-    from . import jvlink
+    from keibaai import jvlink
 
     if jvlink.available():
         return True
@@ -160,7 +160,7 @@ def page_collect() -> None:
 
             try:
                 with contextlib.redirect_stdout(log):
-                    from . import jvlink
+                    from keibaai import jvlink
 
                     bar.progress(0.1, "JV-Link から書き出しています")
                     total, _ = jvlink.fetch_results(conn, start, end)
@@ -469,7 +469,7 @@ def single_race_controls(conn, date: dt.date):
 
     レース一覧は JRA-VAN の出馬表(entry_races)から作る。まだなければ、出馬表だけを先に取る(オッズは取らない)。
     """
-    from . import jvlink
+    from keibaai import jvlink
 
     choices = gui.race_choices(conn, date.isoformat())
     if choices.empty:
@@ -507,7 +507,7 @@ def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
         log = LogBox()
         try:
             with contextlib.redirect_stdout(log):
-                from . import jvlink
+                from keibaai import jvlink
 
                 bar.progress(0.1, "JV-Link から書き出しています")
                 n = jvlink.fetch_entries(conn, date.isoformat(), race_ids=race_ids)
