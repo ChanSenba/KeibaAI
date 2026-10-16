@@ -86,6 +86,11 @@ def export_rt(jv, spec: str, keys: list[str], out: Path) -> int:
                 time.sleep(RT_INTERVAL)
             code = jv.JVRTOpen(spec, key)
             code = code[0] if isinstance(code, tuple) else code
+            if code == -413:  # 最初の1回だけ -413 が返り、間をあけて開き直すと読めることが多い(10/16 に確認)
+                jv.JVClose()
+                time.sleep(RT_INTERVAL)
+                code = jv.JVRTOpen(spec, key)
+                code = code[0] if isinstance(code, tuple) else code
             if code < 0:  # -1 はデータなし。ほかのエラーも、その日を飛ばして続ける
                 print(f"{spec} {key}: JVRTOpen -> {code}(飛ばします)", flush=True)
                 jv.JVClose()
