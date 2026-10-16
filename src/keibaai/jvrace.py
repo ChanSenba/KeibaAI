@@ -55,8 +55,16 @@ for _b in range(0x80, 0xA0):
 
 
 def to_bytes(rec: str) -> bytes:
-    """JVRead が返した文字列を、元の Shift_JIS のバイト列に戻す。"""
-    return rec.translate(_TO_BYTE).encode("latin-1", errors="replace")
+    """JVRead が返した文字列を、元の Shift_JIS のバイト列に戻す。
+
+    ふだんは Shift_JIS の1バイトが1文字で来る。ただしタスクスケジューラから動かしたときなどは、日本語に
+    直った文字列で来ることがある(SE が 555 バイトでなく 377 文字になる)。1バイト1文字では表せない文字が
+    あればそちらとみなし、Shift_JIS に符号化し直す。
+    """
+    try:
+        return rec.translate(_TO_BYTE).encode("latin-1")
+    except UnicodeEncodeError:
+        return rec.encode("cp932", errors="replace")
 
 
 def from_bytes(b: bytes) -> str:

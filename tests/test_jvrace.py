@@ -155,3 +155,12 @@ def test_course_inner_outer_from_track_code():
 def test_rail_from_course_kubun():
     assert parse_ra(ra(over={709: "B "}))[15] == "B"
     assert parse_ra(ra())[15] is None  # 空(ダートなど)
+
+
+def test_to_bytes_accepts_records_already_decoded_to_japanese():
+    """タスクスケジューラから動かすと、JVRead が日本語に直った文字列を返すことがある。どちらでも同じバイト列にする。"""
+    raw = se()[:-2]
+    assert to_bytes(from_bytes(raw)) == raw  # ふだん: 1バイト1文字
+    decoded = raw.decode("cp932")  # 日本語に直った形(文字数が減る)
+    assert len(decoded) < len(raw) and to_bytes(decoded) == raw
+    assert parse_se(to_bytes(decoded))[6] == "アークレイリ"
