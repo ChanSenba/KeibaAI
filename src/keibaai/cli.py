@@ -118,7 +118,9 @@ def main(argv=None) -> None:
     sn.add_argument("--date", required=True, help="YYYY-MM-DD")
     sn.add_argument("--db", default="data/keiba.db")
     sn.add_argument("--cache", default="data/cache")
-    pd_ = sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
+    sn.add_argument("--race-id", nargs="*", default=[], help="このレース(race_id 12桁)だけ記録する。省くとその日の全レース")
+    _add_source(sn, "オッズ")
+    pd_ =sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
     pd_.add_argument("--limit", type=int, default=0, help="この頭数で止める(0なら全部)。まず試すとき用")
@@ -200,10 +202,20 @@ def main(argv=None) -> None:
         n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
         return
+    if args.cmd == "snapshot" and source == "jv":
+        from . import jvlink
+
+        try:
+            n = jvlink.snapshot_odds(db.connect(args.db), args.date, args.race_id or None, raw_root=args.raw,
+                                     python32=args.python32)
+        except jvlink.JVError as e:
+            raise SystemExit(str(e))
+        print(f"done: {n} races")
+        return
     if args.cmd == "snapshot":
         from .predict import snapshot_odds
 
-        n = snapshot_odds(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
+        n = snapshot_odds(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date, race_ids=args.race_id or None)
         print(f"done: {n} races")
         return
     if args.cmd == "bets":
@@ -219,7 +231,7 @@ def main(argv=None) -> None:
             raise SystemExit(f"{args.race_id} の出馬表がありません。先に entries で取得してください")
         print("モデルとオッズの混ぜ方を決めています(数分かかります)")
         blend = blend_for_day(conn, args.date)
-        odds = gui.fetch_bet_odds(Fetcher(cache_dir=args.cache), args.race_id)
+        odds = gui.fetch_bet_odds(Fetcher(cache_dir=args.cache), args.race_id, conn=conn)
         plan, _ = gui.bet_plan_for(pred, args.race_id, odds, blend, args.bankroll, args.cap, args.kelly)
         print(f"混ぜ方: オッズ込みのモデル {blend.a:.2f} / いまのオッズ {blend.b:.2f}")
         if not plan.bets:

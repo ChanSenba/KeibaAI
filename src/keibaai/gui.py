@@ -260,9 +260,20 @@ def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
     return predict_day(conn, date.isoformat())
 
 
-def fetch_bet_odds(fetcher, race_id: str, on_type=None) -> dict:
-    """1レースの全券種のオッズを取得して {券種: {馬番の組: オッズ}} にする。6回アクセスする(3〜5秒おき)。"""
+def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection | None = None) -> dict:
+    """1レースの全券種のオッズを取得して {券種: {馬番の組: オッズ}} にする。
+
+    JV-Link を呼べる PC で conn(出馬表の入った DB)を渡せば、JRA-VAN の速報オッズを使う。
+    そうでなければ netkeiba に6回アクセスする(3〜5秒おき)。
+    """
+    from . import jvlink
     from .entries import BET_ODDS_TYPES, parse_bet_odds
+
+    if conn is not None and jvlink.available():
+        try:
+            return jvlink.fetch_bet_odds(conn, race_id)
+        except jvlink.JVError as e:
+            raise RuntimeError(str(e)) from e
 
     out: dict = {}
     for i, t in enumerate(BET_ODDS_TYPES):
