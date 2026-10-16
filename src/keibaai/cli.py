@@ -75,7 +75,7 @@ def warn_if_race_time(now: dt.datetime | None = None) -> bool:
 
 
 def resolve_source(source: str, python32: str | None) -> str:
-    """取得元の auto を決める。JV-Link を呼べる PC なら JRA-VAN、そうでなければ netkeiba。"""
+    """取得元の auto を決める。JV-Link を呼べる PC なら JRA-VAN、そうでなければ netkeiba(オッズの記録だけが netkeiba を選べる)。"""
     if source != "auto":
         return source
     from . import jvlink
@@ -83,12 +83,14 @@ def resolve_source(source: str, python32: str | None) -> str:
     return "jv" if jvlink.available(python32 or jvlink.PYTHON32) else "netkeiba"
 
 
-def _add_source(parser, what: str) -> None:
+def _add_source(parser, what: str, netkeiba: bool = False) -> None:
+    """取得元の欄。成績・出馬表・血統は JRA-VAN だけ(netkeiba からの取得はやめた)。netkeiba=True のものだけ netkeiba も選べる。"""
     from .jvlink import PYTHON32, RAW_DIR
 
-    parser.add_argument("--source", choices=["auto", "jv", "netkeiba"], default="auto",
+    parser.add_argument("--source", choices=["auto", "jv"] + (["netkeiba"] if netkeiba else []), default="auto",
                         help=f"{what}の取得元。jv は JRA-VAN(JV-Link)で、アクセス間隔の待ちがない。"
-                             "auto(既定)は JV-Link を呼べる PC なら jv、そうでなければ netkeiba")
+                             + ("auto(既定)は JV-Link を呼べる PC なら jv、そうでなければ netkeiba" if netkeiba else
+                                "auto(既定)は jv。JV-Link を呼べない PC では使えない"))
     parser.add_argument("--raw", default=RAW_DIR, help="jv: 書き出し先(生データ)")
     parser.add_argument("--python32", default=PYTHON32, help="jv: pywin32 を入れた32bit Python")
 
@@ -119,8 +121,8 @@ def main(argv=None) -> None:
     sn.add_argument("--db", default="data/keiba.db")
     sn.add_argument("--cache", default="data/cache")
     sn.add_argument("--race-id", nargs="*", default=[], help="このレース(race_id 12桁)だけ記録する。省くとその日の全レース")
-    _add_source(sn, "オッズ")
-    pd_ =sub.add_parser("pedigree", help="馬ごとの血統(父・母の父)を取得して保存する。出馬表の馬が先。途中で止めても続きから")
+    _add_source(sn, "オッズ", netkeiba=True)
+    pd_ =sub.add_parser("pedigree", help="(廃止)netkeiba からの血統の取得。代わりに jv --what pedigree blood を使う")
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
     pd_.add_argument("--limit", type=int, default=0, help="この頭数で止める(0なら全部)。まず試すとき用")
@@ -183,9 +185,12 @@ def main(argv=None) -> None:
     args = p.parse_args(argv)
 
     source = resolve_source(getattr(args, "source", "netkeiba"), getattr(args, "python32", None))
-    if args.cmd in ("pedigree", "bets", "training") or (args.cmd in ("entries", "collect", "weekly") and source == "netkeiba"):
+    if args.cmd in ("collect", "entries", "weekly") and source != "jv":
+        raise SystemExit("成績・出馬表は JRA-VAN(JV-Link)から取ります。この PC では JV-Link を呼べません"
+                         "(32bit Python と JV-Link のセットアップが要ります)")
+    if args.cmd in ("bets", "training") or (args.cmd == "snapshot" and source == "netkeiba"):
         warn_if_race_time()
-    if args.cmd == "entries" and source == "jv":
+    if args.cmd == "entries":
         from . import jvlink
 
         try:
@@ -194,12 +199,6 @@ def main(argv=None) -> None:
             raise SystemExit(str(e))
         if not n:
             print(f"{args.date} の出馬表は、馬番がまだ確定していないか、まだ出ていません(馬番は枠順の発表後に入ります)")
-        print(f"done: {n} races")
-        return
-    if args.cmd == "entries":
-        from .predict import fetch_entries
-
-        n = fetch_entries(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date)
         print(f"done: {n} races")
         return
     if args.cmd == "snapshot" and source == "jv":
@@ -245,14 +244,7 @@ def main(argv=None) -> None:
         print("注: 期待回収率は予想が当たっている前提の数字です。過去8年の検証(馬連・ワイド)では、実際の回収率は90%前後でした。")
         return
     if args.cmd == "pedigree":
-        from .pedigree import collect_pedigrees, pending_horse_ids
-
-        conn = db.connect(args.db)
-        total = len(pending_horse_ids(conn))
-        todo = min(total, args.limit) if args.limit else total
-        print(f"血統が未取得の馬: 全部で{total}頭。今回は{todo}頭(1頭 3〜5秒かかるので、およそ {todo * 4 / 3600:.1f} 時間)")
-        n = collect_pedigrees(conn, Fetcher(cache_dir=args.cache), args.limit)
-        print(f"done: {n} horses")
+        raise SystemExit("netkeiba からの血統の取得はやめました。JRA-VAN から `keibaai jv --what pedigree blood` で取り込んでください")
         return
     if args.cmd == "jv":
         import os
@@ -342,7 +334,7 @@ def main(argv=None) -> None:
 
         today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
         out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews,
-                         jv=(args.raw, args.python32) if source == "jv" else None)
+                         jv=(args.raw, args.python32))
         print(f"reviewed: {', '.join(out['reviewed']) or 'なし'}")
         for d, n in out["forecast"].items():
             print(f"forecast {d}: {n}頭" if n else f"forecast {d}: 出馬表がまだありません")
@@ -407,21 +399,11 @@ def main(argv=None) -> None:
         return
 
     conn = db.connect(args.db)
-    if source == "jv":
-        from . import jvlink
+    from . import jvlink
 
-        try:
-            n_race, n_res = jvlink.fetch_results(conn, dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end),
-                                                 args.raw, args.python32)
-        except jvlink.JVError as e:
-            raise SystemExit(str(e))
-        print(f"done: {n_race} races ({n_res} 頭)")
-        return
-    fetcher = Fetcher(cache_dir=args.cache)
-    total = 0
-    failures: list[str] = []
-    # JRA の開催は土日(祝日・月曜開催あり)。平日も確認して、レースが無い日は空で返る。
-    for d in daterange(dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end)):
-        if d.weekday() >= 5 or d.weekday() == 0:
-            total += collect_day(conn, fetcher, d.strftime("%Y%m%d"), failures)
-    print(f"done: {total} races")
+    try:
+        n_race, n_res = jvlink.fetch_results(conn, dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end),
+                                             args.raw, args.python32)
+    except jvlink.JVError as e:
+        raise SystemExit(str(e))
+    print(f"done: {n_race} races ({n_res} 頭)")

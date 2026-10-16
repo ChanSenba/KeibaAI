@@ -146,6 +146,5 @@ def test_cli_pedigree_command(tmp_path, monkeypatch, capsys):
     conn.backup(disk._conn if hasattr(disk, "_conn") else disk)
     disk.close()
     monkeypatch.setattr(cli, "Fetcher", lambda cache_dir: FakeFetcher())
-    cli.main(["pedigree", "--db", str(path), "--limit", "4"])
-    out = capsys.readouterr().out
-    assert "done: 4 horses" in out and "未取得" in out
+    with pytest.raises(SystemExit, match="jv --what pedigree blood"):  # netkeiba からの血統の取得はやめた
+        cli.main(["pedigree", "--db", str(path), "--limit", "4"])

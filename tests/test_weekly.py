@@ -102,9 +102,9 @@ def test_weekly_command_runs_run_weekly(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(weekly, "run_weekly", fake)
     cli.main(["weekly", "--db", str(tmp_path / "k.db"), "--cache", str(tmp_path / "c"),
-              "--reviews", str(tmp_path / "r"), "--today", "2025-03-03", "--source", "netkeiba"])
+              "--reviews", str(tmp_path / "r"), "--today", "2025-03-03", "--source", "jv", "--raw", "rawdir", "--python32", "py32"])
     out = capsys.readouterr().out
-    assert seen["today"] == dt.date(2025, 3, 3) and "reviewed: 2025-03-01" in out and seen["jv"] is None
+    assert seen["today"] == dt.date(2025, 3, 3) and "reviewed: 2025-03-01" in out and seen["jv"] == ("rawdir", "py32")
     assert "forecast 2025-03-08: 出馬表がまだありません" in out and "forecast 2025-03-09: 12頭" in out
 
 
