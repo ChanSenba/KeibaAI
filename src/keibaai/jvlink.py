@@ -103,3 +103,111 @@ def fetch_results(conn: sqlite3.Connection, start: dt.date, end: dt.date, raw_ro
            rt=[f"0B15:{d:%Y%m%d}" for d in recent], python32=python32)
     refresh = max(start, today - dt.timedelta(days=RECENT_DAYS)).isoformat()
     return import_races(conn, raw, start.isoformat(), refresh_since=refresh)
+
+
+# 速報オッズの種別(JVRTOpen のデータ種別)→ 入っているレコード。2026-10-16 に実機で、10/17 の前日発売のオッズが
+# 6種別とも1レース1件ずつ取れることを確かめた(レコードの形は確定オッズ O1〜O6 と同じ)
+RT_ODDS_SPECS = {"0B31": "O1", "0B32": "O2", "0B33": "O3", "0B34": "O4", "0B35": "O5", "0B36": "O6"}
+# jvodds の券種 → 買い目(betting)の券種名。枠連は枠番の組なので使わない。複勝・ワイドは安全側に下限を使う
+BET_KINDS = {"win": "単勝", "place": "複勝", "quinella": "馬連", "wide": "ワイド", "exacta": "馬単",
+             "trio": "三連複", "trifecta": "三連単"}
+
+
+def race_key(conn: sqlite3.Connection, race_id: str) -> str:
+    """race_id(12桁)を JV-Link のレースのキー(年+月日+場+回+日+R の16桁)にする。月日は出馬表(entry_races)から。"""
+    row = conn.execute("SELECT date FROM entry_races WHERE race_id = ?", (race_id,)).fetchone()
+    if not row or not row[0]:
+        raise ValueError(f"{race_id} の出馬表がありません。先に entries で取得してください")
+    return race_id[:4] + row[0][5:7] + row[0][8:10] + race_id[4:]
+
+
+def announced_at(rec: str) -> str | None:
+    """オッズのレコードの発表月日時分(27-34)を ISO の日時にする。年はレースの年。"""
+    s = rec[27:35]
+    if not s.isdigit() or s == "00000000":
+        return None
+    return f"{rec[11:15]}-{s[:2]}-{s[2:4]}T{s[4:6]}:{s[6:8]}:00"
+
+
+def _rt_records(path: Path):
+    if path.exists():
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                _, _, rec = line.rstrip("\n").partition("\t")
+                if rec:
+                    yield rec
+
+
+def read_bet_odds(raw_dir: str | Path, key: str) -> tuple[dict, str | None]:
+    """書き出した速報オッズ(RT_0B31〜0B36.txt)から、そのレースの {券種: {馬番の組: オッズ}} と発表時刻(単勝の)を作る。"""
+    from .jvodds import ODDS, parse_odds
+
+    out: dict = {}
+    announced = None
+    for spec, code in RT_ODDS_SPECS.items():
+        for rec in _rt_records(Path(raw_dir) / f"RT_{spec}.txt"):
+            if rec[:2] != code or rec[11:27] != key:
+                continue
+            if code == "O1":
+                announced = announced_at(rec)
+            for kind, name in BET_KINDS.items():
+                if ODDS[kind][0] != code:
+                    continue
+                tail = len(ODDS[kind][6]) + 1  # 組のあとに、オッズ(複勝・ワイドは下限と上限)と人気
+                table = {r[:-tail]: r[-tail] for r in parse_odds(rec, kind)}
+                if table:
+                    out[name] = table
+    return out, announced
+
+
+def fetch_bet_odds(conn: sqlite3.Connection, race_id: str, raw_root: str | Path = RAW_DIR,
+                   python32: str = PYTHON32) -> dict:
+    """1レースの全券種の速報オッズを JRA-VAN から取って {券種: {馬番の組: オッズ}} にする(netkeiba の6回の取得の代わり)。
+
+    JV-Link を種別ごとに1回ずつ、間をあけて開く(6種別で30秒ほど)。発売前などで取れない券種は入らない。
+    """
+    key = race_key(conn, race_id)
+    raw = Path(raw_root) / "bet_odds"
+    export(raw, key[:8], [], rt=[f"{s}:{key}" for s in RT_ODDS_SPECS], python32=python32)
+    return read_bet_odds(raw, key)[0]
+
+
+def snapshot_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | None = None,
+                  now: dt.datetime | None = None, raw_root: str | Path = RAW_DIR, python32: str = PYTHON32) -> int:
+    """date(YYYY-MM-DD)の各レースの単勝の速報オッズを JRA-VAN から取り、odds_snapshots に追記する。記録したレース数を返す。
+
+    snapped_at は取った時刻、official_at は JRA-VAN のオッズの発表時刻。レースは出馬表を取り込み済みのもの(entry_races)。
+    JV-Link は1回だけ起動し、レースごとに間をあけて開く。オッズのないレースは飛ばす。
+    """
+    from .jventries import parse_o1
+    from .jvrace import to_bytes
+
+    stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    ids = race_ids or [r[0] for r in conn.execute("SELECT race_id FROM entry_races WHERE date = ? ORDER BY race_id", (date,))]
+    keys = {}
+    for rid in ids:
+        try:
+            keys[race_key(conn, rid)] = rid
+        except ValueError as e:
+            print(e)
+    if not keys:
+        return 0
+    raw = Path(raw_root) / "snapshot"
+    export(raw, date.replace("-", ""), [], rt=[f"0B31:{k}" for k in keys], python32=python32)
+    n = 0
+    seen = set()
+    for rec in _rt_records(raw / "RT_0B31.txt"):
+        o = parse_o1(to_bytes(rec))
+        rid = keys.get(rec[11:27])
+        if not o or not rid or rid in seen:
+            continue
+        rows = [(rid, num, stamp, announced_at(rec), win, pop) for num, (win, pop) in o[1].items() if win is not None]
+        if not rows:
+            print(f"skip {rid}: オッズがまだありません")
+            continue
+        with conn:
+            conn.executemany("INSERT OR REPLACE INTO odds_snapshots (race_id, number, snapped_at, official_at, win_odds, "
+                             "popularity) VALUES (?,?,?,?,?,?)", rows)
+        seen.add(rid)
+        n += 1
+    return n

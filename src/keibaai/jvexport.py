@@ -145,8 +145,8 @@ def main(argv: list[str] | None = None) -> None:
     for item in args.rt:
         spec, _, key = item.partition(":")
         rt.setdefault(spec, []).append(key)
-    for spec, keys in rt.items():
-        if args.specs:
+    for i, (spec, keys) in enumerate(rt.items()):
+        if args.specs or i:  # 種別を替えて開き直すときも間をあける
             time.sleep(RT_INTERVAL)
         n = export_rt(jv, spec, keys, out / f"RT_{spec}.txt")
         print(f"{spec}(速報): {n} 件を書き出しました", flush=True)

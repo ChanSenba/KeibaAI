@@ -857,7 +857,7 @@ def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equ
             continue
         share = max(betting.UNIT, remaining // (len(rows) - i) // betting.UNIT * betting.UNIT)
         try:
-            odds = gui.fetch_bet_odds(fetcher, r.race_id)
+            odds = gui.fetch_bet_odds(fetcher, r.race_id, conn=connection())
             plan, _ = gui.bet_plan_for(table, r.race_id, odds, blend, bankroll, min(cap, share, remaining), kelly,
                                      equal_stake)
         except (ValueError, RuntimeError) as e:

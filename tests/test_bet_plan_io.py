@@ -101,7 +101,7 @@ def test_cli_bets_runs_end_to_end(tmp_path, monkeypatch, capsys):
     conn.backup(disk)
     disk.close()
     monkeypatch.setattr(cli, "Fetcher", lambda cache_dir: object())
-    monkeypatch.setattr(gui, "fetch_bet_odds", lambda f, race_id, on_type=None: {
+    monkeypatch.setattr(gui, "fetch_bet_odds", lambda f, race_id, on_type=None, conn=None: {
         "単勝": {(i + 1,): 2.0 + i for i in range(10)}, "馬連": {(1, 2): 2.0}})
     monkeypatch.setattr("keibaai.predict.blend_for_day", lambda conn, date: Blend(0.0, 1.0, 0, 0))
     cli.main(["bets", "--date", "2030-01-05", "--race-id", "202609990101", "--db", str(path)])
