@@ -28,10 +28,15 @@ SMALL_BUFFER = 4000
 BUFFERS = {"BLDN": 8000}  # 血統(HN 251・SK 208・BT 6889 文字)
 
 
-def export_spec(jv, spec: str, from_date: str, option: int, out: Path) -> int:
-    """1種類のデータを読んで out に書き出す。書いたレコード数を返す。"""
-    keep = KEEP.get(spec)
-    buffer = BUFFERS.get(spec) or (SMALL_BUFFER if keep else BUFFER)
+ODDS_KEEP = ("O1", "O2", "O3", "O4", "O5", "O6", "HR")  # RACE のうち確定オッズ(全券種)と払戻
+ODDS_BUFFER = 110000  # 3連単のオッズ(O6)は1件が8万文字を超える
+
+
+def export_spec(jv, spec: str, from_date: str, option: int, out: Path, keep: tuple | None = None,
+                buffer: int | None = None) -> int:
+    """1種類のデータを読んで out に書き出す。書いたレコード数を返す。keep・buffer で既定の KEEP・読み取りの大きさを変える。"""
+    keep = keep or KEEP.get(spec)
+    buffer = buffer or BUFFERS.get(spec) or (SMALL_BUFFER if keep else BUFFER)
     ret = jv.JVOpen(spec, f"{from_date}000000", option, 0, 0, "")
     if isinstance(ret, tuple) and ret[0] == -2:  # 最初の1回だけ失敗することがあった。もう一度だけ試す
         jv.JVClose()
@@ -117,6 +122,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--specs", nargs="*", default=list(SPECS))
     ap.add_argument("--rt", nargs="*", default=[], metavar="種別:キー",
                     help="速報系のデータ。例: 0B15:20261012(その日の速報成績と払戻)。出力は RT_<種別>.txt")
+    ap.add_argument("--odds", action="store_true",
+                    help="RACE から確定オッズ(O1〜O6)と払戻(HR)だけを書き出す(成績の RA・SE の代わりに)")
     args = ap.parse_args(argv)
     import win32com.client as w  # 32bit 側にだけ入れる
 
@@ -129,7 +136,10 @@ def main(argv: list[str] | None = None) -> None:
     for i, spec in enumerate(args.specs):
         if i:
             time.sleep(RT_INTERVAL)  # 続けて開き直すと JV-Link の内部サービスが落ちることがあった
-        n = export_spec(jv, spec, args.from_date, args.option, out / f"{spec}.txt")
+        if args.odds and spec == "RACE":
+            n = export_spec(jv, spec, args.from_date, args.option, out / f"{spec}.txt", ODDS_KEEP, ODDS_BUFFER)
+        else:
+            n = export_spec(jv, spec, args.from_date, args.option, out / f"{spec}.txt")
         print(f"{spec}: {n} 件を書き出しました", flush=True)
     rt: dict[str, list[str]] = {}
     for item in args.rt:
