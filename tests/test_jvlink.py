@@ -160,3 +160,23 @@ def test_gui_fetch_bet_odds_uses_jv_when_available(monkeypatch):
     monkeypatch.setattr(jvlink, "available", lambda *a: True)
     monkeypatch.setattr(jvlink, "fetch_bet_odds", lambda conn, race_id: {"単勝": {(1,): 2.0}})
     assert gui.fetch_bet_odds(None, "r1", conn=object()) == {"単勝": {(1,): 2.0}}
+
+
+
+def test_fetch_entries_odds_only_for_given_races(tmp_path, fake, monkeypatch):
+    from types import SimpleNamespace as NS
+
+    monkeypatch.setattr("keibaai.jventries.race_keys", lambda raw, date: ["2026101708040101", "2026101708040102"])
+    monkeypatch.setattr("keibaai.jventries.read_entries",
+                        lambda raw, date: [NS(race=NS(race_id="202608040101")), NS(race=NS(race_id="202608040102"))])
+    monkeypatch.setattr("keibaai.jventries.import_entries", lambda conn, raw, date, at: 2)
+    jvlink.fetch_entries(db.connect(":memory:"), "2026-10-17", raw_root=tmp_path, race_ids=["202608040102"])
+    assert _args(fake.cmds[1], "--rt") == ["0B31:2026101708040102"]
+
+
+def test_results_and_entries_are_jv_only(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):  # netkeiba は選べない(argparse のエラー)
+        cli.main(["collect", "--from", "2026-10-10", "--to", "2026-10-11", "--source", "netkeiba"])
+    monkeypatch.setattr(jvlink, "available", lambda *a: False)
+    with pytest.raises(SystemExit, match="JV-Link"):
+        cli.main(["entries", "--date", "2026-10-17", "--db", str(tmp_path / "k.db")])

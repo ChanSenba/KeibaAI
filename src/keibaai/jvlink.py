@@ -61,8 +61,10 @@ def export(out: str | Path, from_ymd: str, specs: list[str], option: int = 1, rt
 
 
 def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_root: str | Path = RAW_DIR,
-                  python32: str = PYTHON32, now: dt.datetime | None = None) -> int:
+                  python32: str = PYTHON32, now: dt.datetime | None = None, race_ids: list[str] | None = None) -> int:
     """その日(YYYY-MM-DD)の出馬表と単勝オッズを JRA-VAN から取って保存する。保存したレース数を返す。
+
+    出馬表はその日の全レースぶんをまとめて取る。race_ids を渡すと、オッズはそのレースだけ取る(1レースだけ取得するとき)。
 
     木曜〜金曜の出走馬名表・出馬表は「今週のデータ」(RACE, option 2)に、当日の出馬表は速報(0B15)に出る。両方取る。
     馬番は枠順の発表(金曜)のあとに入るので、それより前は 0 を返す。
@@ -75,7 +77,7 @@ def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_ro
     export(raw, week, ["RACE"], option=2, rt=[f"0B15:{ymd}"], python32=python32)
     (raw / "RT_0B31.txt").unlink(missing_ok=True)  # 前に取った別の日のオッズを混ぜない
     numbered = {p.race.race_id for p in read_entries(raw, date)}  # 馬番の入ったレースだけ(枠順の発表前はオッズもない)
-    keys = [k for k in race_keys(raw, date) if k[:4] + k[8:] in numbered]
+    keys = [k for k in race_keys(raw, date) if k[:4] + k[8:] in numbered and (race_ids is None or k[:4] + k[8:] in race_ids)]
     if keys and odds:
         try:
             export(raw, ymd, [], rt=[f"0B31:{k}" for k in keys], python32=python32)
