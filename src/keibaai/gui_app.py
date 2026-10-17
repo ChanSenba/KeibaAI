@@ -11,6 +11,8 @@ import pandas as pd
 import streamlit as st
 
 from keibaai import betting, db, factor_view, gui, past_races, progress
+from keibaai import gui_help
+from keibaai.gui_help import TIPS
 from keibaai.cli import reparse_cache
 from keibaai.fetch import Fetcher
 
@@ -83,28 +85,34 @@ def page_overview() -> None:
 
     monthly = gui.races_by_month(conn)
     cols = st.container(key="kpis").columns(4)
-    cols[0].metric("レース", f"{s['races']:,}", border=True, height="stretch")
-    cols[1].metric("出走", f"{s['results']:,}", border=True, height="stretch")
-    cols[2].metric("馬", f"{s['horses']:,}", border=True, height="stretch")
+    cols[0].metric("レース", f"{s['races']:,}", border=True, height="stretch", help=TIPS["kpi_races"])
+    cols[1].metric("出走", f"{s['results']:,}", border=True, height="stretch", help=TIPS["kpi_results"])
+    cols[2].metric("馬", f"{s['horses']:,}", border=True, height="stretch", help=TIPS["kpi_horses"])
     first, last = dt.date.fromisoformat(s["first"]), dt.date.fromisoformat(s["last"])
     cols[3].metric("期間", f"{(last - first).days // 30 + 1} か月", border=True,
                    delta=f"{first:%Y/%m} – {last:%Y/%m}", delta_color="off", delta_arrow="off",
-                   height="stretch")
+                   height="stretch", help=TIPS["kpi_span"])
 
     left, right = st.columns([3, 2], gap="medium")
     with left.container(border=True):
-        st.markdown("##### 月別レース数")
+        st.markdown("##### 月別レース数", help=TIPS["monthly"])
         st.altair_chart(bar_chart(monthly, "month", "races"), width="stretch")
     with right.container(border=True):
-        st.markdown("##### 競馬場別")
+        st.markdown("##### 競馬場別", help=TIPS["venues"])
         st.altair_chart(bar_chart(gui.races_by_venue(conn), "venue", "races", horizontal=True), width="stretch")
 
     with st.container(border=True):
-        st.markdown("##### 最近のレース")
+        st.markdown("##### 最近のレース", help=TIPS["recent"])
+        h = gui_help.RECENT_COLUMNS
         st.dataframe(gui.recent_races(conn), hide_index=True, width="stretch", height=380, column_config={
-            "date": st.column_config.DateColumn("日付", format="YYYY/MM/DD"), "venue": "競馬場",
-            "round": st.column_config.NumberColumn("R", format="%dR"), "name": "レース名", "course_type": "芝/ダ",
-            "distance": st.column_config.NumberColumn("距離", format="%dm"), "ground": "馬場", "runners": "頭数"})
+            "date": st.column_config.DateColumn("日付", format="YYYY/MM/DD", help=h["date"]),
+            "venue": st.column_config.TextColumn("競馬場", help=h["venue"]),
+            "round": st.column_config.NumberColumn("R", format="%dR", help=h["round"]),
+            "name": st.column_config.TextColumn("レース名", help=h["name"]),
+            "course_type": st.column_config.TextColumn("芝/ダ", help=h["course_type"]),
+            "distance": st.column_config.NumberColumn("距離", format="%dm", help=h["distance"]),
+            "ground": st.column_config.TextColumn("馬場", help=h["ground"]),
+            "runners": st.column_config.NumberColumn("頭数", help=h["runners"])})
 
 
 # ---------------------------------------------------------------- データ取得
@@ -200,7 +208,7 @@ def _show_data_grid() -> None:
     tr = progress.progress_of("training", st.session_state["cache_dir"],
                               _progress_total(st.session_state["db_path"], "training"))
     with st.container(border=True):
-        st.markdown("#### データの揃い具合")
+        st.markdown("#### データの揃い具合", help=TIPS["data_grid"])
         if s is None:
             st.caption("DB を読めませんでした(取り込み中の可能性があります)。少しあとで開き直してください。")
             return
@@ -239,8 +247,6 @@ def page_progress() -> None:
         st.caption(f":material/autorenew: 30秒ごとに更新 ・ {dt.datetime.now():%H:%M:%S}")
 
     body()
-    st.caption(":material/info: 件数は DB から1時間に1回だけ、読み取り専用で読みます(取得の邪魔にならないように)。"
-               "取得元は、各項目の ? に書いてあります。")
 
 
 # ---------------------------------------------------------------- 再解析
@@ -302,7 +308,7 @@ def page_train() -> None:
     if "report" not in st.session_state:
         return
     when, report = st.session_state["report"]
-    st.subheader("評価結果", anchor=False)
+    st.subheader("評価結果", anchor=False, help=TIPS["train_result"])
     st.caption(f"{when:%Y/%m/%d} 以降の {int(report['レース数'].iloc[0]):,} レースで評価")
     best_roi = report["単勝回収率(%)"].max()
     for col, (_, r) in zip(st.container(key="models").columns(len(report), gap="small"), report.iterrows()):
@@ -317,15 +323,16 @@ def page_train() -> None:
                 for k, v in stats) + "</div>")
 
     with st.expander("すべての指標", icon=":material/table:"):
+        h = gui_help.TRAIN_COLUMNS
         st.dataframe(report, hide_index=True, width="stretch", column_config={
-            "勝LogLoss": st.column_config.NumberColumn(format="%.4f"),
-            "勝AUC": st.column_config.NumberColumn(format="%.3f"),
-            "複AUC": st.column_config.NumberColumn(format="%.3f"),
-            "1番手的中": st.column_config.NumberColumn(format="percent"),
-            "単勝回収率(%)": st.column_config.NumberColumn(format="%.1f"),
+            "モデル": st.column_config.TextColumn(help=h["モデル"]),
+            "レース数": st.column_config.NumberColumn(help=h["レース数"]),
+            "勝LogLoss": st.column_config.NumberColumn(format="%.4f", help=h["勝LogLoss"]),
+            "勝AUC": st.column_config.NumberColumn(format="%.3f", help=h["勝AUC"]),
+            "複AUC": st.column_config.NumberColumn(format="%.3f", help=h["複AUC"]),
+            "1番手的中": st.column_config.NumberColumn(format="percent", help=h["1番手的中"]),
+            "単勝回収率(%)": st.column_config.NumberColumn(format="%.1f", help=h["単勝回収率(%)"]),
         })
-        st.caption("勝AUC は 0.5 が当てずっぽうで、高いほどよい指標です。単勝の控除率は約 20% なので、"
-                   "回収率が 100% を超えるのは簡単ではありません。")
 
 
 # ---------------------------------------------------------------- 予想
@@ -339,8 +346,8 @@ PRED_COLUMNS = {
              "過去8年の検証では、これらの馬を単勝で買った回収率は90〜97%で、100%には届かず、買えば得になる印ではありません。"
              "表示される期待値は、実際より1〜3割高く出る傾向があります"),
     "number": st.column_config.NumberColumn("馬番", format="%d", help="馬番(ゼッケンの番号)"),
-    "horse_name": st.column_config.TextColumn("馬名"),
-    "jockey": st.column_config.TextColumn("騎手"),
+    "horse_name": st.column_config.TextColumn("馬名", help="馬の名前"),
+    "jockey": st.column_config.TextColumn("騎手", help="今回乗る騎手"),
     "popularity": st.column_config.NumberColumn("人気", format="%d", help="単勝オッズの低い順の人気"),
     "win_odds": st.column_config.NumberColumn("単勝", format="%.1f", help="単勝オッズ(倍)。100円で当たると、この倍率が払い戻される"),
     "p_win_ability": st.column_config.ProgressColumn(
@@ -442,7 +449,7 @@ def page_predict() -> None:
         return
 
     if table is not None:
-        st.subheader("期待値の高い馬", anchor=False)
+        st.subheader("期待値の高い馬", anchor=False, help=TIPS["top_ev"])
         key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
         top = table.dropna(subset=[key]).nlargest(8, key)
         with st.container(border=True):
@@ -453,8 +460,6 @@ def page_predict() -> None:
                 hide_index=True, width="stretch", column_config={
                     **PRED_COLUMNS, "race": st.column_config.TextColumn("レース", help="競馬場とレース番号"),
                     "course": st.column_config.TextColumn("コース", help="芝・ダート、回り、距離")})
-            st.caption("期待値 = 勝率 × 単勝オッズ。1 を超えると、予測が正しければ長い目で得になる目安です。"
-                       "過去のレースでの検証はこれからで、今は参考表示です。")
 
     races = gui.day_races(conn, date.isoformat())
     if not races.empty:
@@ -567,12 +572,13 @@ def _show_gate_bias(conn, race, date: dt.date) -> None:
     if table.empty:
         return
     with st.expander("枠の傾向(参考)", icon=":material/view_column:"):
-        pct = st.column_config.NumberColumn(format="percent")
+        st.caption("内・中・外の枠の、過去の 3 着内率", help=TIPS["gate_bias"])
+        h = gui_help.GATE_COLUMNS
+        pct = lambda c: st.column_config.NumberColumn(format="percent", help=h[c])
         st.dataframe(table, hide_index=True, width="stretch", column_config={
-            "レース数": st.column_config.NumberColumn(format="%d"), "内枠": pct, "中枠": pct, "外枠": pct,
+            "レース数": st.column_config.NumberColumn(format="%d", help=h["レース数"]),
+            "内枠": pct("内枠"), "中枠": pct("中枠"), "外枠": pct("外枠"),
             "内−外": st.column_config.NumberColumn("内−外(pt)", format="%+.1f", help="内枠 − 外枠(ポイント)。プラスなら内の枠のほうが 3 着以内に来ている")})
-        st.caption("馬番を頭数で3等分して、内・中・外の枠の過去の 3 着内率を出しています(2019年以降、この日より前)。"
-                   "予想の勝率には入れていません。検証では、モデルに足しても当たりやすさは変わりませんでした。")
 
 
 def _show_race_flow(conn, race, one, date: dt.date) -> None:
@@ -580,22 +586,21 @@ def _show_race_flow(conn, race, one, date: dt.date) -> None:
     history = factor_view.course_history(conn, race, date.isoformat())
     flow = factor_view.race_flow(one, history)
     with st.expander("レース展開(脚質構成と同コースの直近)", icon=":material/timeline:", expanded=True):
-        st.markdown(flow["text"])
+        st.markdown(flow["text"], help=TIPS["race_flow"])
         names = {k: " ".join(str(n) for n in v) for k, v in flow["lineup"].items() if v}
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{html.escape(k)}</b>{html.escape(v)}</span>' for k, v in names.items()) + "</div>")
         if not history.empty:
             shown = history.drop(columns=["race_id"]).copy()
             shown["日付"] = pd.to_datetime(shown["日付"]).dt.strftime("%m/%d")
+            h = gui_help.FLOW_COLUMNS
             st.dataframe(shown, hide_index=True, width="stretch", column_config={
-                "R": st.column_config.NumberColumn("R", format="%d"),
-                "前半3F": st.column_config.NumberColumn(format="%.1f"), "後半3F": st.column_config.NumberColumn(format="%.1f"),
+                "R": st.column_config.NumberColumn("R", format="%d", help=h["R"]),
+                "前半3F": st.column_config.NumberColumn(format="%.1f", help=h["前半3F"]),
+                "後半3F": st.column_config.NumberColumn(format="%.1f", help=h["後半3F"]),
                 "ペース差": st.column_config.NumberColumn(format="%+.1f", help="前半3F − 後半3F。プラスは後傾(スロー)、マイナスはハイペース"),
                 "先行有利度": st.column_config.NumberColumn(format="percent", help="前に付けた馬の3着内率 − ほかの馬の率"),
                 "勝ち馬の位置": st.column_config.NumberColumn(format="%.2f", help="勝ち馬の最初のコーナーの位置 ÷ 頭数。0に近いほど前")})
-        st.caption("脚質は過去3走の位置取りからの推定です。ペース差が ±1.0 秒以内なら平均的としています。"
-                   "この見立てと同コース直近の展開は、予想の特徴量(同コース直近のペース差・先行有利度)と、"
-                   "ファクターの「展開適性」に使っています。")
 
 
 def race_detail(conn, race, race_id: str, prediction) -> None:
@@ -612,15 +617,11 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
     styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
     if "mark" in one:
         styled = styled.map(mark_style, subset=["mark"])
-    st.dataframe(styled, hide_index=True, width="stretch", column_config=cols)
     if prediction is None:
-        st.caption(":material/info: 「予想する」を押すと、予想印と勝率・期待値の列が加わります。")
+        st.caption("出馬表の見方", help=TIPS["entry_table"])
     else:
-        st.caption("印は勝率の高い順に ◎ ○ ▲ △(オッズがあればオッズ込み、なければ能力のみの勝率)。"
-                   "☆ は印のない馬のうち能力の期待値がいちばん高く、1 を超える穴馬です。"
-                   "★ はオッズ込みのモデルが、オッズより高く評価している馬(期待値1.1以上・勝率3%以上・30倍以内)で、"
-                   "過去8年の検証では単勝の回収率は90〜97%でした。100%には届かず、買えば得になる印ではありません。"
-                   "期待値は実際より1〜3割高く出る傾向があります。")
+        st.caption("印と各列の見方", help=TIPS["race_table"])
+    st.dataframe(styled, hide_index=True, width="stretch", column_config=cols)
 
 
 MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
@@ -687,7 +688,7 @@ def _factor_table(one, cols, extra=None):
 
 
 def _factor_legend(cols) -> str:
-    """表の下に出す、各列の見方。"""
+    """各列の見方の一覧(ヘルプページ用)。"""
     items = []
     for col, label in cols:
         info, good = factor_view.COLUMN_INFO.get(col, (None, None))
@@ -744,6 +745,7 @@ def page_factors() -> None:
             f'<span class="kb-mark"><b>{scored.loc[i, "score_mark"]}</b>{int(one.loc[i, "number"])} '
             f'{html.escape(str(one.loc[i, "horse_name"]))} {scored.loc[i, "score"]:.1f}</span>'
             for i in marked.index) + "</div>")
+        st.caption("表の見方と総合点", help=TIPS["factor_overall"])
         extra = scored[["score_mark", "score"]]
         cfg.update(SCORE_CONFIG)
         pred = st.session_state.get("prediction")
@@ -762,18 +764,7 @@ def page_factors() -> None:
             st.dataframe(pd.concat([one[["number", "horse_name"]].rename(columns={"number": "馬番", "horse_name": "馬名"}),
                                     pts.round(1), scored[["score"]].rename(columns={"score": "総合点"})], axis=1)
                          .sort_values("総合点", ascending=False), hide_index=True, width="stretch")
-        st.caption(":material/calculate: 総合点は、左から順に各列を同じレースの中で点数にして(いちばん良い馬が10点、悪い馬が0点、"
-                   "値のない列は5点)平均し、100点満点にしたものです。印(点数)は総合点の高い順に ◎ ○ ▲ △"
-                   "(9頭立て以下は△1頭)。どの列も同じ重みで、人気・オッズは入れていません。"
-                   "検証したモデルの勝率ではなく、数値を見比べるための目安です。")
-        if pred is None or pred[0] != date:
-            st.caption(":material/info: 「予想」ページでこの日を「予想する」と、モデルの勝率・期待値・印も右に加わります。")
-        else:
-            st.caption(":material/calculate: モデルの勝率・期待値・印は、これらの数値を含むモデルが総合して出した値です"
-                       "(期待値 = 勝率 × 単勝オッズ)。")
-        st.caption(":material/palette: " + factor_view.SUMMARY["note"])
-        st.html(_factor_legend(cols[2:]))
-    for tab, section, st_ in zip(tabs[1:], factor_view.SECTIONS, status):
+    for i, (tab, section, st_) in enumerate(zip(tabs[1:], factor_view.SECTIONS, status)):
         with tab:
             if st_["state"] == "missing":
                 st.warning(st_["text"], icon=":material/block:")
@@ -786,10 +777,8 @@ def page_factors() -> None:
                 cols.insert(2, ("jockey", "騎手"))
             cols = list(dict.fromkeys(c for c in cols if c[0] in one))
             cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols, one)}
+            st.caption("表の見方", help=section["note"] + TIPS["factor_section"] + gui_help.link(f"factors-{i}"))
             st.dataframe(_factor_table(one, cols), hide_index=True, width="stretch", column_config=cfg)
-            st.caption(":material/palette: 緑の色は、その列で良い値の上位の馬です(いちばん良い馬は濃い緑)。"
-                       "良し悪しのない列には色をつけません。" + section["note"])
-            st.html(_factor_legend(cols[2:]))
 
 
 # ---------------------------------------------------------------- 過去レース
@@ -812,8 +801,8 @@ def page_past_races() -> None:
         race_head(race)
     limit = st.select_slider("さかのぼる走数", [3, 5, 10, 20], value=5, key="past_limit")
     horses = past_races.horse_past_races(conn, race["race_id"], limit)
-    st.caption(":material/info: 評価は、今回と同じ芝/ダート・距離(±200m)・競馬場・回りがいくつ重なるかで決めています"
-               "(直結 > 参考 > 別条件)。")
+    st.caption("評価の決め方", help=TIPS["past_eval"])
+    past_cfg = {c: st.column_config.TextColumn(c, help=t) for c, t in gui_help.PAST_COLUMNS.items()}
     for h in horses:
         runs = h["runs"]
         with st.expander(f"{h['number']} {h['horse_name']}", expanded=False):
@@ -821,7 +810,7 @@ def page_past_races() -> None:
             if runs.empty:
                 continue
             st.dataframe(runs[["日付", "レース", "条件", "結果", "上がり順", "人気", "kind"]].rename(columns={"kind": "今回から見て"}),
-                         hide_index=True, width="stretch")
+                         hide_index=True, width="stretch", column_config=past_cfg)
             for _, r in runs.iterrows():
                 st.markdown(f"- **{r['日付']} {r['レース']}**({r['kind']}) {r['見解']}")
 
@@ -958,10 +947,11 @@ def show_day_plans(races, plans: dict, blend) -> None:
              ("期待収支", f"{expected:+,.0f}円")]
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
+    st.caption("この表の見方", help=TIPS["day_plans"])
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", column_config={
         "レース": st.column_config.TextColumn("レース", help="競馬場とレース番号"),
         "結果": st.column_config.TextColumn("結果", help="買う点数。見送りは、期待値が1を超え的中確率が3%以上の買い目がなかったレース"),
-        "合計金額": st.column_config.NumberColumn("合計金額(円)", format="%d"),
+        "合計金額": st.column_config.NumberColumn("合計金額(円)", format="%d", help="そのレースで買う金額の合計"),
         "どれか的中": st.column_config.NumberColumn("どれか的中", format="percent", help="買った買い目のどれか1つでも当たる確率"),
         "期待回収率": st.column_config.NumberColumn("期待回収率", format="percent", help="予想が当たっている前提の、払戻の期待値 ÷ 買った金額")})
     for r in races.itertuples():
@@ -990,14 +980,10 @@ def show_plan(got, blend) -> None:
              ("全部外れたとき", f"{plan.worst:,}円")]
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
-    st.dataframe(gui.plan_table(plan.bets), hide_index=True, width="stretch", column_config=BET_COLUMNS)
     if plan.note:
         st.caption(f":material/info: {plan.note}")
-    st.caption("期待値 = 的中確率 × 当日オッズ。オッズ込みのモデルの勝率と、いまのオッズの確率を混ぜた確率"
-               f"(オッズ込みのモデル {blend.a:.2f}・いまのオッズ {blend.b:.2f} の重み)から、1〜3着の組み合わせの確率をハーヴィルの式で出しています。"
-               "複勝とワイドは、幅のあるオッズの下限で計算しています。期待回収率は予想が当たっている前提の数字で、"
-               "過去8年の検証(馬連・ワイド)では、実際の回収率は90%前後で、表示より2〜3割低くなりました。"
-               "結果を保証するものではありません。")
+    st.caption("期待値と確率の出し方", help=TIPS["bet_plan"].format(a=blend.a, b=blend.b))
+    st.dataframe(gui.plan_table(plan.bets), hide_index=True, width="stretch", column_config=BET_COLUMNS)
 
 
 BET_COLUMNS = {
@@ -1037,10 +1023,13 @@ def page_review() -> None:
              ("期待値≧1の回収率", pct(s["ev_roi"]))]
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
+    st.caption("数字の見方", help=TIPS["review"])
     st.markdown(weekly.render_markdown(r).replace("# ", "### ", 1))
     with st.expander("馬ごとの予想と結果", icon=":material/table:"):
         cols = ["venue", "round", "number", "horse_name", "mark", "p_win_ability", "ev_ability", "popularity", "finish"]
-        st.dataframe(r.horses[cols].sort_values(["venue", "round", "number"]), hide_index=True, width="stretch")
+        st.dataframe(r.horses[cols].sort_values(["venue", "round", "number"]), hide_index=True, width="stretch",
+                     column_config={c: st.column_config.Column(label, help=t)
+                                    for c, (label, t) in gui_help.REVIEW_COLUMNS.items()})
 # ---------------------------------------------------------------- 買い方の検証
 def page_backtest() -> None:
     header("Simulation", "馬券シミュレーション",
@@ -1077,7 +1066,7 @@ def page_backtest() -> None:
     if "backtest" not in st.session_state:
         return
     when, (n_races, table, settled) = st.session_state["backtest"]
-    st.subheader("結果", anchor=False)
+    st.subheader("結果", anchor=False, help=TIPS["backtest_result"])
     st.caption(f"{when:%Y/%m/%d} 以降の {n_races:,} レース。単勝のみ、確定オッズで計算しています。")
     best = table["roi"].max()
     for col, (_, r) in zip(st.container(key="rules").columns(len(table), gap="small"), table.iterrows()):
@@ -1101,10 +1090,37 @@ def page_backtest() -> None:
         tooltip=["date:T", "ルール:N", "収支(円):Q"]).properties(height=280), width="stretch")
     with st.expander("すべての指標", icon=":material/table:"):
         from keibaai.backtest import COLUMNS
-        st.dataframe(table.rename(columns=COLUMNS), hide_index=True, width="stretch")
-    st.info("回収率の下限〜上限は、買い目を引き直して出した幅です。買い目が少ないほど広く、"
-            "回収率が100%を超えても幅が100%をまたぐなら、たまたまの可能性が高いです。"
-            "また、確定オッズは買う時点のオッズより低いことが多く、実際の成績は表より悪くなりがちです。", icon=":material/info:")
+        st.dataframe(table.rename(columns=COLUMNS), hide_index=True, width="stretch",
+                     column_config={c: st.column_config.Column(help=t) for c, t in gui_help.BACKTEST_COLUMNS.items()})
+
+
+# ---------------------------------------------------------------- ヘルプ
+def _column_list(columns: dict) -> str:
+    """st.column_config の辞書から、見出しと説明の一覧(_factor_legend と同じ見た目)を作る。"""
+    items = [f"<li><b>{html.escape(c.get('label') or k)}</b><span>{html.escape(c['help'])}</span></li>"
+             for k, c in columns.items() if isinstance(c, dict) and c.get("help")]
+    return '<ul class="kb-factor-legend">' + "".join(items) + "</ul>"
+
+
+def page_help() -> None:
+    header("Help", "ヘルプ", "各ページの数字と表の見方です。画面の ? にマウスを乗せると、ここの要点が出ます。")
+    with st.container(border=True):
+        st.markdown("##### 目次")
+        st.markdown(" ・ ".join(f"[{title}](#{anchor})" for anchor, title, _ in gui_help.HELP))
+    for anchor, title, body in gui_help.HELP:
+        st.subheader(title, anchor=anchor)
+        st.markdown(body)
+        if anchor == "predict":
+            with st.expander("出馬表と予想の列", icon=":material/table:"):
+                st.html(_column_list({**ENTRY_COLUMNS, **PRED_COLUMNS}))
+        elif anchor == "bets":
+            with st.expander("買い目の表の列", icon=":material/table:"):
+                st.html(_column_list(BET_COLUMNS))
+        elif anchor == "factors-score":  # 区分ごとの列の説明は、ファクターの表と同じ一覧から作る
+            for i, section in enumerate(factor_view.SECTIONS):
+                st.subheader(f"ファクター:{section['name']}", anchor=f"factors-{i}")
+                st.markdown(section["note"])
+                st.html(_factor_legend(section["cols"]))
 
 
 # ---------------------------------------------------------------- 設定
@@ -1131,5 +1147,6 @@ PAGES = {
     "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),
     "backtest": st.Page(page_backtest, title="シミュレーション", icon=":material/payments:", url_path="backtest"),
     "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),
+    "help": st.Page(page_help, title="ヘルプ", icon=":material/help:", url_path="help"),
 }
 st.navigation(list(PAGES.values()), position="top").run()
