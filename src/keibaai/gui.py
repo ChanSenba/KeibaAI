@@ -178,7 +178,7 @@ def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_
     if blend:
         from .blend import predict_test_blend
 
-        test, _ = predict_test_blend(feats, test_from)
+        test, _ = predict_test_blend(feats, test_from, use_market=use_market)
     else:
         test = bt.predict_test(feats, test_from, use_market)
     rules = [("favorite", {}), ("top1", {}), ("ev", {"ev_min": ev_min, "max_odds": max_odds}), ("all", {})]

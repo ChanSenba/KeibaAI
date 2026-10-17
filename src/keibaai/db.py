@@ -93,9 +93,45 @@ def connect(path: str | Path) -> sqlite3.Connection:
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
-    conn.executescript(SCHEMA)
-    _add_missing_columns(conn)
+    try:
+        conn.executescript(SCHEMA)
+        _add_missing_columns(conn)
+        _install_model_revision(conn)
+    except Exception:
+        # commit失敗時の接続を残すと、画面の例外表示中も書き込みロックが残る。
+        conn.close()
+        raise
     return conn
+
+
+def _install_model_revision(conn: sqlite3.Connection) -> None:
+    """直接SQLの訂正も含め、学習に使う表の更新を保存済み予測へ反映する。"""
+    tables = ("races", "results", "pedigree", "training", "jv_training")
+    events = ("INSERT", "UPDATE", "DELETE")
+    required = {f"model_revision_{table}_{event.lower()}" for table in tables for event in events}
+    installed = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    if required <= installed and model_revision(conn) is not None:
+        # INSERT OR IGNOREでも書き込みロックを取る。通常の画面表示ではSELECTだけで済ませる。
+        return
+    conn.execute("CREATE TABLE IF NOT EXISTS model_revision "
+                 "(id INTEGER PRIMARY KEY CHECK (id = 1), generation TEXT NOT NULL, revision INTEGER NOT NULL)")
+    conn.execute("INSERT OR IGNORE INTO model_revision VALUES (1, lower(hex(randomblob(16))), 0)")
+    for table in tables:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        changed = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in cols)
+        for event in events:
+            when = f" WHEN {changed}" if event == "UPDATE" else ""
+            conn.execute(f"CREATE TRIGGER IF NOT EXISTS model_revision_{table}_{event.lower()} "
+                         f"AFTER {event} ON {table}{when} BEGIN "
+                         "UPDATE model_revision SET revision = revision + 1 WHERE id = 1; END")
+    conn.commit()
+
+
+def model_revision(conn: sqlite3.Connection) -> tuple | None:
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_revision'").fetchone():
+        return None  # 更新検知のない旧DB・読み取り専用接続では予測をキャッシュしない
+    row = conn.execute("SELECT generation, revision FROM model_revision WHERE id = 1").fetchone()
+    return tuple(row) if row is not None else None
 
 
 # 後から増えた列。作成済みの DB にも足す

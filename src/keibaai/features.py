@@ -77,12 +77,27 @@ def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
                p.sire_id, p.damsire_id, t.rank AS train_rank, t.critic AS train_critic
         FROM results r JOIN races c USING (race_id) LEFT JOIN pedigree p USING (horse_id)
         LEFT JOIN training t ON t.race_id = r.race_id AND t.number = r.number AND t.seq = 0
-        WHERE r.finish IS NOT NULL AND c.date IS NOT NULL
+        WHERE (r.finish IS NOT NULL OR r.status IN ('中', '失')
+               OR r.status GLOB '[0-9]*(降)') AND c.date IS NOT NULL
         """,
         conn,
     )
+    # 旧netkeiba取込の「3(降)」等は確定順位を持つ。DBを書き換えず読み込み時に復元。
+    demoted = pd.to_numeric(df["status"].astype("string").str.extract(r"^(\d+)\(降\)$", expand=False), errors="coerce")
+    df["finish"] = pd.to_numeric(df["finish"].fillna(demoted), errors="coerce").astype(float)
+    df = df[result_mask(df)].copy()
     df["date"] = pd.to_datetime(df["date"])
+    df["is_entry"] = False
     return add_jv_features(conn, df)
+
+
+def result_mask(df: pd.DataFrame) -> pd.Series:
+    """確定した出走。着順のない中止・失格も含め、出馬表とは区別する。"""
+    status = df.get("status", pd.Series(None, index=df.index, dtype=object))
+    known = df["finish"].notna() | status.isin(["中", "失"])
+    if "is_entry" in df:
+        known &= ~df["is_entry"].fillna(False).astype(bool)
+    return known
 
 
 _CLASS_PATTERNS = [  # 上から順に判定。値が大きいほど格上
@@ -121,7 +136,7 @@ def _expanding_rate(df: pd.DataFrame, key: str | list[str], flag: str) -> tuple[
     """
     keys = [key] if isinstance(key, str) else list(key)
     work = df[keys + ["date"]].copy()
-    work["_f"] = df[flag].astype(float).where(df["finish"].notna())
+    work["_f"] = df[flag].astype(float).where(result_mask(df))
     day = work.groupby(keys + ["date"], observed=True)["_f"].agg(["sum", "count"]).reset_index().sort_values(keys + ["date"])
     day["cum_sum"] = day.groupby(keys, observed=True)["sum"].cumsum() - day["sum"]
     day["cum_n"] = day.groupby(keys, observed=True)["count"].cumsum() - day["count"]
@@ -138,7 +153,7 @@ def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
     inner: 内の馬(馬番がレース内で前の3分の1)の3着以内率 − 外の馬(後ろの3分の1)の率。大きいほど内有利。
     当日のレースは含めない(出走前には分からないため)。値は ±1 に収まり、差がない所は 0 付近。
     """
-    done = df[df["finish"].notna() & df["venue"].notna()].copy()
+    done = df[result_mask(df) & df["venue"].notna()].copy()
     done["_top3"] = (done["finish"] <= 3).astype(float)
     pos = done["number"] / done["field_size"]
     done["_front"] = np.where(done["early_pos"].isna(), np.nan, (done["early_pos"] <= 1 / 3).astype(float))
@@ -149,9 +164,13 @@ def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
         return a.mean() - b.mean() if len(a) and len(b) else np.nan
 
     keys = ["venue", "course_type", "date"]
+    if done.empty:
+        return df[keys].drop_duplicates().assign(**{c: np.nan for c in BIAS_FEATURES})
     day = done.groupby(keys, observed=True).apply(
         lambda g: pd.Series({"track_front_bias": diff(g, "_front"), "track_inner_bias": diff(g, "_inner")}),
         include_groups=False).reset_index()
+    # まだ結果のない予測日も窓の評価対象にする。当日値は closed="left" で使わない。
+    day = df[keys].drop_duplicates().merge(day, on=keys, how="left")
     out = []
     for _, g in day.sort_values("date").groupby(["venue", "course_type"], observed=True):
         r = g.set_index("date")[BIAS_FEATURES].rolling(BIAS_WINDOW, closed="left", min_periods=1).mean()
@@ -165,6 +184,26 @@ def _prior_mean(series: pd.Series, by: pd.Series, window: int) -> pd.Series:
     """by ごとに、1つ前までの window 件の平均(今回の値は含めない)。"""
     shifted = series.groupby(by).shift(1)
     return shifted.groupby(by).rolling(window, min_periods=1).mean().reset_index(level=0, drop=True)
+
+
+def _past_pace_z(df: pd.DataFrame) -> pd.Series:
+    """1レース1票で、前日までの同条件の平均・標本標準偏差を基準にする。"""
+    keys = ["course_type", "dist_bucket"]
+    races = df[["race_id", "date", *keys, "pace_first3f"]].drop_duplicates("race_id").copy()
+    races["x"] = pd.to_numeric(races["pace_first3f"], errors="coerce")
+    races["x2"] = races["x"] ** 2
+    day = races.groupby(keys + ["date"], observed=True).agg(
+        n=("x", "count"), s=("x", "sum"), s2=("x2", "sum")).reset_index().sort_values("date")
+    for col in ("n", "s", "s2"):
+        day["prior_" + col] = day.groupby(keys, observed=True)[col].cumsum() - day[col]
+    n = day["prior_n"].replace(0, np.nan)
+    day["mean"] = day["prior_s"] / n
+    variance = (day["prior_s2"] - day["prior_s"] ** 2 / n) / (n - 1).where(n > 1)
+    # タイムは0.1秒刻み。一定値の二乗和の丸め誤差を分散とみなさない。
+    day["std"] = np.sqrt(variance.where(variance > 1e-10))
+    races = races.merge(day[keys + ["date", "mean", "std"]], on=keys + ["date"], how="left")
+    races["z"] = (races["x"] - races["mean"]) / races["std"]
+    return df["race_id"].map(races.set_index("race_id")["z"])
 
 
 def _article_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -210,9 +249,7 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     df["runs_since_layoff"] = df.groupby([h, seg]).cumcount() + 1  # 休み明け(または初戦)を1とする
     df["is_renso"] = (df["days_since_last"] <= 8).astype(float).where(df["days_since_last"].notna())
     # 前走の内容。タイム差は勝ち馬との差(秒)、前半3Fは同じ芝ダ・距離帯の中でのz値(小さいほど速いペース)
-    first3f = pd.to_numeric(df["pace_first3f"], errors="coerce")  # DB の NULL は object で来る
-    pace_grp = first3f.groupby([df["course_type"], df["dist_bucket"]], observed=True)
-    pace_z = ((first3f - pace_grp.transform("mean")) / pace_grp.transform("std")).astype(float)
+    pace_z = _past_pace_z(df)
     df["prev_time_diff"] = df.groupby("horse_id", sort=False)["time_diff"].shift(1).astype(float)
     df["prev_pace_z"] = pace_z.groupby(df["horse_id"], sort=False).shift(1)
     df["prev_distance"] = g["distance"].shift(1)
@@ -287,6 +324,13 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["finish"] = pd.to_numeric(df["finish"], errors="coerce").astype(float)
+    # 取消・除外は出走数にも履歴にも入れない。未知の結果を予測対象に変換しない。
+    if "status" in df:
+        df = df[~df["status"].isin(["取", "除"])].copy()
+    if "is_entry" not in df:
+        df = df.assign(is_entry=~result_mask(df))
     df = df.sort_values(["date", "race_id", "number"]).reset_index(drop=True)
     df["win"] = (df["finish"] == 1).astype(int)
     df["top3"] = (df["finish"] <= 3).astype(int)
