@@ -86,3 +86,24 @@ def test_every_factor_runs_with_new_features(raw):
     names = [r.name for r in reports]
     assert {"適性", "ローテーション", "総合+全要素"} <= set(names)
     assert all(np.isfinite(r.win_logloss) for r in reports)
+
+
+def test_course_flow_uses_only_earlier_days_at_the_same_course():
+    from keibaai.features import _course_flow
+
+    def day(date, rid, first, last, finishes, early):
+        n = len(finishes)
+        return pd.DataFrame({"race_id": rid, "venue": "東京", "course_type": "芝", "distance": 1600,
+                             "date": pd.Timestamp(date), "finish": finishes, "early_pos": early,
+                             "pace_first3f": first, "pace_last3f": last, "early_pos_rel_3": early})
+    # 1日目: スロー(35.5-34.0=+1.5)で前の馬だけが3着以内 / 2日目: ハイ(33.0-36.0=-3.0)で後ろの馬だけが3着以内
+    d1 = day("2030-01-05", "a", 35.5, 34.0, [1, 2, 3, 4, 5, 6], [0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+    d2 = day("2030-01-12", "b", 33.0, 36.0, [4, 5, 6, 1, 2, 3], [0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+    d3 = day("2030-01-19", "c", None, None, [np.nan] * 3, [0.1, 0.5, 0.9])  # これから走るレース
+    d3["pace_first3f"] = d3["pace_last3f"] = np.nan
+    out = _course_flow(pd.concat([d1, d2, d3], ignore_index=True))
+    assert out.loc[:5, "course_pace_diff_5"].isna().all()  # 1日目は過去がない
+    assert (out.loc[6:11, "course_pace_diff_5"] == 1.5).all()  # 2日目は1日目だけ
+    assert (out.loc[12:, "course_pace_diff_5"] == (1.5 - 3.0) / 2).all()  # 3日目は両方の平均
+    assert out.loc[12:, "course_front_edge_5"].iloc[0] == 0.0  # +1(前が有利)と −1(後ろが有利)の平均
+    assert out.loc[12, "front_x_course_edge"] == 0.0

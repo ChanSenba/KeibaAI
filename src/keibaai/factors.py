@@ -11,7 +11,8 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL, FORM_FEATURES,
+from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL,
+                       COURSE_FLOW_FEATURES, FORM_FEATURES,
                        HUMAN_EXTRA, LAP_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, ROTATION_FEATURES,
                        TRAINING_FEATURES)
 from .model import PARAMS, auc, logloss, normalize_within_race
@@ -25,7 +26,7 @@ FACTORS: dict[str, list[str]] = {
     "騎手・厩舎": ["jockey_changed", "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate",
                *HUMAN_EXTRA],
     "展開・馬場": ["number", "bracket", "field_size", "distance", "course_type", "venue", "ground", "early_pos_rel_3",
-                 *BIAS_FEATURES, *PACE_FEATURES, *LAP_FEATURES],
+                 *BIAS_FEATURES, *PACE_FEATURES, *LAP_FEATURES, *COURSE_FLOW_FEATURES],
     "血統": ["distance", "course_type", "venue", "ground", *PEDIGREE_FEATURES],
     "調教": ["age", "n_prev", "days_since_last", "race_class", *TRAINING_FEATURES],
 }

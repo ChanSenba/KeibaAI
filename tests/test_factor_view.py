@@ -183,3 +183,52 @@ def test_summary_columns_exist_and_are_explained(conn):
     own = {c for s in fv.SECTIONS for c, _ in s["cols"]}
     for col, _ in fv.SUMMARY["cols"]:
         assert col in v and col in own and col in fv.COLUMN_INFO, col
+
+
+def test_column_points_ranks_within_the_race():
+    s = pd.Series([50.0, 52.0, np.nan, 51.0])
+    p = fv.column_points(s, "low")  # 小さいほど良い
+    assert p.tolist() == [10.0, 0.0, 5.0, 5.0]  # 欠けは5点
+    assert (fv.column_points(pd.Series([1.0, 1.0, 1.0]), "high") == 5.0).all()  # 差がなければ全員5点
+
+
+def test_score_race_sums_points_and_marks_the_top(conn):
+    one = fv.factor_values(conn, DAY)
+    sc = fv.score_race(one)
+    assert sc["score"].between(0, 100).all() and sc["score_rank"].min() == 1
+    assert sorted(sc.loc[sc["score_mark"] != "", "score_mark"]) == sorted(["◎", "○", "▲", "△", "△"])  # 10頭立て
+    best = sc["score"].idxmax()
+    assert sc.loc[best, "score_mark"] == "◎"
+    assert not any(c in fv.SCORE_EXCLUDE for c in (k[3:] for k in sc if k.startswith("pt_")))
+    assert len(fv.score_day(one)) == len(one)
+
+
+def test_score_race_follows_a_hand_calculation():
+    one = pd.DataFrame({"number": [1, 2, 3], "avg_finish_5": [2.0, 5.0, 3.0], "jockey_rank": [3, 1, 2]})
+    sc = fv.score_race(one)
+    # 着順は小さいほど良い: 1番10点・3番5点・2番0点 / リーディング順位は小さいほど良い: 2番10点・3番5点・1番0点
+    assert sc["score"].round(2).tolist() == [50.0, 50.0, 50.0]
+
+
+def test_front_edge_and_pace_fit_direction():
+    nan = float("nan")
+    assert fv.front_edge("スロー寄り", 2.0, 0.1) == 1.0 and fv.front_edge("ハイペース寄り", -3.0, -0.2) == -1.0
+    assert fv.front_edge("平均的", nan, nan) == 0.0
+    assert fv.pace_label(1.4) == "スロー" and fv.pace_label(-1.4) == "ハイペース" and fv.pace_label(0.2) == "平均的"
+    assert fv.STYLE_FRONT["逃げ"] > fv.STYLE_FRONT["先行"] > fv.STYLE_FRONT["差し"] > fv.STYLE_FRONT["追込"]
+
+
+def test_race_flow_text_and_favored_style(conn):
+    one = fv.factor_values(conn, DAY)
+    hist = pd.DataFrame({"ペース差": [-2.0, -1.5], "先行有利度": [-0.2, -0.1]})
+    flow = fv.race_flow(one, hist)
+    assert flow["favored"] == "差し・追込が有利" and "同コース直近2レース" in flow["text"]
+    assert sum(len(v) for v in flow["lineup"].values()) == len(one)
+    assert fv.race_flow(one, pd.DataFrame())["favored"]  # 履歴がなくても文章は出る
+
+
+def test_course_history_lists_recent_days_before_the_date(conn):
+    h = fv.course_history(conn, {"venue": "東京", "course_type": "芝", "distance": 1600}, DAY)
+    assert not h.empty and (pd.to_datetime(h["日付"]) < pd.Timestamp(DAY)).all()
+    assert h["日付"].is_monotonic_decreasing
+    assert fv.course_history(conn, {"venue": None, "course_type": "芝", "distance": 1600}, DAY).empty

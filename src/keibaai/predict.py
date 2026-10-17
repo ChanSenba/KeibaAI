@@ -123,7 +123,7 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
-CACHE_VERSION = 2  # 出走状態・因果的特徴量・更新検知を変更。旧予測は使わない。
+CACHE_VERSION = 3  # 出走状態・因果的特徴量・更新検知・追い切りのラップと同コース展開の特徴量を変更。旧予測は使わない。
 CACHE_DIR = "model_cache"  # DB と同じフォルダの中に作る
 
 

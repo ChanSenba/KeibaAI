@@ -45,6 +45,10 @@ PACE_FEATURES = ["style_front_rate", "style_closer_rate", "n_front_runners", "fr
                  "style_vs_field", "inner_pos"]
 # ラップ: 過去のレースのペース(前半3F − 後半3F。正なら後傾=スロー)と、自分の上がりが場のラップよりどれだけ速かったか
 LAP_FEATURES = ["prev_pace_diff", "pace_diff_3", "l3f_vs_lap_3"]
+# 同じコース(競馬場・芝ダ・距離)の直近5開催日の展開: ペース差(前半3F−後半3F。正なら後傾=スロー)の平均と、
+# 前に付けた馬(序盤の位置が前の3分の1)の3着内率 − そのほかの馬の率の平均。そのレースの顔ぶれの脚質との組み合わせで効く
+COURSE_FLOW_FEATURES = ["course_pace_diff_5", "course_front_edge_5", "front_x_course_edge"]
+COURSE_FLOW_DAYS = 5
 # 血統: 父・母の父の産駒が、同じ条件でこれまでどれだけ3着以内に来たか(結果は「そのレースより前」だけ)
 PEDIGREE_FEATURES = ["sire_n", "sire_top3_rate", "sire_ctdist_top3_rate", "sire_ground_top3_rate",
                      "damsire_n", "damsire_top3_rate", "damsire_ctdist_top3_rate"]
@@ -52,7 +56,7 @@ PEDIGREE_FEATURES = ["sire_n", "sire_top3_rate", "sire_ctdist_top3_rate", "sire_
 TRAINING_FEATURES = ["train_rank_score", "train_rank_vs_field", "train_critic"] + JV_FEATURES
 TRAIN_RANK_SCORE = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "E": 0.0}
 ARTICLE_FEATURES = (APTITUDE_FEATURES + FORM_FEATURES + ROTATION_FEATURES + HUMAN_EXTRA + PACE_FEATURES
-                    + LAP_FEATURES + PEDIGREE_FEATURES + TRAINING_FEATURES)
+                    + LAP_FEATURES + COURSE_FLOW_FEATURES + PEDIGREE_FEATURES + TRAINING_FEATURES)
 BIAS_FEATURES = ["track_front_bias", "track_inner_bias"]  # トラックバイアス(下の _track_bias)
 # レースの条件。要素別のモデルには入っているが、総合には入っていなかった
 CONDITION_FEATURES = ["course_type", "ground", "venue", "sex"]
@@ -178,6 +182,40 @@ def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
     if not out:
         return pd.DataFrame(columns=keys + BIAS_FEATURES)
     return pd.concat(out, ignore_index=True)
+
+
+def _course_flow(df: pd.DataFrame) -> pd.DataFrame:
+    """同じコースの直近 COURSE_FLOW_DAYS 開催日の展開(ペース差・先行有利度)を、各行に付ける。当日のレースは含めない。"""
+    keys = ["venue", "course_type", "distance"]
+    done = df[df["finish"].notna() & df["early_pos"].notna() & df["venue"].notna()].copy()
+    done["_front"] = (done["early_pos"] <= 1 / 3)
+    done["_top3"] = (done["finish"] <= 3).astype(float)
+    race = done.groupby(["race_id", *keys, "date"], observed=True).apply(
+        lambda g: pd.Series({
+            "pace_diff": pd.to_numeric(g["pace_first3f"], errors="coerce").iloc[0]
+            - pd.to_numeric(g["pace_last3f"], errors="coerce").iloc[0],
+            "front_edge": (g.loc[g["_front"], "_top3"].mean() - g.loc[~g["_front"], "_top3"].mean())
+            if g["_front"].any() and (~g["_front"]).any() else np.nan}),
+        include_groups=False).reset_index()
+    cols = ["course_pace_diff_5", "course_front_edge_5"]
+    if race.empty:
+        for c in cols:
+            df[c] = np.nan
+    else:
+        day = race.groupby([*keys, "date"], observed=True)[["pace_diff", "front_edge"]].mean().reset_index()
+        day = day.sort_values([*keys, "date"])
+        grp = day.groupby(keys, observed=True)
+        for src, dst in (("pace_diff", cols[0]), ("front_edge", cols[1])):
+            day[dst] = grp[src].transform(lambda x: x.rolling(COURSE_FLOW_DAYS, min_periods=1).mean())
+        # 各行の日より前(当日は含めない)で、いちばん新しい開催日の「直近5開催日の平均」を取る
+        left = df[[*keys, "date"]].assign(_i=np.arange(len(df))).dropna(subset=keys).sort_values("date")
+        got = pd.merge_asof(left, day[[*keys, "date", *cols]].sort_values("date"), on="date", by=keys,
+                            allow_exact_matches=False)
+        for c in cols:
+            df[c] = np.nan
+            df.loc[df.index[got["_i"].to_numpy()], c] = got[c].to_numpy()
+    df["front_x_course_edge"] = (0.5 - df["early_pos_rel_3"]) * df["course_front_edge_5"]  # 前に付ける馬ほど大きい
+    return df
 
 
 def _prior_mean(series: pd.Series, by: pd.Series, window: int) -> pd.Series:
@@ -367,6 +405,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["jockey_changed"] = np.where(prev_jockey.isna(), np.nan, (prev_jockey != df["jockey_id"]).astype(float))
 
     df = _article_features(df)
+    df = _course_flow(df)
     bias = _track_bias(df)
     df = df.merge(bias, on=["venue", "course_type", "date"], how="left")
     for c in BIAS_FEATURES:
