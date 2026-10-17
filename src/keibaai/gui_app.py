@@ -10,7 +10,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from keibaai import betting, db, factor_view, gui, progress
+from keibaai import betting, db, factor_view, gui, past_races, progress
 from keibaai.cli import reparse_cache
 from keibaai.fetch import Fetcher
 
@@ -743,6 +743,40 @@ def page_factors() -> None:
             st.html(_factor_legend(cols[2:]))
 
 
+# ---------------------------------------------------------------- 過去レース
+def page_past_races() -> None:
+    header("Past races", "過去レース",
+           "出走馬が過去に走ったレースを一頭ずつ並べ、今回のレースから見てそれぞれをどう評価できるかを文章で示します。"
+           "どれも対象日より前の結果だけを使っています。")
+    conn = connection()
+    today = dt.date.today()
+    with st.container(border=True):
+        date = st.date_input("対象日", gui.next_race_day(today), format="YYYY/MM/DD", key="past_date")
+        info = gui.entries_summary(conn, date.isoformat())
+        if not info["races"]:
+            st.caption(":material/info: この日の出馬表をまだ取得していません。「予想」ページで取得すると、ここで見られます。")
+            return
+        st.caption(f":material/check_circle: 取得済み {info['races']} レース・{info['horses']} 頭")
+    races = gui.day_races(conn, date.isoformat())
+    race, box = race_picker(races, key=f"past_{date}")
+    with box:
+        race_head(race)
+    limit = st.select_slider("さかのぼる走数", [3, 5, 10, 20], value=5, key="past_limit")
+    horses = past_races.horse_past_races(conn, race["race_id"], limit)
+    st.caption(":material/info: 評価は、今回と同じ芝/ダート・距離(±200m)・競馬場・回りがいくつ重なるかで決めています"
+               "(直結 > 参考 > 別条件)。")
+    for h in horses:
+        runs = h["runs"]
+        with st.expander(f"{h['number']} {h['horse_name']}", expanded=False):
+            st.markdown(h["verdict"])
+            if runs.empty:
+                continue
+            st.dataframe(runs[["日付", "レース", "条件", "結果", "上がり順", "人気", "kind"]].rename(columns={"kind": "今回から見て"}),
+                         hide_index=True, width="stretch")
+            for _, r in runs.iterrows():
+                st.markdown(f"- **{r['日付']} {r['レース']}**({r['kind']}) {r['見解']}")
+
+
 # ---------------------------------------------------------------- 買い方(1レース)
 ALLOCATIONS = ["ケリー基準で配分", "配分なし(同額)"]
 KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全部(攻めすぎ注意)": 1.0}
@@ -1043,6 +1077,7 @@ PAGES = {
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
     "bets": st.Page(page_bets, title="買い方", icon=":material/calculate:", url_path="bets"),
     "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),
+    "past": st.Page(page_past_races, title="過去レース", icon=":material/manage_search:", url_path="past"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
     "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),
     "backtest": st.Page(page_backtest, title="シミュレーション", icon=":material/payments:", url_path="backtest"),
