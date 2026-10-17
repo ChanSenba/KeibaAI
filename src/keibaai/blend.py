@@ -79,7 +79,8 @@ def apply_blend(df: pd.DataFrame, blend: Blend) -> pd.DataFrame:
     return d
 
 
-def predict_test_blend(df: pd.DataFrame, test_from: str, valid_months: int = 12) -> tuple[pd.DataFrame, Blend]:
+def predict_test_blend(df: pd.DataFrame, test_from: str, valid_months: int = 12,
+                       use_market: bool = False) -> tuple[pd.DataFrame, Blend]:
     """評価期間の各馬に、混ぜた勝率(p_win)を付ける。
 
     混ぜ方は test_from の valid_months か月前から test_from まで(学習はその前だけ)の結果で決め、
@@ -87,7 +88,7 @@ def predict_test_blend(df: pd.DataFrame, test_from: str, valid_months: int = 12)
     """
     cut = pd.Timestamp(test_from)
     valid_from = cut - pd.DateOffset(months=valid_months)
-    _, valid = evaluate(df[df["date"] < cut], str(valid_from.date()), use_market=False)
+    _, valid = evaluate(df[df["date"] < cut], str(valid_from.date()), use_market=use_market)
     blend = fit_blend(valid)
-    _, test = evaluate(df, test_from, use_market=False)
+    _, test = evaluate(df, test_from, use_market=use_market)
     return apply_blend(test, blend), blend
