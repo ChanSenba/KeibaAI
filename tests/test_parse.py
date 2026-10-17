@@ -33,6 +33,11 @@ def test_non_finisher_keeps_status():
     assert r.time_sec is None and r.body_weight_diff == 0
 
 
+def test_demoted_horse_keeps_official_finish():
+    r = parse_race(HTML.replace('>中<', '>3(降)<'), "202405050812").results[1]
+    assert r.finish == 3 and r.status == "3(降)"
+
+
 def test_missing_table():
     with pytest.raises(ValueError):
         parse_race("<html></html>", "202405050812")

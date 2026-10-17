@@ -72,8 +72,9 @@ def test_course_relative_groups_by_center_kind_and_miho_renewal():
         "kind": ["slope"] * 6 + ["wood"], "center": ["0", "0", "0", "0", "0", "0", "0"], "course": [None] * 6 + ["A"],
         "f4": [52.0, 53.0, 54.0, 54.0, 55.0, 56.0, 50.0],
         "f3": [39.0, 40.0, 41.0, 41.0, 42.0, 43.0, 37.0], "f2": [25.0] * 7, "l1": [12.0, 12.0, 12.0, 13.0, 13.0, 13.0, 11.0]})
-    out = add_course_relative(tr)
-    # 美浦坂路は改修の前(中央値53)と後(中央値55)で別グループ。ウッドは1本だけなので差は0
-    assert out["f4_z"].tolist() == [-1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 0.0]
-    assert out["f4_pct"].iloc[0] < out["f4_pct"].iloc[2]
+    out = add_course_relative(tr, min_history=1)
+    # 各グループの初日は基準なし。改修後は改修前の時計を使わない。
+    assert out["f4_z"].iloc[[0, 3, 6]].isna().all()
+    assert out["f4_z"].iloc[[1, 2, 4, 5]].tolist() == [1.0, 1.5, 1.0, 1.5]
+    assert out["f4_pct"].iloc[2] == 1.0
     assert out["accel"].iloc[0] == (52.0 - 39.0) - 12.0

@@ -154,12 +154,13 @@ def format_summary(table: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def blend_summary(test: pd.DataFrame, blend) -> str:
+def blend_summary(test: pd.DataFrame, blend, use_market: bool = False) -> str:
     """混ぜた確率と、市場だけの確率の、評価期間での成績を比べる文。"""
     from .model import auc, logloss
 
     y = test["win"].to_numpy()
-    rows = [("市場だけ(オッズ)", test["p_mkt"]), ("モデルだけ(能力)", test["p_model"]), ("混ぜた確率", test["p_win"])]
+    model_name = "モデルだけ(オッズ込)" if use_market else "モデルだけ(能力)"
+    rows = [("市場だけ(オッズ)", test["p_mkt"]), (model_name, test["p_model"]), ("混ぜた確率", test["p_win"])]
     lines = [f"混ぜ方: モデルの重み a={blend.a:g}, 市場の重み b={blend.b:g}"
              f"(決めた期間の対数尤度 {blend.loglik:.4f}、市場だけなら {blend.baseline_loglik:.4f})",
              f"{'評価期間の確率':<18}{'勝LogLoss':>11}{'勝AUC':>8}"]

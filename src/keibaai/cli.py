@@ -355,8 +355,8 @@ def main(argv=None) -> None:
             from .backtest import blend_summary
             from .blend import predict_test_blend
 
-            test, blend = predict_test_blend(feats, args.test_from)
-            print(blend_summary(test, blend))
+            test, blend = predict_test_blend(feats, args.test_from, use_market=args.market)
+            print(blend_summary(test, blend, use_market=args.market))
         else:
             test = predict_test(feats, args.test_from, args.market)
         if args.grid:

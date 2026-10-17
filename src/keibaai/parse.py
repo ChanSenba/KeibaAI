@@ -197,6 +197,9 @@ def parse_race(html: str, race_id: str) -> ParsedRace:
         r.finish = _num(finish_text, int)
         if r.finish is None:
             r.status = finish_text or None
+            demoted = re.fullmatch(r"(\d+)\(降\)", finish_text or "")
+            if demoted:
+                r.finish = int(demoted.group(1))
         r.bracket = _num(text("bracket"), int)
         r.horse_name = text("horse_name")
         r.horse_id = _id_from_href(cell("horse_name").find("a") if cell("horse_name") else None, "horse")

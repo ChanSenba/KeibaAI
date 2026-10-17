@@ -357,7 +357,7 @@ def _training_places(conn: sqlite3.Connection, t: pd.DataFrame, date: str) -> pd
 def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     """date の出馬表の各馬について、SECTIONS の列をすべて持つ表を返す(race_id・馬名つき)。"""
     df, hist = day_frame(conn, date)
-    t = df[df["finish"].isna()].copy()
+    t = df[df["is_entry"]].copy()
     ts = pd.Timestamp(date)
 
     t["style"] = [style_label(a, b) for a, b in zip(t["early_pos_rel_3"], t["pos_gain_3"])]
@@ -425,7 +425,8 @@ def gate_bias(conn: sqlite3.Connection, race, before: str) -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.read_sql_query(
         "SELECT r.race_id, r.number, r.finish, c.distance, c.course, c.rail FROM results r JOIN races c USING (race_id) "
-        "WHERE c.venue = ? AND c.course_type = ? AND c.date < ? AND r.finish IS NOT NULL",
+        "WHERE c.venue = ? AND c.course_type = ? AND c.date < ? "
+        "AND (r.finish IS NOT NULL OR r.status IN ('中', '失'))",
         conn, params=(venue, ct, before))
     if df.empty:
         return pd.DataFrame()
