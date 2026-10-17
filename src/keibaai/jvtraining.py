@@ -24,7 +24,11 @@ BASE_FEATURES = ["jv_n14", "jv_best_f4", "jv_best_l1", "jv_last_f4", "jv_last_l1
                  "jv_f4_vs_base", "jv_f4_vs_field"]
 COURSE_FEATURES = ["jv_best_f4_z", "jv_best_pct", "jv_last_f4_z", "jv_last_pct", "jv_last_f2_z", "jv_last_l1_z",
                    "jv_last_accel"]
-JV_FEATURES = BASE_FEATURES + COURSE_FEATURES
+# 4Fのラップ(1Fごとの時計)。lap1 = 4F−3F(最初の1F)、lap2 = 3F−2F、lap3 = 2F−最後の1F。最後の1Fは l1。
+# 最後の追い切りのラップと、そのコースの標準(中央値)との差。ラップの形(前半を踏んだか、終いを伸ばしたか)を見る
+LAP_FEATURES = ["jv_last_lap1", "jv_last_lap2", "jv_last_lap3", "jv_last_lap1_z", "jv_last_lap2_z", "jv_last_lap3_z",
+                "jv_best_lap1", "jv_best_lap2", "jv_best_lap3"]
+JV_FEATURES = BASE_FEATURES + COURSE_FEATURES + LAP_FEATURES
 MIHO_NEW_SLOPE = "2023-09-28"  # 美浦坂路は2023年に改修(高低差18m→33m)。この日から新コース
 COLUMNS = ["horse_id", "date", "time", "kind", "center", "course", "turn", "f4", "f3", "f2", "l1"]
 
@@ -101,6 +105,9 @@ def add_course_relative(tr: pd.DataFrame) -> pd.DataFrame:
         tr[f"{col}_z"] = tr[col] - g[col].transform("median")
     tr["f4_pct"] = g["f4"].rank(pct=True)
     tr["accel"] = (tr["f4"] - tr["f3"]) - tr["l1"]
+    tr["lap1"], tr["lap2"], tr["lap3"] = tr["f4"] - tr["f3"], tr["f3"] - tr["f2"], tr["f2"] - tr["l1"]
+    for col in ("lap1", "lap2", "lap3"):
+        tr[f"{col}_z"] = tr[col] - g[col].transform("median")
     return tr
 
 
@@ -136,7 +143,12 @@ def add_jv_features(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
         "jv_best_f4_z": g["f4_z"].min(), "jv_best_pct": g["f4_pct"].min(),
         "jv_last_f4_z": g["f4_z"].last(), "jv_last_pct": g["f4_pct"].last(),
         "jv_last_f2_z": g["f2_z"].last(), "jv_last_l1_z": g["l1_z"].last(), "jv_last_accel": g["accel"].last(),
+        **{f"jv_last_{c}": g[c].last() for c in ("lap1", "lap2", "lap3", "lap1_z", "lap2_z", "lap3_z")},
     })
+    # 一番時計(4Fが最速)の追い切りのラップ
+    best = near.loc[near.groupby(["horse_id", "day"], sort=False)["f4"].idxmin()].set_index(["horse_id", "day"])
+    for c in ("lap1", "lap2", "lap3"):
+        agg[f"jv_best_{c}"] = best[c]
     base = m[m["ago"] > 14].groupby(["horse_id", "day"], sort=False)["f4"].agg(["mean", "size"])
     agg["jv_f4_vs_base"] = agg["jv_best_f4"] - base["mean"].where(base["size"] >= 3).reindex(agg.index)
     out = df[["horse_id"]].assign(day=pd.to_datetime(df["date"])).merge(

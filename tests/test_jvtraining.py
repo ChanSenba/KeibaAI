@@ -1,3 +1,4 @@
+import pytest
 import pandas as pd
 
 from keibaai import db
@@ -77,3 +78,17 @@ def test_course_relative_groups_by_center_kind_and_miho_renewal():
     assert out["f4_z"].tolist() == [-1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 0.0]
     assert out["f4_pct"].iloc[0] < out["f4_pct"].iloc[2]
     assert out["accel"].iloc[0] == (52.0 - 39.0) - 12.0
+
+
+def test_laps_of_the_4f_workout():
+    conn = db.connect(":memory:")
+    # 4F 52.0 / 3F 38.5 / 2F 25.0 / 1F 12.2 → ラップ 13.5 / 13.5 / 12.8 / 12.2
+    conn.execute("INSERT INTO jv_training (horse_id, date, time, kind, center, f4, f3, f2, l1) "
+                 "VALUES ('h1', '2026-10-01', '0600', 'slope', '1', 52.0, 38.5, 25.0, 12.2)")
+    conn.execute("INSERT INTO jv_training (horse_id, date, time, kind, center, f4, f3, f2, l1) "
+                 "VALUES ('h1', '2026-10-05', '0600', 'slope', '1', 54.0, 40.0, 26.5, 13.0)")
+    df = pd.DataFrame({"race_id": ["r1"], "horse_id": ["h1"], "date": pd.to_datetime(["2026-10-07"])})
+    a = add_jv_features(conn, df).iloc[0]
+    assert (a.jv_last_lap1, a.jv_last_lap2, a.jv_last_lap3) == pytest.approx((14.0, 13.5, 13.5))  # 最後の追い切り
+    assert (a.jv_best_lap1, a.jv_best_lap2, a.jv_best_lap3) == pytest.approx((13.5, 13.5, 12.8))  # 一番時計
+    assert a.jv_last_lap3_z == pytest.approx(13.5 - 13.15)  # 2本の中央値(12.8 と 13.5 の間)との差

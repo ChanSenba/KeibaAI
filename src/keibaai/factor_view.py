@@ -39,9 +39,13 @@ SECTIONS: list[dict] = [
               ("tj_n", "厩舎×騎手の回数"), ("tj_top3_rate", "厩舎×騎手の3着内率")]},
     {"name": "馬場・枠・展開",
      "note": "トラックバイアスは直近10日以内の同じ競馬場・芝ダートの偏り(正なら先行有利・内有利)。"
-             "ペース予想は、メンバーの脚質構成からの目安です。",
+             "ペース予想は、メンバーの脚質構成からの目安です。"
+             "同コースの直近は、同じ競馬場・芝ダ・距離の直近5開催日(この日より前)の平均です。"
+             "展開適性は、この馬の脚質が、ペース予想と同コース直近の展開に合っているかの点(プラスは合う)です。",
      "cols": [("bracket", "枠"), ("number", "馬番"), ("inner_pos", "内外(馬番/頭数)"),
               ("track_front_bias", "先行有利度"), ("track_inner_bias", "内有利度"), ("pace_forecast", "ペース予想"),
+              ("course_pace_diff_5", "同コース直近のペース差"), ("course_front_edge_5", "同コース直近の先行有利度"),
+              ("pace_fit", "展開適性"),
               ("n_front_runners", "先行寄りの馬の数"), ("class_change", "クラス変化"), ("distance_change", "距離の変化(m)"),
               ("dist_note", "距離短縮・延長")]},
     {"name": "オッズのゆがみ",
@@ -62,7 +66,10 @@ SECTIONS: list[dict] = [
      "cols": [("train_center", "トレセン"), ("train_last_place", "最後の追い切り"),
               ("jv_last_f4", "最後の4F"), ("jv_last_l1", "最後の1F"),
               ("jv_last_f4_z", "コース基準との差(4F)"), ("jv_last_pct", "コース内の順位(4F)"),
-              ("jv_last_accel", "加速(最初−最後の1F)"), ("jv_best_f4", "一番時計の4F"), ("train_best_place", "一番時計の場所"),
+              ("jv_last_accel", "加速(最初−最後の1F)"),
+              ("jv_last_lap1", "ラップ1(4F→3F)"), ("jv_last_lap2", "ラップ2(3F→2F)"), ("jv_last_lap3", "ラップ3(2F→1F)"),
+              ("jv_last_lap1_z", "ラップ1の基準差"), ("jv_last_lap2_z", "ラップ2の基準差"), ("jv_last_lap3_z", "ラップ3の基準差"),
+              ("jv_last_l1_z", "終い1Fの基準差"), ("jv_best_f4", "一番時計の4F"), ("train_best_place", "一番時計の場所"),
               ("jv_f4_vs_base", "ふだんとの差(4F)"), ("jv_f4_vs_field", "メンバー内の差(4F)"), ("jv_n14", "追い切りの本数(14日)"),
               ("jv_days_since", "最後の追い切りから(日)"), ("train_critic", "短評"), ("train_rank", "評価"),
               ("train_rank_vs_field", "評価のメンバー内の差")]},
@@ -152,6 +159,15 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "jv_last_f2_z": ("最後の追い切りの2F − 同じコース・時期の中央値(秒)。マイナスは、終いが速い", "low"),
     "jv_last_l1_z": ("最後の追い切りの最後の1F − 同じコース・時期の中央値(秒)。マイナスは、終いが速い", "low"),
     "jv_last_accel": ("最後の追い切りの 最初の1Fのラップ − 最後の1Fのラップ(秒)。プラスは加速、マイナスは失速", "high"),
+    "course_pace_diff_5": ("同じコース(競馬場・芝ダ・距離)の直近5開催日の、前半3F − 後半3Fの平均(秒)。プラスは後傾=スロー、マイナスはハイペースが続いている", None),
+    "course_front_edge_5": ("同じコースの直近5開催日の、前に付けた馬の3着内率 − ほかの馬の率の平均。プラスは先行有利、マイナスは差し有利", None),
+    "pace_fit": ("この馬の脚質が、ペース予想と同コース直近の展開に合うか。プラスは合う(スローや先行有利なら逃げ・先行、ハイペースや差し有利なら差し・追込)", "high"),
+    "jv_last_lap1": ("最後の追い切りの最初の1F(4F−3F)のラップ(秒)。長い追い切りの出だしの速さ", None),
+    "jv_last_lap2": ("最後の追い切りの2つ目の1F(3F−2F)のラップ(秒)", None),
+    "jv_last_lap3": ("最後の追い切りの3つ目の1F(2F−最後の1F)のラップ(秒)", None),
+    "jv_last_lap1_z": ("最初の1Fのラップ − 同じトレセン・コース・時期の中央値(秒)。マイナスは、出だしから速い", None),
+    "jv_last_lap2_z": ("2つ目の1Fのラップ − 同じコース・時期の中央値(秒)。マイナスは、中間も速い", None),
+    "jv_last_lap3_z": ("3つ目の1Fのラップ − 同じコース・時期の中央値(秒)。マイナスは、4コーナーからの加速が速い", "low"),
     "l3f_vs_lap_3": ("自分の上がり3F − レース全体の後半3F(3走平均・秒)。マイナスが大きいほど周りより速く上がった", "low"),
 }
 
@@ -203,13 +219,16 @@ def top_rank(values: pd.Series, good: str | None, n: int = 5) -> pd.Series:
 # 「総合」タブ用。各区分から、予想に効きやすい数値を抜き出したもの(見出しは区分名つき)
 SUMMARY: dict = {
     "note": "各区分から重要な数値を1〜2個ずつ抜き出した表です。色は、その列で良い値の上位の馬。"
-            "血統・ラップは取得した馬だけ値が入ります。くわしい数値は、各区分のタブで見られます。",
+            "血統・ラップは取得した馬だけ値が入ります。くわしい数値は、各区分のタブで見られます。"
+            "左の「総合点」は、人気・オッズを除く列を1つずつ点数にして足したものです(下の「点数のつけ方」)。",
     "cols": [("style", "脚質"), ("avg_finish_5", "5走の平均着順"), ("time_diff_5", "タイム差(5走平均)"),
              ("l3f_rank_3", "上がり順位(3走)"), ("rec_dist", "同じ距離帯"), ("rec_ground", "同じ馬場状態"),
              ("rotation", "ローテーション"), ("jockey_rank", "騎手リーディング"),
              ("jockey_ct_top3_rate", "騎手の3着内率"), ("pair_top3_rate", "この馬との3着内率"),
              ("class_change", "クラス変化"), ("prev_pop_gap", "前走の人気 − 着順"),
              ("sire_ctdist_top3_rate", "父産駒・芝ダ×距離帯"), ("l3f_vs_lap_3", "上がり−場の後半3F"),
+             ("jv_last_f4_z", "追い切り4F(基準差)"), ("jv_last_lap3_z", "追い切りラップ3(基準差)"),
+             ("jv_last_l1_z", "追い切り終い1F(基準差)"), ("pace_fit", "展開適性"),
              ("popularity", "人気"), ("win_odds", "単勝オッズ")],
 }
 
@@ -228,6 +247,27 @@ def style_label(early_pos_rel_3: float, pos_gain_3: float) -> str:
     if pos_gain_3 == pos_gain_3 and pos_gain_3 >= 0.25:
         return "マクリ"
     return label
+
+
+# 脚質ごとの、前に付ける度合い(逃げ +1 … 追込 −1)。展開適性の計算に使う
+STYLE_FRONT = {"逃げ": 1.0, "先行": 0.5, "差し": -0.5, "追込": -1.0, "マクリ": -0.5, "不明": 0.0}
+PACE_SLOW, PACE_HIGH = 1.0, -1.0  # ペース差(前半3F−後半3F)がこれ以上ならスロー、以下ならハイペースとする
+
+
+def pace_label(diff: float) -> str:
+    """ペース差(前半3F − 後半3F。プラスは後傾)の呼び名。"""
+    if diff != diff:
+        return "不明"
+    return "スロー" if diff >= PACE_SLOW else "ハイペース" if diff <= PACE_HIGH else "平均的"
+
+
+def front_edge(forecast: str, course_pace_diff: float, course_front_edge: float) -> float:
+    """そのレースで前に付ける馬が有利か(−1〜+1)。メンバーの脚質構成からのペース予想(半分)と、
+    同コースの直近の展開(ペース差・先行有利度、各4分の1)を合わせる。分からない部分は0とする。"""
+    field = {"スロー寄り": 1.0, "ハイペース寄り": -1.0}.get(forecast, 0.0)
+    pace = 0.0 if course_pace_diff != course_pace_diff else float(np.clip(course_pace_diff / 1.5, -1, 1))
+    edge = 0.0 if course_front_edge != course_front_edge else float(np.clip(course_front_edge / 0.1, -1, 1))
+    return 0.5 * field + 0.25 * pace + 0.25 * edge
 
 
 def rotation_label(days: float, runs_since_layoff: float) -> str:
@@ -364,6 +404,8 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     t["pace_forecast"] = t.groupby("race_id")["style"].transform(pace_forecast)
     mine = hist[hist["horse_id"].isin(set(t["horse_id"]))]  # 出走馬の過去だけ。全馬の履歴を分けるのは無駄
     t = t.join(_records(t, mine)).assign(last5=_last5(t, mine))
+    edge = [front_edge(f, p, e) for f, p, e in zip(t["pace_forecast"], t["course_pace_diff_5"], t["course_front_edge_5"])]
+    t["pace_fit"] = t["style"].map(STYLE_FRONT).to_numpy() * np.array(edge)
     t["rotation"] = [rotation_label(d, r) for d, r in zip(t["days_since_last"], t["runs_since_layoff"])]
     t["jockey_change"] = t["jockey_changed"].map({1.0: "乗り替わり", 0.0: "継続"}).fillna("—")
     t["dist_note"] = np.select([t["dist_shorten300"] == 1, t["dist_extend300"] == 1], ["短縮300m以上", "延長300m以上"], "—")
@@ -450,3 +492,121 @@ def gate_bias(conn: sqlite3.Connection, race, before: str) -> pd.DataFrame:
         row["内−外"] = (row["内枠"] - row["外枠"]) * 100
         out.append(row)
     return pd.DataFrame(out)
+
+# ---------------------------------------------------------------- 総合点(各ファクターを点数にして足す)
+SCORE_EXCLUDE = {"popularity", "win_odds"}  # 市場の値は、ファクターの点数には入れない
+SCORE_WEIGHTS: dict[str, float] = {}  # 列ごとの重み。書いていない列は 1
+SCORE_MARKS = ["◎", "○", "▲"]
+
+
+def score_columns() -> list[tuple[str, str]]:
+    """点数にする列(良い向きのある SUMMARY の列)。"""
+    return [(c, label) for c, label in SUMMARY["cols"]
+            if c not in SCORE_EXCLUDE and COLUMN_INFO.get(c, (None, None))[1] is not None]
+
+
+def column_points(values: pd.Series, good: str) -> pd.Series:
+    """1つの列を、同じレースの中で 0〜10 点にする(いちばん良い馬が10点、悪い馬が0点。同じ値は平均の順位)。
+
+    値がない馬、全馬が同じ値の列は、差がつかないよう真ん中の5点にする。
+    """
+    score = _good_score(values, good)
+    known = score.dropna()
+    if known.nunique() < 2:
+        return pd.Series(5.0, index=values.index)
+    rank = score.rank(method="average", ascending=False)  # 1が最良
+    pts = (len(known) - rank) / (len(known) - 1) * 10
+    return pts.fillna(5.0)
+
+
+def score_race(one: pd.DataFrame) -> pd.DataFrame:
+    """1レースの出走馬(factor_values の行)に、ファクターごとの点数・総合点(100点満点)・順位・印を付けて返す。
+
+    列は pt_<列名>(0〜10点)、score(総合点)、score_rank(1が最上位)、score_mark(◎○▲△。9頭立て以下は△1頭)。
+    列の順に1つずつ点数をつけて足し、最後に総合点の高い順に印をつける。
+    """
+    cols = [(c, label) for c, label in score_columns() if c in one]
+    out = pd.DataFrame(index=one.index)
+    total = pd.Series(0.0, index=one.index)
+    wsum = 0.0
+    for c, _ in cols:
+        w = SCORE_WEIGHTS.get(c, 1.0)
+        out[f"pt_{c}"] = column_points(one[c], COLUMN_INFO[c][1])
+        total += out[f"pt_{c}"] * w
+        wsum += w
+    out["score"] = total / (10 * wsum) * 100 if wsum else np.nan
+    out["score_rank"] = out["score"].rank(method="min", ascending=False)
+    out["score_mark"] = ""
+    n_marked = len(SCORE_MARKS) + (2 if len(one) >= 10 else 1)
+    top = out["score"].sort_values(ascending=False, kind="stable").index[:n_marked]
+    out.loc[top, "score_mark"] = (SCORE_MARKS + ["△", "△"])[:len(top)]
+    return out
+
+
+def score_day(values: pd.DataFrame) -> pd.DataFrame:
+    """factor_values の全レースに score_race をかけて、同じ並びで返す。"""
+    parts = [score_race(g) for _, g in values.groupby("race_id", sort=False)]
+    return pd.concat(parts).reindex(values.index) if parts else pd.DataFrame(index=values.index)
+
+
+# ---------------------------------------------------------------- レース展開
+def course_history(conn: sqlite3.Connection, race, before: str, days: int = 5) -> pd.DataFrame:
+    """同じコース(競馬場・芝ダ・距離)の、before より前の直近 days 開催日のレースごとの展開。新しい順。
+
+    列: 日付・レース・馬場・前半3F・後半3F・ペース差・ペース・先行有利度(前に付けた馬の3着内率 − ほかの馬)・
+    勝ち馬の位置(最初のコーナーの位置÷頭数)。コースが分からなければ空。
+    """
+    venue, ct = race.get("venue"), race.get("course_type")
+    distance = pd.to_numeric(race.get("distance"), errors="coerce")
+    if not isinstance(venue, str) or not isinstance(ct, str) or distance != distance:
+        return pd.DataFrame()
+    dates = [r[0] for r in conn.execute(
+        "SELECT DISTINCT date FROM races WHERE venue = ? AND course_type = ? AND distance = ? AND date < ? "
+        "ORDER BY date DESC LIMIT ?", (venue, ct, int(distance), before, days))]
+    if not dates:
+        return pd.DataFrame()
+    q = ",".join("?" * len(dates))
+    df = pd.read_sql_query(
+        f"SELECT c.race_id, c.date, c.round, c.name, c.ground, c.pace_first3f, c.pace_last3f, r.finish, r.passing, "
+        f"r.number FROM races c JOIN results r USING (race_id) WHERE c.venue = ? AND c.course_type = ? "
+        f"AND c.distance = ? AND c.date IN ({q}) AND r.finish IS NOT NULL", conn, params=[venue, ct, int(distance), *dates])
+    if df.empty:
+        return pd.DataFrame()
+    from .features import parse_early_position
+    df["field"] = df.groupby("race_id")["number"].transform("count")
+    df["early"] = df["passing"].map(parse_early_position) / df["field"]
+    rows = []
+    for rid, g in df.groupby("race_id", sort=False):
+        f = g[g["early"].notna()]
+        front = f["early"] <= 1 / 3
+        top3 = (f["finish"] <= 3).astype(float)
+        win = g[g["finish"] == 1]
+        first, last = pd.to_numeric(g["pace_first3f"].iloc[0], errors="coerce"), pd.to_numeric(g["pace_last3f"].iloc[0], errors="coerce")
+        rows.append({"race_id": rid, "日付": g["date"].iloc[0], "R": int(g["round"].iloc[0]), "レース": g["name"].iloc[0],
+                     "馬場": g["ground"].iloc[0], "前半3F": first, "後半3F": last, "ペース差": first - last,
+                     "ペース": pace_label(first - last),
+                     "先行有利度": top3[front].mean() - top3[~front].mean() if front.any() and (~front).any() else np.nan,
+                     "勝ち馬の位置": win["early"].iloc[0] if len(win) and win["early"].notna().any() else np.nan})
+    return pd.DataFrame(rows).sort_values(["日付", "R"], ascending=False).reset_index(drop=True)
+
+
+def race_flow(one: pd.DataFrame, history: pd.DataFrame) -> dict:
+    """1レースの展開の見立て。one は factor_values の1レース分、history は course_history の結果。
+
+    lineup: 脚質ごとの馬番(逃げ・先行・差し・追込・マクリ・不明)。forecast: メンバーの脚質構成からのペース予想。
+    course_pace: 同コース直近のペース差の平均と呼び名。edge: 前に付ける馬の有利度(−1〜+1。front_edge)。
+    favored: その結果、有利な脚質の言葉。text: 画面に出す1〜2行の説明。
+    """
+    lineup = {k: [int(n) for n in one.loc[one["style"] == k, "number"]] for k in STYLES + ["マクリ", "不明"]}
+    forecast = one["pace_forecast"].iloc[0] if len(one) else "不明"
+    diff = history["ペース差"].mean() if not history.empty else np.nan
+    cedge = history["先行有利度"].mean() if not history.empty else np.nan
+    edge = front_edge(forecast, diff, cedge)
+    favored = "逃げ・先行が有利" if edge >= 0.25 else "差し・追込が有利" if edge <= -0.25 else "脚質による差は小さい"
+    parts = [f"このメンバーは{forecast}(逃げ{len(lineup['逃げ'])}頭・先行{len(lineup['先行'])}頭)。"]
+    if diff == diff:
+        parts.append(f"同コース直近{history['ペース差'].notna().sum()}レースは平均ペース差 {diff:+.1f}秒で{pace_label(diff)}"
+                     + ("" if cedge != cedge else f"、前に付けた馬の3着内率はほかより {cedge * 100:+.0f}pt") + "。")
+    parts.append(f"見立て: {favored}。")
+    return {"lineup": lineup, "forecast": forecast, "course_pace": (diff, pace_label(diff)), "course_edge": cedge,
+            "edge": edge, "favored": favored, "text": "".join(parts)}

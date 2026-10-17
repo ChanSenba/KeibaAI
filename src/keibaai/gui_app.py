@@ -575,6 +575,29 @@ def _show_gate_bias(conn, race, date: dt.date) -> None:
                    "予想の勝率には入れていません。検証では、モデルに足しても当たりやすさは変わりませんでした。")
 
 
+def _show_race_flow(conn, race, one, date: dt.date) -> None:
+    """このレースの展開の見立て(メンバーの脚質構成)と、同じコースの直近の展開。予想の展開適性の元になる。"""
+    history = factor_view.course_history(conn, race, date.isoformat())
+    flow = factor_view.race_flow(one, history)
+    with st.expander("レース展開(脚質構成と同コースの直近)", icon=":material/timeline:", expanded=True):
+        st.markdown(flow["text"])
+        names = {k: " ".join(str(n) for n in v) for k, v in flow["lineup"].items() if v}
+        st.html('<div class="kb-marks">' + "".join(
+            f'<span class="kb-mark"><b>{html.escape(k)}</b>{html.escape(v)}</span>' for k, v in names.items()) + "</div>")
+        if not history.empty:
+            shown = history.drop(columns=["race_id"]).copy()
+            shown["日付"] = pd.to_datetime(shown["日付"]).dt.strftime("%m/%d")
+            st.dataframe(shown, hide_index=True, width="stretch", column_config={
+                "R": st.column_config.NumberColumn("R", format="%d"),
+                "前半3F": st.column_config.NumberColumn(format="%.1f"), "後半3F": st.column_config.NumberColumn(format="%.1f"),
+                "ペース差": st.column_config.NumberColumn(format="%+.1f", help="前半3F − 後半3F。プラスは後傾(スロー)、マイナスはハイペース"),
+                "先行有利度": st.column_config.NumberColumn(format="percent", help="前に付けた馬の3着内率 − ほかの馬の率"),
+                "勝ち馬の位置": st.column_config.NumberColumn(format="%.2f", help="勝ち馬の最初のコーナーの位置 ÷ 頭数。0に近いほど前")})
+        st.caption("脚質は過去3走の位置取りからの推定です。ペース差が ±1.0 秒以内なら平均的としています。"
+                   "この見立てと同コース直近の展開は、予想の特徴量(同コース直近のペース差・先行有利度)と、"
+                   "ファクターの「展開適性」に使っています。")
+
+
 def race_detail(conn, race, race_id: str, prediction) -> None:
     """レース名・条件と出馬表。予想があれば印・勝率・期待値も出す。"""
     race_head(race)
@@ -636,7 +659,14 @@ def _factor_config(cols, frame=None) -> dict:
 
 
 OVERALL_COLUMNS = ["mark", "star", "p_win_market", "p_win_ability", "ev_market", "ev_ability"]
-OVERALL_HIGH = {"p_win_market", "p_win_ability", "ev_market", "ev_ability"}
+OVERALL_HIGH = {"p_win_market", "p_win_ability", "ev_market", "ev_ability", "score"}
+SCORE_CONFIG = {
+    "score_mark": st.column_config.TextColumn(
+        "印(点数)", width="small",
+        help="総合点の高い順に ◎ ○ ▲ △。モデルの勝率による印(右の「印」)とは別で、各ファクターの点数だけで決めています"),
+    "score": st.column_config.NumberColumn(
+        "総合点", format="%.1f", help="下の各列を、同じレースの中で0〜10点にして平均した100点満点の点数。人気・オッズは入れていません"),
+}
 
 
 def _factor_table(one, cols, extra=None):
@@ -698,30 +728,49 @@ def page_factors() -> None:
     except ValueError as e:
         st.error(str(e))
         return
+    one = values[values["race_id"] == race["race_id"]]
     with box:
         race_head(race)
+        _show_race_flow(conn, race, one, date)
         _show_gate_bias(conn, race, date)
-    one = values[values["race_id"] == race["race_id"]]
     tabs = st.tabs(["総合"] + [s["name"] for s in status])
     with tabs[0]:
         cols = [("number", "馬番"), ("horse_name", "馬名")] + factor_view.SUMMARY["cols"]
         cols = [c for c in cols if c[0] in one]
         cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols, one)}
-        extra = None
+        scored = factor_view.score_race(one)
+        marked = scored[scored["score_mark"] != ""].sort_values("score", ascending=False)
+        st.html('<div class="kb-marks">' + "".join(
+            f'<span class="kb-mark"><b>{scored.loc[i, "score_mark"]}</b>{int(one.loc[i, "number"])} '
+            f'{html.escape(str(one.loc[i, "horse_name"]))} {scored.loc[i, "score"]:.1f}</span>'
+            for i in marked.index) + "</div>")
+        extra = scored[["score_mark", "score"]]
+        cfg.update(SCORE_CONFIG)
         pred = st.session_state.get("prediction")
         if pred is not None and pred[0] == date:
             got = pred[1].loc[pred[1]["race_id"] == race["race_id"], ["number", *OVERALL_COLUMNS]]
             got = got.dropna(axis=1, how="all")
             if len(got.columns) > 1:
-                extra = one[["number"]].merge(got, on="number", how="left").drop(columns=["number"])
-                extra.index = one.index
-                cfg.update({c: PRED_COLUMNS[c] for c in extra.columns})
+                model = one[["number"]].merge(got, on="number", how="left").drop(columns=["number"])
+                model.index = one.index
+                extra = pd.concat([extra, model], axis=1)
+                cfg.update({c: PRED_COLUMNS[c] for c in model.columns})
         st.dataframe(_factor_table(one, cols, extra), hide_index=True, width="stretch", column_config=cfg)
-        if extra is None:
-            st.caption(":material/info: 「予想」ページでこの日を「予想する」と、表の左に、各列を総合した勝率・期待値・印が加わります。")
+        with st.expander("点数の内訳", icon=":material/calculate:"):
+            labels = dict(factor_view.score_columns())
+            pts = scored[[c for c in scored if c.startswith("pt_")]].rename(columns=lambda c: labels.get(c[3:], c))
+            st.dataframe(pd.concat([one[["number", "horse_name"]].rename(columns={"number": "馬番", "horse_name": "馬名"}),
+                                    pts.round(1), scored[["score"]].rename(columns={"score": "総合点"})], axis=1)
+                         .sort_values("総合点", ascending=False), hide_index=True, width="stretch")
+        st.caption(":material/calculate: 総合点は、左から順に各列を同じレースの中で点数にして(いちばん良い馬が10点、悪い馬が0点、"
+                   "値のない列は5点)平均し、100点満点にしたものです。印(点数)は総合点の高い順に ◎ ○ ▲ △"
+                   "(9頭立て以下は△1頭)。どの列も同じ重みで、人気・オッズは入れていません。"
+                   "検証したモデルの勝率ではなく、数値を見比べるための目安です。")
+        if pred is None or pred[0] != date:
+            st.caption(":material/info: 「予想」ページでこの日を「予想する」と、モデルの勝率・期待値・印も右に加わります。")
         else:
-            st.caption(":material/calculate: 左の勝率・期待値・印は、これらの数値を含むモデルが総合して出した値です"
-                       "(期待値 = 勝率 × 単勝オッズ)。色は、勝率・期待値が高い上位の馬です。")
+            st.caption(":material/calculate: モデルの勝率・期待値・印は、これらの数値を含むモデルが総合して出した値です"
+                       "(期待値 = 勝率 × 単勝オッズ)。")
         st.caption(":material/palette: " + factor_view.SUMMARY["note"])
         st.html(_factor_legend(cols[2:]))
     for tab, section, st_ in zip(tabs[1:], factor_view.SECTIONS, status):

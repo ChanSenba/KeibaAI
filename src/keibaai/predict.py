@@ -122,7 +122,7 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
-CACHE_VERSION = 1  # 保存した結果の形を変えたら上げる(古い保存は使われなくなる)
+CACHE_VERSION = 2  # 保存した結果の形を変えたら上げる(古い保存は使われなくなる)
 CACHE_DIR = "model_cache"  # DB と同じフォルダの中に作る
 
 
