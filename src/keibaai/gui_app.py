@@ -784,7 +784,7 @@ def page_factors() -> None:
 # ---------------------------------------------------------------- 過去レース
 def page_past_races() -> None:
     header("Past races", "過去レース",
-           "出走馬が過去に走ったレースを一頭ずつ並べ、今回のレースから見てそれぞれをどう評価できるかを文章で示します。"
+           "出走馬ごとに過去走の評価をまとめ、そこから今回のレースでどう評価できるかの見込みを示します。"
            "どれも対象日より前の結果だけを使っています。")
     conn = connection()
     today = dt.date.today()
@@ -801,15 +801,33 @@ def page_past_races() -> None:
         race_head(race)
     limit = st.select_slider("さかのぼる走数", [3, 5, 10, 20], value=5, key="past_limit")
     horses = past_races.horse_past_races(conn, race["race_id"], limit)
-    st.caption("評価の決め方", help=TIPS["past_eval"])
+    ranked = sorted(horses, key=lambda h: (h["rank"] is None, h["rank"] or 0, h["number"]))
+    st.html('<div class="kb-marks">' + "".join(
+        f'<span class="kb-mark"><b>{h["rank"]}位</b>{h["number"]} {html.escape(str(h["horse_name"]))} {h["rating"]:.0f}点</span>'
+        for h in ranked if h["rank"] is not None and h["rank"] <= 5) + "</div>")
+    st.caption("今回の見込みの決め方", help=TIPS["past_eval"])
+    outlook_cfg = {c: st.column_config.TextColumn(c, help=t) for c, t in gui_help.PAST_OUTLOOK_COLUMNS.items()}
+    outlook_cfg["評価点"] = st.column_config.NumberColumn("評価点", help=gui_help.PAST_OUTLOOK_COLUMNS["評価点"], format="%.0f")
+    st.dataframe(pd.DataFrame([{
+        "順位": h["rank"], "馬番": h["number"], "馬名": h["horse_name"], "今回の見込み": h["outlook"],
+        "評価点": h["rating"], "信頼度": h["confidence"], "対戦成績": h["h2h"],
+        "上積み": "、".join(h["plus"]), "不安": "、".join(h["minus"])} for h in ranked]),
+        hide_index=True, width="stretch", column_config=outlook_cfg)
     past_cfg = {c: st.column_config.TextColumn(c, help=t) for c, t in gui_help.PAST_COLUMNS.items()}
+    past_cfg["評価"] = st.column_config.NumberColumn("評価", help=gui_help.PAST_COLUMNS["評価"], format="%.0f")
+    past_cfg["今回への重み"] = st.column_config.NumberColumn("今回への重み", help=gui_help.PAST_COLUMNS["今回への重み"],
+                                                       format="percent")
     for h in horses:
         runs = h["runs"]
-        with st.expander(f"{h['number']} {h['horse_name']}", expanded=False):
+        label = f"{h['number']} {h['horse_name']} ― {h['outlook']}"
+        if h["rank"] is not None:
+            label += f"({h['rank']}位・{h['rating']:.0f}点)"
+        with st.expander(label, expanded=False):
             st.markdown(h["verdict"])
             if runs.empty:
                 continue
-            st.dataframe(runs[["日付", "レース", "条件", "結果", "上がり順", "人気", "kind"]].rename(columns={"kind": "今回から見て"}),
+            st.dataframe(runs[["日付", "レース", "条件", "結果", "上がり順", "人気", "評価", "kind", "重み"]]
+                         .rename(columns={"kind": "今回との近さ", "重み": "今回への重み"}),
                          hide_index=True, width="stretch", column_config=past_cfg)
             for _, r in runs.iterrows():
                 st.markdown(f"- **{r['日付']} {r['レース']}**({r['kind']}) {r['見解']}")
