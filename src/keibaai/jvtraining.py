@@ -89,25 +89,52 @@ def import_raw(conn: sqlite3.Connection, raw_dir: str | Path, chunk: int = 50_00
     return n
 
 
-def add_course_relative(tr: pd.DataFrame) -> pd.DataFrame:
+def add_course_relative(tr: pd.DataFrame, min_history: int = 30) -> pd.DataFrame:
     """追い切りごとに、同じ「トレセン・坂路/ウッド・(ウッドは)コース・時期」の追い切りと比べた値を足す。
 
     f4_z / f2_z / l1_z: そのグループの中央値との差(秒。負なら速い)。f4_pct: グループ内の4Fの順位(0 が最速、1 が最遅)。
     accel: 最初の1Fのラップ − 最後の1Fのラップ(正なら加速、負なら失速)。美浦坂路は改修の前後で別グループ。
-    グループの基準は全期間の追い切りから出す(馬ごとの結果は使わない)。
+    基準は調教日の前日まで。同日・未来の追い切りは使わず、過去 min_history 本未満は欠損。
+    f4_pct は過去分布での位置(同値は中点)で、全期間内の順位ではない。
     """
-    tr = tr.copy()
+    original_index = tr.index
+    tr = tr.reset_index(drop=True).copy()
     new_miho = (tr["kind"] == "slope") & (tr["center"] == "0") & (tr["date"].astype(str) >= MIHO_NEW_SLOPE)
-    key = (tr["kind"].astype(str) + tr["center"].fillna("").astype(str) + tr["course"].fillna("").astype(str)
-           + new_miho.map({True: "new", False: ""}))
-    g = tr.groupby(key, sort=False)
-    for col in ("f4", "f2", "l1"):
-        tr[f"{col}_z"] = tr[col] - g[col].transform("median")
-    tr["f4_pct"] = g["f4"].rank(pct=True)
+    key = pd.MultiIndex.from_arrays([tr["kind"], tr["center"].fillna(""),
+                                    tr["course"].fillna(""), new_miho])
+    # 1Fごとのラップ(4F−3F、3F−2F、2F−最後の1F)。これも同じ基準(前日まで)との差を出す
+    tr["lap1"], tr["lap2"], tr["lap3"] = (tr["f4"] - tr["f3"]).round(1), (tr["f3"] - tr["f2"]).round(1), (tr["f2"] - tr["l1"]).round(1)
+    for col in ("f4_z", "f2_z", "l1_z", "f4_pct", "lap1_z", "lap2_z", "lap3_z"):
+        tr[col] = np.nan
+    # タイムの種類は少ないので累積ヒストグラムで中央値・分位を求める。
+    # 全期間の値は座標としてだけ使い、度数へ加えるのはその日の計算が終わってから。
+    groups = tr.groupby(key, sort=False).indices
+    for col in ("f4", "f2", "l1", "lap1", "lap2", "lap3"):
+        values = pd.to_numeric(tr[col], errors="coerce").to_numpy(dtype=float)
+        z = np.full(len(tr), np.nan)
+        pct = np.full(len(tr), np.nan)
+        for positions in groups.values():
+            g = tr.iloc[positions]
+            coords = np.unique(values[positions][np.isfinite(values[positions])])
+            counts = np.zeros(len(coords), dtype=np.int64)
+            n = 0
+            for _, indices in g.groupby("date", sort=True).groups.items():
+                idx = np.asarray(indices)
+                idx = idx[np.isfinite(values[idx])]
+                bins = np.searchsorted(coords, values[idx])
+                if n >= min_history and n > 0:
+                    cumulative = counts.cumsum()
+                    lo = np.searchsorted(cumulative, (n - 1) // 2 + 1)
+                    hi = np.searchsorted(cumulative, n // 2 + 1)
+                    z[idx] = values[idx] - (coords[lo] + coords[hi]) / 2
+                    pct[idx] = (cumulative[bins] - counts[bins] / 2) / n
+                np.add.at(counts, bins, 1)
+                n += len(idx)
+        tr[f"{col}_z"] = z
+        if col == "f4":
+            tr["f4_pct"] = pct
     tr["accel"] = (tr["f4"] - tr["f3"]) - tr["l1"]
-    tr["lap1"], tr["lap2"], tr["lap3"] = tr["f4"] - tr["f3"], tr["f3"] - tr["f2"], tr["f2"] - tr["l1"]
-    for col in ("lap1", "lap2", "lap3"):
-        tr[f"{col}_z"] = tr[col] - g[col].transform("median")
+    tr.index = original_index
     return tr
 
 

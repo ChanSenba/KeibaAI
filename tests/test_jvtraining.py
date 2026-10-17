@@ -73,10 +73,11 @@ def test_course_relative_groups_by_center_kind_and_miho_renewal():
         "kind": ["slope"] * 6 + ["wood"], "center": ["0", "0", "0", "0", "0", "0", "0"], "course": [None] * 6 + ["A"],
         "f4": [52.0, 53.0, 54.0, 54.0, 55.0, 56.0, 50.0],
         "f3": [39.0, 40.0, 41.0, 41.0, 42.0, 43.0, 37.0], "f2": [25.0] * 7, "l1": [12.0, 12.0, 12.0, 13.0, 13.0, 13.0, 11.0]})
-    out = add_course_relative(tr)
-    # 美浦坂路は改修の前(中央値53)と後(中央値55)で別グループ。ウッドは1本だけなので差は0
-    assert out["f4_z"].tolist() == [-1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 0.0]
-    assert out["f4_pct"].iloc[0] < out["f4_pct"].iloc[2]
+    out = add_course_relative(tr, min_history=1)
+    # 各グループの初日は基準なし。改修後は改修前の時計を使わない。
+    assert out["f4_z"].iloc[[0, 3, 6]].isna().all()
+    assert out["f4_z"].iloc[[1, 2, 4, 5]].tolist() == [1.0, 1.5, 1.0, 1.5]
+    assert out["f4_pct"].iloc[2] == 1.0
     assert out["accel"].iloc[0] == (52.0 - 39.0) - 12.0
 
 
@@ -91,4 +92,13 @@ def test_laps_of_the_4f_workout():
     a = add_jv_features(conn, df).iloc[0]
     assert (a.jv_last_lap1, a.jv_last_lap2, a.jv_last_lap3) == pytest.approx((14.0, 13.5, 13.5))  # 最後の追い切り
     assert (a.jv_best_lap1, a.jv_best_lap2, a.jv_best_lap3) == pytest.approx((13.5, 13.5, 12.8))  # 一番時計
-    assert a.jv_last_lap3_z == pytest.approx(13.5 - 13.15)  # 2本の中央値(12.8 と 13.5 の間)との差
+
+
+def test_lap_z_is_relative_to_earlier_workouts_only():
+    rows = [("h", f"2026-09-{d:02d}", "0600", "slope", "1", None, 52.0, 38.5, 25.5, 12.5) for d in range(1, 31)]
+    rows += [("h", "2026-10-05", "0600", "slope", "1", None, 54.0, 40.0, 26.5, 13.0)]  # lap3 = 13.5(それまでは 13.0)
+    tr = pd.DataFrame(rows, columns=["horse_id", "date", "time", "kind", "center", "course", "f4", "f3", "f2", "l1"])
+    out = add_course_relative(tr)
+    assert out["lap3"].iloc[-1] == pytest.approx(13.5)
+    assert out["lap3_z"].iloc[-1] == pytest.approx(0.5)  # それまでの30本の中央値 13.0 との差
+    assert out["lap3_z"].iloc[:30].isna().all()  # 同日・未来は使わないので、過去が足りない間は欠損

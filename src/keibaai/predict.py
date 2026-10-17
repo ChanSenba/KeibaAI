@@ -14,7 +14,7 @@ import pandas as pd
 
 from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
-from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results
+from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results, result_mask
 from .factors import COLUMN, FACTORS, predict_factors
 from .jvtraining import add_jv_features
 from .model import PARAMS, normalize_within_race
@@ -119,10 +119,11 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
         entries[c] = pd.to_numeric(entries[c], errors="coerce")  # 空は None(object)で来るので数値にそろえる
     entries["date"] = pd.Timestamp(date)
     entries["finish"] = np.nan  # これから走るので結果はない
+    entries["is_entry"] = True
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
-CACHE_VERSION = 2  # 保存した結果の形を変えたら上げる(古い保存は使われなくなる)
+CACHE_VERSION = 3  # 出走状態・因果的特徴量・更新検知・追い切りのラップと同コース展開の特徴量を変更。旧予測は使わない。
 CACHE_DIR = "model_cache"  # DB と同じフォルダの中に作る
 
 
@@ -139,14 +140,15 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
 
     どれかが変われば別の値になるので、古い保存を誤って使うことはない。
     """
-    one = lambda sql, *a: tuple(conn.execute(sql, a).fetchone())
+    # 計算方法だけの変更やファクター定義の変更でも、同じ名前の特徴量を再利用しない。
+    source = hashlib.sha256()
+    for file in sorted(Path(__file__).parent.glob("*.py")):
+        source.update(file.name.encode())
+        source.update(file.read_bytes())
     parts: list = [
         CACHE_VERSION, date, extra, ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, sorted(PARAMS.items()),
-        one("SELECT COUNT(*), MAX(race_id) FROM races WHERE date < ?", date),
-        one("SELECT COUNT(*), COALESCE(SUM(finish), 0) FROM results"),
-        one("SELECT COUNT(*) FROM pedigree"),
-        one("SELECT COUNT(*) FROM training"),
-        one("SELECT COALESCE(MAX(rowid), 0) FROM jv_training"),
+        db.model_revision(conn), source.hexdigest(), CATEGORICAL, FACTORS,
+        lgb.__version__, np.__version__, pd.__version__,
     ]
     if with_entries:
         rows = conn.execute(
@@ -166,7 +168,7 @@ def _cached(conn: sqlite3.Connection, kind: str, date: str, with_entries: bool, 
     成績を足したりすると指紋が変わり、計算し直す。同じ日・同じ種類の古い保存は消す。
     """
     path = _db_file(conn)
-    if path is None:
+    if path is None or db.model_revision(conn) is None:
         return compute()
     folder = path.parent / CACHE_DIR
     file = folder / f"{kind}-{date}-{_data_key(conn, date, with_entries, extra)}.pkl"
@@ -197,7 +199,7 @@ def blend_for_day(conn: sqlite3.Connection, date: str, valid_months: int = 12):
         from .model import evaluate
 
         df, _ = day_frame(conn, date)
-        done = df[df["finish"].notna()]
+        done = df[result_mask(df)]
         valid_from = pd.Timestamp(date) - pd.DateOffset(months=valid_months)
         _, valid = evaluate(done, str(valid_from.date()), use_market=True)
         return fit_blend(valid)
@@ -216,8 +218,7 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
 
 def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFrame:
     df, hist = day_frame(conn, date)
-    is_entry = df["finish"].isna()
-    train, target = df[~is_entry], df[is_entry].copy()
+    train, target = df[result_mask(df)], df[df["is_entry"]].copy()
 
     ability = _fit(train, ABILITY_MODEL_FEATURES, rounds)
     market = _fit(train, MARKET_MODEL_FEATURES, rounds)

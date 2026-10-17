@@ -23,7 +23,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, _expanding_rate
+from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, _expanding_rate, result_mask
 from .model import PARAMS, auc, logloss, normalize_within_race
 
 TEST_PERIODS = ["2025-01-01", "2026-01-01"]
@@ -45,7 +45,7 @@ def market_top3(df: pd.DataFrame, fit_before: str) -> pd.Series:
     p = inv / inv.groupby(df["race_id"]).transform("sum")
     lp = np.log(p)
     fb = pd.cut(df["field_size"], [0, 10, 14, 99], labels=False)
-    fit = (df["date"] < pd.Timestamp(fit_before)) & lp.notna() & df["finish"].notna()
+    fit = (df["date"] < pd.Timestamp(fit_before)) & lp.notna() & result_mask(df)
     q = pd.Series(np.nan, index=df.index)
     for b in range(3):
         m_fit = fit & (fb == b)
@@ -66,7 +66,7 @@ def market_top3(df: pd.DataFrame, fit_before: str) -> pd.Series:
 
 def _race_sums(df: pd.DataFrame, value: pd.Series) -> pd.DataFrame:
     """レースごとに、前に付けた馬・ほかの馬・内の馬・外の馬の value の合計と頭数。"""
-    done = df["finish"].notna() & value.notna()
+    done = result_mask(df) & value.notna()
     pos = df["number"] / df["field_size"]
     front = df["early_pos"] <= 1 / 3
     groups = {"f": done & df["early_pos"].notna() & front, "r": done & df["early_pos"].notna() & ~front,
@@ -117,7 +117,7 @@ def _prev_days(info: pd.DataFrame, sums: pd.DataFrame, keys: list[str]) -> pd.Da
 
 def add_bias_candidates(df: pd.DataFrame, q_top3: pd.Series) -> pd.DataFrame:
     """トラックバイアスの候補の列を足す(レースごとの値を各馬に配る)。"""
-    top3 = (df["finish"] <= 3).astype(float).where(df["finish"].notna())
+    top3 = (df["finish"] <= 3).astype(float).where(result_mask(df))
     resid = top3 - q_top3
     info = df.groupby("race_id", sort=False).agg(
         venue=("venue", "first"), course_type=("course_type", "first"), date=("date", "first"),
@@ -205,7 +205,7 @@ def _race_level(df: pd.DataFrame, lag: int) -> tuple[pd.Series, pd.Series]:
     g = df.groupby("horse_id", sort=False)
     nxt = pd.DataFrame({"race_id": df["race_id"], "horse_id": df["horse_id"],
                         "next_top3": g["top3"].shift(-1).astype(float), "next_date": g["date"].shift(-1)})
-    nxt = nxt[nxt["next_date"].notna() & df["finish"].notna().to_numpy()]
+    nxt = nxt[nxt["next_date"].notna() & result_mask(df).to_numpy()]
     cur = pd.DataFrame({"row": df.index, "horse_id": df["horse_id"], "date": df["date"],
                         "prev_race": g["race_id"].shift(lag)}).dropna(subset=["prev_race"])
     m = cur.merge(nxt.rename(columns={"race_id": "prev_race", "horse_id": "other"}), on="prev_race")
@@ -217,7 +217,7 @@ def _race_level(df: pd.DataFrame, lag: int) -> tuple[pd.Series, pd.Series]:
 
 def _jockey_rate_asof(df: pd.DataFrame, jockey: pd.Series) -> pd.Series:
     """jockey 列の騎手の、その日より前の3着以内率(その日に乗っていない騎手でも、直前までの成績で)。"""
-    done = df[df["finish"].notna()]
+    done = df[result_mask(df)]
     day = done.groupby(["jockey_id", "date"])["top3"].agg(["sum", "count"]).reset_index().sort_values("date")
     day["cs"] = day.groupby("jockey_id")["sum"].cumsum()
     day["cn"] = day.groupby("jockey_id")["count"].cumsum()
@@ -230,7 +230,7 @@ def _jockey_rate_asof(df: pd.DataFrame, jockey: pd.Series) -> pd.Series:
 
 def _jockey_rank_365(df: pd.DataFrame, jockey: pd.Series) -> pd.Series:
     """jockey 列の騎手の、その日より前365日の勝利数の順位(1が最多。リーディング順位の代わり)。"""
-    done = df[df["finish"].notna()]
+    done = df[result_mask(df)]
     wins = done.pivot_table(index="date", columns="jockey_id", values="win", aggfunc="sum").fillna(0.0)
     dates = pd.DatetimeIndex(sorted(df["date"].unique()))
     wins = wins.reindex(wins.index.union(dates), fill_value=0.0)
