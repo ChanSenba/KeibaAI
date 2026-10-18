@@ -12,19 +12,23 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from .features import same_course
+
 DIST_BAND = 200  # この差までは「ほぼ同じ距離」
-MAX_SIM = 6  # 近さの点数の最大(芝ダ2・距離2・競馬場1・回り1)
+SAME_COURSE_BONUS = 2  # 同コース(同じ競馬場で、芝ダ・内回り外回り・距離が同じ)の走りに足す近さの点数
+MAX_SIM = 8  # 近さの点数の最大(芝ダ2・距離2・競馬場1・回り1・同コース2)
 RECENCY = 0.85  # 1走さかのぼるごとの重み
 PRIOR = 0.6  # 走りが少ない馬の点を50点に寄せる強さ(重み何走ぶんか)
 LAYOFF_DAYS = 90  # これ以上あいていれば休み明け
 
 
 def _race(conn: sqlite3.Connection, race_id: str) -> dict:
-    row = conn.execute("SELECT race_id, name, date, venue, course_type, direction, distance, ground "
+    row = conn.execute("SELECT race_id, name, date, venue, course_type, direction, course, distance, ground "
                        "FROM entry_races WHERE race_id = ?", (race_id,)).fetchone()
     if row is None:
         raise ValueError(f"出馬表にないレースです: {race_id}")
-    return dict(zip(("race_id", "name", "date", "venue", "course_type", "direction", "distance", "ground"), row))
+    return dict(zip(("race_id", "name", "date", "venue", "course_type", "direction", "course", "distance", "ground"),
+                    row))
 
 
 def _runs(conn: sqlite3.Connection, horse_ids: list[str], before: str) -> pd.DataFrame:
@@ -35,7 +39,7 @@ def _runs(conn: sqlite3.Connection, horse_ids: list[str], before: str) -> pd.Dat
     df = pd.read_sql_query(
         f"SELECT r.race_id, r.horse_id, r.number, r.finish, r.status, r.passing, r.last3f, r.margin, r.win_odds, "
         f"r.popularity, r.jockey, r.weight_carried, r.body_weight, r.time_sec, "
-        f"a.name AS race_name, a.date, a.venue, a.course_type, a.direction, a.distance, a.ground, "
+        f"a.name AS race_name, a.date, a.venue, a.course_type, a.direction, a.course, a.distance, a.ground, "
         f"a.pace_first3f, a.pace_last3f "
         f"FROM results r JOIN races a USING (race_id) WHERE r.horse_id IN ({marks}) AND a.date < ? "
         f"ORDER BY a.date DESC, r.race_id DESC", conn, params=(*horse_ids, before))
@@ -55,7 +59,15 @@ def _runs(conn: sqlite3.Connection, horse_ids: list[str], before: str) -> pd.Dat
 
 
 def _similarity(run, target: dict) -> tuple[int, list[str], list[str]]:
-    """今回との近さの点数(0〜MAX_SIM)と、同じ点・違う点。"""
+    """今回との近さの点数(0〜MAX_SIM)と、同じ点・違う点。
+
+    同コースは、同じ競馬場で芝ダ・内回り外回り・距離が同じ走り。距離だけ同じなら「同じ距離」の経験とする。
+    """
+    if same_course(run, target):
+        same = ["同コース", f"{target['venue']}{target['course_type']}{target['distance']}m"]
+        if run["ground"] and run["ground"] == target["ground"]:
+            same.append(f"馬場{run['ground']}")
+        return MAX_SIM, same, []
     same, diff, score = [], [], 0
     if run["course_type"] == target["course_type"]:
         same.append(run["course_type"])
@@ -64,7 +76,7 @@ def _similarity(run, target: dict) -> tuple[int, list[str], list[str]]:
         diff.append(f"{run['course_type']}(今回は{target['course_type']})")
     d = (run["distance"] or 0) - (target["distance"] or 0)
     if abs(d) <= DIST_BAND:
-        same.append("距離" + ("同じ" if d == 0 else f"{d:+d}m"))
+        same.append("同じ距離" if d == 0 else f"距離{d:+d}m")
         score += 2 if d == 0 else 1
     else:
         diff.append(f"距離{run['distance']}m(今回は{target['distance']}m)")
@@ -79,8 +91,13 @@ def _similarity(run, target: dict) -> tuple[int, list[str], list[str]]:
     return score, same, diff
 
 
-def _kind(score: int) -> str:
-    return "直結" if score >= 5 else "参考" if score >= 3 else "別条件"
+def _kind(run, target: dict, score: int) -> str:
+    """今回との近さの区分。同コース > 同じ距離(芝ダと距離が同じで、競馬場かコースが違う) > 参考 > 別条件。"""
+    if score >= MAX_SIM:
+        return "同コース"
+    if run["course_type"] == target["course_type"] and run["distance"] == target["distance"]:
+        return "同じ距離"
+    return "参考" if score >= 3 else "別条件"
 
 
 def _result_text(run) -> str:
@@ -108,7 +125,8 @@ def _grade(rating: float) -> str:
     return "好走" if rating >= 70 else "善戦" if rating >= 50 else "凡走"
 
 
-def _run_comment(run, rating: float | None, kind: str, same: list[str], diff: list[str], share: float) -> str:
+def _run_comment(run, target: dict, rating: float | None, kind: str, same: list[str], diff: list[str],
+                 share: float) -> str:
     """1走ずつの見解:その走りの評価と、今回の見込みにどれだけ効いているか。"""
     if rating is None:
         return f"{run['status'] or '競走中止等'}。今回の見込みには入れていません。"
@@ -125,8 +143,11 @@ def _run_comment(run, rating: float | None, kind: str, same: list[str], diff: li
             parts.append(f"{int(run['popularity'])}番人気を下回る")
     head = "、".join(parts) + f"で、この走りは{_grade(rating)}({rating:.0f}点)。"
     weight = "重く" if share >= 0.25 else "やや重く" if share >= 0.12 else "軽く"
-    if kind == "直結":
-        why = f"条件が今回に近い({'・'.join(same)})ので"
+    if kind == "同コース":
+        why = f"今回と同コース({'・'.join(same[1:])})なので"
+    elif kind == "同じ距離":
+        other = "競馬場が違う" if run["venue"] != target["venue"] else "内回り・外回りが違う"
+        why = f"今回と同じ距離での経験({run['venue']}{run['course_type']}{run['distance']}m。{other}ので同コースではない)で"
     elif kind == "参考":
         why = f"{'・'.join(same)}が同じで" + (f"、{'、'.join(diff)}が違うので" if diff else "")
     else:
@@ -146,14 +167,14 @@ def _horse_runs(mine: pd.DataFrame, target: dict) -> pd.DataFrame:
                      "結果": _result_text(run), "通過": run["passing"] or "", "上がり": run["last3f"],
                      "上がり順": run["l3f_rank"], "人気": run["popularity"], "騎手": run["jockey"],
                      "score": score, "finish": run["finish"], "distance": run["distance"],
-                     "course_type": run["course_type"], "kind": _kind(score), "評価": rating, "weight": weight,
+                     "course_type": run["course_type"], "kind": _kind(run, target, score), "評価": rating, "weight": weight,
                      "_same": same, "_diff": diff, "_run": run})
     frame = pd.DataFrame(recs)
     if frame.empty:
         return frame
     total = frame["weight"].sum()
     frame["重み"] = frame["weight"] / total if total > 0 else 0.0
-    frame["見解"] = [_run_comment(r["_run"], r["評価"], r["kind"], r["_same"], r["_diff"], r["重み"])
+    frame["見解"] = [_run_comment(r["_run"], target, r["評価"], r["kind"], r["_same"], r["_diff"], r["重み"])
                    for _, r in frame.iterrows()]
     return frame.drop(columns=["_same", "_diff", "_run"])
 
@@ -170,7 +191,7 @@ def _confidence(frame: pd.DataFrame) -> str:
     if frame.empty:
         return "—"
     done = frame[frame["評価"].notna()]
-    if (done["kind"] == "直結").sum() >= 2:
+    if (done["kind"] == "同コース").sum() >= 2:
         return "高"
     if (done["kind"] != "別条件").sum() >= 1:
         return "中"
@@ -238,9 +259,12 @@ def _cautions(frame: pd.DataFrame, target: dict) -> tuple[list[str], list[str]]:
             plus.append("直近3走で評価が上向き")
         elif recent[0] < recent[1] < recent[2] and recent[2] - recent[0] >= 10:
             minus.append("直近3走で評価が下向き")
-    close = done[done["kind"] == "直結"]
-    if len(close) and close["評価"].max() >= 70:
-        plus.append("今回とほぼ同じ条件で好走歴あり")
+    course = done[done["kind"] == "同コース"]
+    dist = done[done["kind"] == "同じ距離"]
+    if len(course) and course["評価"].max() >= 70:
+        plus.append("同コースで好走歴あり")
+    elif len(dist) and dist["評価"].max() >= 70:
+        plus.append(f"同じ距離({target['course_type']}{target['distance']}m)で好走歴あり(同コースではない)")
     return plus, minus
 
 
@@ -269,7 +293,8 @@ def _outlook_text(h: dict, n: int) -> str:
     near = done[done["kind"] != "別条件"]
     if len(near):
         good = int((near["評価"] >= 70).sum())
-        parts.append(f"今回に近い条件の走りは{len(near)}走で、そのうち好走{good}回。")
+        n_course = int((near["kind"] == "同コース").sum())
+        parts.append(f"今回に近い条件の走りは{len(near)}走(うち同コース{n_course}走)で、そのうち好走{good}回。")
     else:
         parts.append("今回に近い条件の走りがなく、条件の違う走りから推しているので当てになりにくい見込みです。")
     parts.append(f"いちばん重く見たのは{top['日付']} {top['レース']}({top['条件']})の{top['結果']}で、"

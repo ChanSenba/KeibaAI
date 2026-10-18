@@ -103,7 +103,7 @@ def test_gate_bias_counts_inner_middle_outer_before_the_day(tmp_path):
     conn.commit()
     race = pd.Series({"venue": "京都", "course_type": "芝", "distance": 1600, "course": "外", "rail": "A"})
     t = factor_view.gate_bias(conn, race, "2026-10-17").set_index("条件")
-    assert t.loc["同じコース", "レース数"] == 3 and t.loc["同じ Aコース", "レース数"] == 2  # 10/20 は数えない
-    assert t.loc["同じコース", "内枠"] == 1.0 and t.loc["同じコース", "外枠"] == 0.5
-    assert t.loc["同じコース", "内−外"] == 50.0
+    assert t.loc["同コース", "レース数"] == 3 and t.loc["同じ Aコース", "レース数"] == 2  # 10/20 は数えない
+    assert t.loc["同コース", "内枠"] == 1.0 and t.loc["同コース", "外枠"] == 0.5
+    assert t.loc["同コース", "内−外"] == 50.0
     assert factor_view.gate_bias(conn, pd.Series({"venue": None}), "2026-10-17").empty
