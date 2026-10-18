@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import flow_review
 from .gui import MARKS, add_marks
 
 MARK_ORDER = MARKS + ["△", "☆"]  # 印の並び。表示と集計はこの順
@@ -56,7 +57,14 @@ def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datet
          else fetch_entries(conn, fetcher, date.isoformat(), now=now))
     if n == 0:
         return 0
-    return save_predictions(conn, predict_day(conn, date.isoformat()), now)
+    pred = predict_day(conn, date.isoformat())
+    n = save_predictions(conn, pred, now)
+    flow = pred.attrs.get("flow")
+    if n and flow is not None:  # 今回保存した予想のレースだけ、展開予想も保存する
+        saved = {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE saved_at = ?",
+                                            (now.isoformat(timespec="seconds"),))}
+        flow_review.save_forecast(conn, flow, saved, now)
+    return n
 
 
 def unreviewed_dates(conn: sqlite3.Connection, today: dt.date, reviews_dir: Path,
@@ -87,6 +95,7 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
     h["win"] = (h["finish"] == 1).astype(int)
     h["odds"] = h["final_odds"].fillna(h["win_odds"])  # 精算は確定オッズ。なければ予想時のもの
     h["rank"] = h.groupby("race_id")["p_win_ability"].rank(ascending=False, method="first")
+    flows = _flows(conn, list(h["race_id"].unique()))
 
     rows = []
     for rid, g in h.groupby("race_id", sort=False):
@@ -103,7 +112,7 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
             "winner_rank": None if w is None else int(w["rank"]),
             "winner_p": None if w is None else w["p_win_ability"],
             "winner_odds": None if w is None else w["odds"],
-            "top3_hit": len(top3 & marked), "marked": marked_finishes(g),
+            "top3_hit": len(top3 & marked), "marked": marked_finishes(g), **_flow_row(flows.get(rid)),
         })
     races = pd.DataFrame(rows)
     ev = h[h["ev_ability"] >= 1]
@@ -113,8 +122,26 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
         "top3_hits": int(races["top3_hit"].sum()) if len(races) else 0,
         "honmei_roi": _roi(h[h["mark"] == "◎"], stake), "ev_bets": len(ev), "ev_wins": int(ev["win"].sum()),
         "ev_roi": _roi(ev, stake),
+        "flow_races": int(races["adv_hit"].notna().sum()) if "adv_hit" in races else 0,
+        "flow_adv_hits": int((races["adv_hit"] == True).sum()) if "adv_hit" in races else 0,  # noqa: E712
+        "flow_pace_races": int(races["pace_hit"].notna().sum()) if "pace_hit" in races else 0,
+        "flow_pace_hits": int((races["pace_hit"] == True).sum()) if "pace_hit" in races else 0,  # noqa: E712
     }
     return Review(date, h, races, summary, mark_stats(h))
+
+
+def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
+    """レースごとの (発走前の展開予想, 結果から出した実際の展開)。予想がなければ前者は None。"""
+    q = ",".join("?" * len(ids))
+    runners = pd.read_sql_query(f"SELECT race_id, finish, passing FROM results WHERE race_id IN ({q})", conn, params=ids)
+    pace = pd.read_sql_query(f"SELECT race_id, pace_first3f, pace_last3f FROM races WHERE race_id IN ({q})", conn,
+                             params=ids).set_index("race_id")
+    fc = pd.read_sql_query(f"SELECT * FROM flow_forecast WHERE race_id IN ({q})", conn, params=ids).set_index("race_id")
+    out = {}
+    for rid, g in runners.groupby("race_id"):
+        a, b = (pace.at[rid, "pace_first3f"], pace.at[rid, "pace_last3f"]) if rid in pace.index else (None, None)
+        out[rid] = (fc.loc[rid].to_dict() if rid in fc.index else None, flow_review.race_flow(g, a, b))
+    return out
 
 
 def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
@@ -129,6 +156,16 @@ def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
                      "top2_rate": float(g["finish"].between(1, 2).mean()), "top3_rate": top3 / n,
                      "roi": _roi(g, 100) / 100})
     return pd.DataFrame(rows, columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi"])
+
+
+def _flow_row(pair) -> dict:
+    """races の1行に付ける、展開の予想と実際、当たったか(予想がなければ None)。"""
+    if pair is None:
+        return {"flow": "", "forecast": "", "pace_hit": None, "adv_hit": None}
+    fc, act = pair
+    return {"flow": flow_review.flow_text(act), "forecast": "" if fc is None else flow_review.forecast_text(fc),
+            "pace_hit": None if fc is None or "不明" in (fc["pace"], act["pace"]) else fc["pace"] == act["pace"],
+            "adv_hit": None if fc is None else fc["advantage"] == act["advantage"]}
 
 
 def finish_text(finish, status=None) -> str:
@@ -162,6 +199,9 @@ def render_markdown(r: Review) -> str:
            f"- ◎○▲のうち3着以内に入った頭数(のべ): {s['top3_hits']}(最大 {3 * s['races']})",
            f"- 期待値≧1 の馬: {s['ev_bets']}頭を買って{s['ev_wins']}頭が勝ち、単勝回収率 {_pct(s['ev_roi'])}", "",
            "回収率は確定オッズで計算。予想は発走前に保存したものです。", ""]
+    if s["flow_races"]:
+        out[-2:-2] = [f"- 展開の予想: 前後の有利不利が{s['flow_adv_hits']}/{s['flow_races']}レース的中"
+                      + (f"、ペースが{s['flow_pace_hits']}/{s['flow_pace_races']}レース的中" if s["flow_pace_races"] else "")]
     if r.marks is not None and len(r.marks):
         out += ["## 印ごとの成績", "", "| 印 | 頭数 | 1着 | 3着内 | 3着内率 |", "|---|---|---|---|---|"]
         out += [f"| {x['mark']} | {x['n']} | {x['wins']} | {x['top3']} | {x['top3_rate']:.0%} |"
@@ -178,6 +218,11 @@ def render_markdown(r: Review) -> str:
         out.append(line)
         if x.get("marked"):
             out.append(f"  - 印の着順: {x['marked']}")
+        if x.get("flow"):
+            mark = lambda h: "" if h is None or h != h else "(的中)" if h else "(外れ)"
+            if x["forecast"]:
+                out.append(f"  - 展開の予想: {x['forecast']}")
+            out.append(f"  - 実際の展開: {x['flow']}" + (f" ← 有利不利{mark(x['adv_hit'])}" if x["forecast"] else ""))
     return "\n".join(out) + "\n"
 
 

@@ -15,6 +15,7 @@ import pandas as pd
 from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
 from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results, result_mask
+from .flow_review import forecast_flow
 from .factors import COLUMN, FACTORS, predict_factors
 from .jvtraining import add_jv_features
 from .model import PARAMS, TRAIN_FROM, normalize_within_race, train_rows
@@ -124,7 +125,7 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
-CACHE_VERSION = 4  # 同コース展開の特徴量で内回り・外回りを分けた。旧予測は使わない。
+CACHE_VERSION = 5  # 予測に展開予想(attrs["flow"])を付けた。旧予測は使わない。
 CACHE_DIR = "model_cache"  # DB と同じフォルダの中に作る
 
 
@@ -237,4 +238,5 @@ def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFra
             "popularity", "p_win_ability", "p_win_market", "ev_ability", "ev_market", *COLUMN.values()]
     out = target[cols].copy()
     out["venue"] = out["venue"].astype(str)  # 特徴量用の category のままだと画面側で文字連結ができない
+    out.attrs["flow"] = forecast_flow(target)  # 発走前の展開予想。weekly が予想と一緒に保存する
     return out.sort_values(["venue", "round", "number"]).reset_index(drop=True)

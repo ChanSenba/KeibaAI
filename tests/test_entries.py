@@ -120,6 +120,8 @@ def test_predict_day_gives_probabilities_and_expected_value():
     for col in ("p_win_quality", "p_win_human", "p_win_track"):  # 要素ごとの勝率
         assert np.isclose(out[col].sum(), 1.0)
     assert (out["venue"] + out["round"].astype(int).astype(str) + "R").iloc[0] == "東京1R"  # 画面で使う形
+    flow = out.copy().attrs["flow"]  # 発走前の展開予想(weekly が予想と一緒に保存する)
+    assert len(flow) == 1 and flow["pace"].iloc[0] in ("スロー", "平均", "ハイ", "不明")
 
 
 def test_predict_day_without_odds_has_no_market_columns_values():

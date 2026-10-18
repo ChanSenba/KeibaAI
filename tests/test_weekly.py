@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from keibaai import db, weekly
+from keibaai import db, flow_review, weekly
 from keibaai.parse import ParsedRace, Race, Result
 
 from test_model import synthetic_db
@@ -160,3 +160,64 @@ def test_review_lists_every_marked_horse_and_top3_rate_per_mark():
     assert "## 印ごとの成績" in md and "| ◎ | 1 | 0 | 1 | 100% |" in md
     line = [x for x in md.splitlines() if "印の着順" in x][0]
     assert line.startswith("  - 印の着順: ◎馬1 2着 / ○馬2 3着 / ▲馬3 1着") and "△馬4 5着" in line
+
+
+def add_flow_result(conn, order, passing, first3f=34.0, last3f=36.0):
+    """着順 order(馬番の並び)。passing は馬番ごとの通過順。"""
+    race = Race(race_id="202505010101", date="2025-03-01", venue="東京", round=1, course_type="芝", distance=1600,
+                ground="良", pace_first3f=first3f, pace_last3f=last3f)
+    results = [Result(race_id="202505010101", number=n, finish=f, win_odds=2.0 * n, popularity=n, horse_id=f"h{n}",
+                      passing=passing[n]) for f, n in enumerate(order, start=1)]
+    db.save_race(conn, ParsedRace(race=race, results=results))
+
+
+def forecast_table(share, edge, race_id="202505010101"):
+    t = pd.DataFrame({"race_id": [race_id] * 5, "front_share": share, "n_front_runners": 1,
+                      "course_front_edge_5": edge, "course_pace_diff_5": 0.5})
+    return flow_review.forecast_flow(t)
+
+
+def test_forecast_flow_rules():
+    f = forecast_table(0.5, 0.0).iloc[0]
+    assert f["pace"] == "ハイ" and f["advantage"] == "後"  # 先行馬が多く、直近の傾きもなければペースから
+    f = forecast_table(0.3, 0.3).iloc[0]
+    assert f["pace"] == "平均" and f["advantage"] == "前" and "直近" not in f["basis"] and "3着内率" in f["basis"]
+    assert forecast_table(0.3, 0.0).iloc[0]["advantage"] is None
+
+
+def test_review_compares_forecast_with_actual_flow():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    flow_review.save_forecast(conn, forecast_table(0.1, 0.0), {"202505010101"}, dt.datetime(2025, 2, 28, 20))  # スロー→前有利の予想
+    # 前に付けた1番手(1/5)が勝ち、後ろの馬が着外。ペースは後傾(スロー)
+    add_flow_result(conn, [1, 2, 3, 4, 5], {1: "1-1", 2: "3-3", 3: "3-3", 4: "4-4", 5: "5-5"}, 36.5, 34.5)
+    r = weekly.review_day(conn, "2025-03-01")
+    x = r.races.iloc[0]
+    assert x["pace_hit"] and x["adv_hit"] and r.summary["flow_adv_hits"] == 1 and r.summary["flow_races"] == 1
+    md = weekly.render_markdown(r)
+    assert "展開の予想: 前有利(ペーススロー" in md and "実際の展開: 前有利(前に付けた馬の3着内率が他より" in md
+    assert "有利不利(的中)" in md and "展開の予想: 前後の有利不利が1/1レース的中、ペースが1/1レース的中" in md
+
+
+def test_review_without_forecast_still_shows_actual_flow():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_flow_result(conn, [1, 2, 3, 4, 5], {n: f"{n}-{n}" for n in range(1, 6)})
+    r = weekly.review_day(conn, "2025-03-01")
+    assert r.races.iloc[0]["adv_hit"] is None and r.summary["flow_races"] == 0
+    md = weekly.render_markdown(r)
+    assert "実際の展開:" in md and "展開の予想" not in md
+
+
+def test_forecast_day_saves_flow_forecast_with_predictions(monkeypatch):
+    from keibaai import predict
+
+    conn = db.connect(":memory:")
+    pred = pred_table()
+    pred.attrs["flow"] = forecast_table(0.5, 0.0)
+    monkeypatch.setattr(predict, "fetch_entries", lambda conn, f, d, now=None: 5)
+    monkeypatch.setattr(predict, "predict_day", lambda conn, d: pred)
+    now = dt.datetime(2025, 2, 28, 20)
+    assert weekly.forecast_day(conn, FakeFetcher(), dt.date(2025, 3, 1), now) == 5
+    row = conn.execute("SELECT pace, advantage FROM flow_forecast").fetchone()
+    assert row == ("ハイ", "後")
