@@ -15,11 +15,24 @@ PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in
 # 学習に使うレースの開始日。これより前の成績も DB にあり、過去走の特徴量(通算成績など)には使うが、学習の行には入れない。
 # 環境変数 KEIBAAI_TRAIN_FROM(YYYY-MM-DD)で変えられる
 TRAIN_FROM = os.environ.get("KEIBAAI_TRAIN_FROM", "2019-01-01")
+# 馬体重は発走の約1時間前に出るので、前日や朝に保存する予想では空になる。学習の行には必ず入っているため、
+# 空のまま予想すると精度が落ちる。学習の行の一部で馬体重の列を空にして、空のときの見方も学ばせる。
+# 2021〜2026年を1年ずつ評価(その年より前で学習)して、オッズ込みの LogLoss は馬体重が空のとき
+# 0.20613 → 0.20517(6年とも改善)、あるときも 0.20535 → 0.20521。能力のみも両方で改善した
+BODY_WEIGHT_FEATURES = ["body_weight", "body_weight_diff", "bw_vs_avg", "weight_ratio"]
+BODY_WEIGHT_MASK_RATE = 0.3
 
 
 def train_rows(train: pd.DataFrame) -> pd.DataFrame:
-    """学習の行を TRAIN_FROM 以後のレースに絞る。"""
-    return train[train["date"] >= pd.Timestamp(TRAIN_FROM)]
+    """学習の行を TRAIN_FROM 以後のレースに絞り、BODY_WEIGHT_MASK_RATE の割合の行で馬体重の列を空にする。"""
+    train = train[train["date"] >= pd.Timestamp(TRAIN_FROM)]
+    cols = [c for c in BODY_WEIGHT_FEATURES if c in train]
+    if not cols or train.empty:
+        return train
+    hide = np.random.default_rng(0).random(len(train)) < BODY_WEIGHT_MASK_RATE
+    train = train.copy()
+    train.loc[hide, cols] = np.nan
+    return train
 
 
 def auc(y: np.ndarray, p: np.ndarray) -> float:

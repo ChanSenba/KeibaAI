@@ -124,3 +124,17 @@ def test_train_rows_drop_races_before_train_from(monkeypatch):
     assert list(train_rows(df)["date"].dt.year) == [2019, 2020]
     monkeypatch.setattr(model, "TRAIN_FROM", "2020-01-01")
     assert list(train_rows(df)["date"].dt.year) == [2020]
+
+
+def test_train_rows_hide_body_weight_in_some_rows():
+    """馬体重の列は、学習の行の一部(BODY_WEIGHT_MASK_RATE)だけ空にする。ほかの列と元の表はそのまま。"""
+    n = 2000
+    df = pd.DataFrame({"date": pd.Timestamp("2020-01-01"), "body_weight": 480.0, "body_weight_diff": 2.0,
+                       "bw_vs_avg": 1.0, "weight_ratio": 0.12, "age": 4.0}, index=range(n))
+    out = train_rows(df)
+    hidden = out["body_weight"].isna()
+    assert abs(hidden.mean() - model.BODY_WEIGHT_MASK_RATE) < 0.05
+    for c in model.BODY_WEIGHT_FEATURES:
+        assert (out[c].isna() == hidden).all()
+    assert out["age"].notna().all() and df["body_weight"].notna().all()
+    assert (train_rows(df)["body_weight"].isna() == hidden).all()  # 毎回同じ行
