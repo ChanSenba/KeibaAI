@@ -624,13 +624,13 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
         cols.pop(c, None)
         if f"pt_{c}" in one:
             cols[f"pt_{c}"] = st.column_config.NumberColumn(
-                name, format="%.1f", help=f"{name}の要素だけで見た勝率を、このレースの中で0〜10点にした点数(最高の馬が10点)。"
+                name, format="%.1f/10", help=f"{name}の要素だけで見た勝率を、このレースの中で0〜10点にした点数(最高の馬が10点)。"
                                           "8点以上に緑の色がつきます")
     if "factor_total" in one:
         # 総合スコアは馬名のすぐ右に置く
         at = list(cols).index("horse_name") + 1
         cols = {**dict(list(cols.items())[:at]), "factor_total": st.column_config.NumberColumn(
-            "総合スコア", format="%.1f", help="各要素の点数の平均を100点満点にしたもの。モデルの勝率そのものではありません"),
+            "総合スコア", format="%.1f/100", help="各要素の点数の平均を100点満点にしたもの。モデルの勝率そのものではありません"),
             **dict(list(cols.items())[at:])}
     styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
     if "mark" in one:
@@ -680,7 +680,7 @@ def review_html(rv: dict) -> str:
     rows = "".join(
         f'<div class="kb-rv-row"><div class="kb-rv-name">{html.escape(f["name"])}</div>'
         f'<div class="kb-rv-pt {"kb-rv-hi" if f["pt"] >= factor_view.STRONG_PT else "kb-rv-lo" if f["pt"] <= factor_view.WEAK_PT else ""}">'
-        f'<b>{f["pt"]:.1f}</b>点<span>{html.escape(f["grade"])}</span></div>'
+        f'<b>{f["pt"]:.1f}</b><i>/10</i><span>{html.escape(f["grade"])}</span></div>'
         f'<div class="kb-rv-text">{html.escape(f["text"])}</div></div>' for f in rv["rows"])
     return (f'<div class="kb-review"><p class="kb-rv-summary">{html.escape(rv["summary"])}</p>{rows}</div>')
 

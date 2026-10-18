@@ -743,7 +743,7 @@ def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame |
         sub = []
         total = points["factor_total"].get(i) if "factor_total" in points else None
         if total is not None and total == total:
-            sub.append(f"総合スコア{total:.1f}点")
+            sub.append(f"総合スコア{total:.1f}/100")
         if r["popularity"] == r["popularity"]:
             sub.append(f"{int(r['popularity'])}番人気・{r['win_odds']}倍")
         parts = []
@@ -757,8 +757,8 @@ def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame |
         elif pa == pa and pa is not None:
             parts.append(f"能力だけの勝率は{pa * 100:.1f}%(オッズ未取得)。")
         got = {MODEL_FACTORS[c]: points.loc[i, f"pt_{c}"] for c in MODEL_FACTORS if f"pt_{c}" in points}
-        strong = [f"{k}{v:.0f}点" for k, v in sorted(got.items(), key=lambda kv: -kv[1]) if v >= STRONG_PT]
-        weak = [f"{k}{v:.0f}点" for k, v in sorted(got.items(), key=lambda kv: kv[1]) if v <= WEAK_PT]
+        strong = [f"{k}{v:.0f}/10" for k, v in sorted(got.items(), key=lambda kv: -kv[1]) if v >= STRONG_PT]
+        weak = [f"{k}{v:.0f}/10" for k, v in sorted(got.items(), key=lambda kv: kv[1]) if v <= WEAK_PT]
         if strong:
             parts.append("強みは" + "・".join(strong) + "。")
         if weak:
