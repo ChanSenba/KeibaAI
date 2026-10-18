@@ -445,7 +445,7 @@ def page_predict() -> None:
             st.subheader("出馬表", anchor=False)
             with st.container(border=True):
                 race_detail(conn, gui.day_races(conn, date.isoformat()).set_index("race_id").loc[picked["race_id"]],
-                            picked["race_id"], table)
+                            picked["race_id"], table, date)
         return
 
     if table is not None:
@@ -467,7 +467,7 @@ def page_predict() -> None:
         st.subheader("出馬表" if table is None else "レース別", anchor=False)
         race, box = race_picker(races, key=f"board_{date}")
         with box:
-            race_detail(conn, race, race["race_id"], table)
+            race_detail(conn, race, race["race_id"], table, date)
 
 
 def single_race_controls(conn, date: dt.date):
@@ -604,7 +604,7 @@ def _show_race_flow(conn, race, one, date: dt.date) -> None:
                 "勝ち馬の位置": st.column_config.NumberColumn(format="%.2f", help="勝ち馬の最初のコーナーの位置 ÷ 頭数。0に近いほど前")})
 
 
-def race_detail(conn, race, race_id: str, prediction) -> None:
+def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = None) -> None:
     """レース名・条件と出馬表。予想があれば印・勝率・期待値も出す。"""
     race_head(race)
     one = gui.race_entries(conn, race_id, prediction)
@@ -646,14 +646,37 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
     pinned = list(cols)[:list(cols).index("horse_name") + 1]
     st.dataframe(styled, hide_index=True, width="stretch",
                  column_config={k: ({**v, "pinned": True} if k in pinned else v) for k, v in cols.items()})
-    lines = factor_view.race_commentary(one, points) if "mark" in one else []
-    if lines:
+    values = _race_factor_values(conn, date, race_id) if date is not None and "mark" in one else None
+    reviews = factor_view.race_reviews(one, points, values) if "mark" in one else []
+    if reviews:
         st.subheader("予想の見解", anchor=False)
-        st.caption("全頭について、各要素の点数と勝率から、印の理由を文章にしたものです。"
-                   "印のある馬が先で、印のない馬は総合スコアの高い順です。点数はこのレース内の相対評価です。")
-        with st.container(border=True):
-            for line in lines:
-                st.markdown(line)
+        st.caption("全頭について、要素ごとの点数と、その根拠(過去の成績など)を書いています。"
+                   "印のある馬が先で、印のない馬は総合スコアの高い順です。点数はこのレース内の相対評価で、勝率そのものではありません。")
+        for rv in reviews:
+            title = f"{rv['mark']} {rv['number']} {rv['name']}".strip()
+            with st.expander(f"{title} ― {rv['sub']}" if rv["sub"] else title, expanded=bool(rv["mark"])):
+                st.html(review_html(rv))
+
+
+def _race_factor_values(conn, date: dt.date, race_id: str):
+    """このレースの各馬の要素の値(factor_values)。計算できなければ None(見解は点数だけになる)。"""
+    ped_bucket = conn.execute("SELECT COUNT(*) FROM pedigree").fetchone()[0] // 500
+    stamp = f"{gui.entries_summary(conn, date.isoformat())['fetched_at']}/{ped_bucket}"
+    try:
+        values = _factor_values(st.session_state["db_path"], date.isoformat(), stamp)
+    except ValueError:
+        return None
+    return values[values["race_id"] == race_id]
+
+
+def review_html(rv: dict) -> str:
+    """1頭の見解。まず勝率と印の理由、その下に要素ごとの点数・評価・根拠を並べる。"""
+    rows = "".join(
+        f'<div class="kb-rv-row"><div class="kb-rv-name">{html.escape(f["name"])}</div>'
+        f'<div class="kb-rv-pt {"kb-rv-hi" if f["pt"] >= factor_view.STRONG_PT else "kb-rv-lo" if f["pt"] <= factor_view.WEAK_PT else ""}">'
+        f'<b>{f["pt"]:.1f}</b>点<span>{html.escape(f["grade"])}</span></div>'
+        f'<div class="kb-rv-text">{html.escape(f["text"])}</div></div>' for f in rv["rows"])
+    return (f'<div class="kb-review"><p class="kb-rv-summary">{html.escape(rv["summary"])}</p>{rows}</div>')
 
 
 def point_style(v) -> str:
