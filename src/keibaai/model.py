@@ -1,6 +1,7 @@
 """LightGBM で勝率・3着以内率を予測し、時系列で評価する。"""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import lightgbm as lgb
@@ -11,6 +12,14 @@ from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES
 
 PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in_leaf=50,
               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, verbose=-1, seed=0)
+# 学習に使うレースの開始日。これより前の成績も DB にあり、過去走の特徴量(通算成績など)には使うが、学習の行には入れない。
+# 環境変数 KEIBAAI_TRAIN_FROM(YYYY-MM-DD)で変えられる
+TRAIN_FROM = os.environ.get("KEIBAAI_TRAIN_FROM", "2019-01-01")
+
+
+def train_rows(train: pd.DataFrame) -> pd.DataFrame:
+    """学習の行を TRAIN_FROM 以後のレースに絞る。"""
+    return train[train["date"] >= pd.Timestamp(TRAIN_FROM)]
 
 
 def auc(y: np.ndarray, p: np.ndarray) -> float:
@@ -44,6 +53,7 @@ class Report:
 
 
 def _fit(train: pd.DataFrame, features: list[str], target: str, rounds: int):
+    train = train_rows(train)
     cats = [c for c in CATEGORICAL if c in features]
     ds = lgb.Dataset(train[features], train[target], categorical_feature=cats, free_raw_data=False)
     return lgb.train(PARAMS, ds, num_boost_round=rounds)

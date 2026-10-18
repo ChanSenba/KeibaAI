@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, _expanding_rate, result_mask
-from .model import PARAMS, auc, logloss, normalize_within_race
+from .model import PARAMS, auc, logloss, normalize_within_race, train_rows
 
 TEST_PERIODS = ["2025-01-01", "2026-01-01"]
 TJ_KS = [5, 10, 20, 50]
@@ -304,6 +304,7 @@ def more_variants() -> dict[str, tuple[list[str], list[str]]]:
 # ---------------------------------------------------------------- 比べ方
 
 def _fit_predict(train: pd.DataFrame, test: pd.DataFrame, features: list[str], seed: int, rounds: int) -> np.ndarray:
+    train = train_rows(train)
     cats = [c for c in CATEGORICAL if c in features]
     params = dict(PARAMS, seed=seed)
     ds = lgb.Dataset(train[features], train["win"], categorical_feature=cats, free_raw_data=False)

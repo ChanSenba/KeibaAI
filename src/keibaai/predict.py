@@ -17,7 +17,7 @@ from .entries import apply_odds, parse_odds_json, parse_shutuba
 from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results, result_mask
 from .factors import COLUMN, FACTORS, predict_factors
 from .jvtraining import add_jv_features
-from .model import PARAMS, normalize_within_race
+from .model import PARAMS, TRAIN_FROM, normalize_within_race, train_rows
 
 
 def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,
@@ -97,6 +97,7 @@ def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
 
 
 def _fit(train: pd.DataFrame, features: list[str], rounds: int):
+    train = train_rows(train)
     cats = [c for c in CATEGORICAL if c in features]
     return lgb.train(PARAMS, lgb.Dataset(train[features], train["win"], categorical_feature=cats), rounds)
 
@@ -146,7 +147,7 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
         source.update(file.name.encode())
         source.update(file.read_bytes())
     parts: list = [
-        CACHE_VERSION, date, extra, ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, sorted(PARAMS.items()),
+        CACHE_VERSION, TRAIN_FROM, date, extra, ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, sorted(PARAMS.items()),
         db.model_revision(conn), source.hexdigest(), CATEGORICAL, FACTORS,
         lgb.__version__, np.__version__, pd.__version__,
     ]

@@ -15,7 +15,7 @@ from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_
                        COURSE_FLOW_FEATURES, FORM_FEATURES,
                        HUMAN_EXTRA, LAP_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, ROTATION_FEATURES,
                        TRAINING_FEATURES)
-from .model import PARAMS, auc, logloss, normalize_within_race
+from .model import PARAMS, auc, logloss, normalize_within_race, train_rows
 
 FACTORS: dict[str, list[str]] = {
     "馬の質": ["age", "weight_carried", "body_weight", "body_weight_diff", "n_prev", "prev_finish",
@@ -38,6 +38,7 @@ COLUMN = {"馬の質": "p_win_quality", "適性": "p_win_fit", "ローテーシ�
 
 
 def _fit(train: pd.DataFrame, features: list[str], rounds: int):
+    train = train_rows(train)
     cats = [c for c in CATEGORICAL if c in features]
     return lgb.train(PARAMS, lgb.Dataset(train[features], train["win"], categorical_feature=cats), rounds)
 
