@@ -424,7 +424,8 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
 def section_status(conn: sqlite3.Connection) -> list[dict]:
     """各区分のデータが揃っているか。state は ready / partial / missing。"""
     n_horses = conn.execute("SELECT COUNT(DISTINCT horse_id) FROM results").fetchone()[0]
-    n_ped = conn.execute("SELECT COUNT(*) FROM pedigree").fetchone()[0]
+    # 血統の表には成績に出てこない馬(JRA-VAN の全登録馬)も入っているので、成績の馬と重なる分だけ数える
+    n_ped = conn.execute("SELECT COUNT(*) FROM pedigree WHERE horse_id IN (SELECT horse_id FROM results)").fetchone()[0]
     n_races = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
     n_flat = conn.execute("SELECT COUNT(*) FROM races WHERE course_type IN ('芝','ダ')").fetchone()[0]
     n_lap = conn.execute("SELECT COUNT(*) FROM races WHERE course_type IN ('芝','ダ') AND pace_first3f IS NOT NULL").fetchone()[0]
