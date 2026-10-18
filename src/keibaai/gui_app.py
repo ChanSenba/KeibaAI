@@ -964,6 +964,8 @@ def bets_from_marks(conn, date: dt.date, table) -> None:
     with box:
         race_head(race)
         marks = mark_editor(conn, rid, table)
+        budget = st.number_input("このレースに使う金額(円)", 100, 1_000_000, 3_000, 100, key="marks_budget",
+                                 help=TIPS["mark_alloc"])
     if list(marks.values()).count("◎") != 1:
         st.info("◎ を1頭付けると、買い目を出せます。○▲は2着候補、△☆は3着までの相手です(△☆は何頭でも)。",
                 icon=":material/edit:")
@@ -971,8 +973,6 @@ def bets_from_marks(conn, date: dt.date, table) -> None:
 
     st.subheader("最新オッズで計算", anchor=False)
     with st.container(border=True):
-        budget = st.number_input("このレースの予算(円)", 100, 1_000_000, 3_000, 100, key="marks_budget",
-                                 help=TIPS["mark_alloc"])
         store = st.session_state.setdefault("mark_odds", {})
         got = store.get(rid)
         label = "最新オッズを取り直して計算" if got else "最新オッズを取得して計算"
@@ -1015,14 +1015,21 @@ def bets_from_marks(conn, date: dt.date, table) -> None:
     best = betting.recommend(sums)
     kinds = pd.DataFrame([{"おすすめ": "★" if i == best else "", "券種": s.kind, "点数": len(s.bets),
                            "的中確率": s.hit_prob, "合成オッズ": s.synthetic, "期待回収率": s.expected_return,
-                           "外した点数": s.dropped} for i, s in enumerate(sums)])
-    st.dataframe(kinds, hide_index=True, width="stretch", column_config=KIND_COLUMNS)
-    chosen_kinds = st.multiselect("買う券種", [s.kind for s in sums], default=[sums[best].kind], key=f"marks_kinds_{rid}",
-                                  help="はじめはおすすめの券種(★)を選んでいます")
-    chosen = [s for s in sums if s.kind in chosen_kinds]
+                           "外した点数": s.dropped, "金額": budget if i == best else 0} for i, s in enumerate(sums)])
+    st.caption(f":material/edit: 「金額」の列に、券種ごとに買う金額を入れてください。はじめは、おすすめの券種(★)に{budget:,}円を入れています。")
+    # 使う金額や券種が変わったら、金額の列をはじめの値に戻す
+    edited = st.data_editor(kinds, hide_index=True, width="stretch", key=f"marks_kinds_{rid}_{budget}_{len(sums)}",
+                            disabled=[c for c in kinds.columns if c != "金額"], column_config=KIND_COLUMNS)
+    amounts = [int(a) if a == a and a is not None else 0 for a in edited["金額"]]
+    chosen = [(s, a) for s, a in zip(sums, amounts) if a >= betting.UNIT]
+    entered = sum(a for _, a in chosen)
+    if entered > budget:
+        st.warning(f"券種ごとの金額の合計({entered:,}円)が、このレースに使う金額({budget:,}円)を超えています。",
+                   icon=":material/warning:")
     if not chosen:
+        st.info("金額を入れた券種がありません(100円以上)。", icon=":material/edit:")
         return
-    plan = betting.equal_payout_plan(chosen, prob, budget)
+    plan = betting.equal_payout_plan([s for s, _ in chosen], prob, budget, [a for _, a in chosen])
     st.subheader("買い目と金額", anchor=False)
     show_mark_plan(plan)
 
@@ -1102,6 +1109,8 @@ KIND_COLUMNS = {
     "期待回収率": st.column_config.NumberColumn("期待回収率", format="percent",
                                            help="合成オッズ × 的中確率。確率が正しいときの、払戻の期待値 ÷ 合計金額"),
     "外した点数": st.column_config.NumberColumn("外した点数", format="%d", help="トリガミを避けるために外した、オッズの低い買い目の数"),
+    "金額": st.column_config.NumberColumn("金額(円)", min_value=0, max_value=1_000_000, step=100, format="%d",
+                                        help="この券種に使う金額。0なら買わない。どれが当たっても同じ払戻になるように、100円単位で配分します"),
 }
 
 
