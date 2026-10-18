@@ -428,6 +428,8 @@ def page_predict() -> None:
         try:
             with st.spinner("学習して予想しています(数分かかります)"):
                 st.session_state["prediction"] = (date, gui.add_marks(gui.predict_table(conn, date)))
+            with st.spinner("予想の見解に使う、各要素の値を計算しています(初めてのときは1〜2分かかります)"):
+                _race_factor_values(conn, date, None)
         except ValueError as e:
             st.error(str(e))
 
@@ -658,15 +660,19 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
                 st.html(review_html(rv))
 
 
-def _race_factor_values(conn, date: dt.date, race_id: str):
-    """このレースの各馬の要素の値(factor_values)。計算できなければ None(見解は点数だけになる)。"""
+def _race_factor_values(conn, date: dt.date, race_id: str | None):
+    """このレースの各馬の要素の値(factor_values)。計算できなければ None(見解は点数だけになる)。
+
+    race_id が None のときは計算だけして(保存と画面のメモリに残す)、何も返さない。
+    """
     ped_bucket = conn.execute("SELECT COUNT(*) FROM pedigree").fetchone()[0] // 500
     stamp = f"{gui.entries_summary(conn, date.isoformat())['fetched_at']}/{ped_bucket}"
     try:
-        values = _factor_values(st.session_state["db_path"], date.isoformat(), stamp)
+        with st.spinner("各要素の値を計算しています"):
+            values = _factor_values(st.session_state["db_path"], date.isoformat(), stamp)
     except ValueError:
         return None
-    return values[values["race_id"] == race_id]
+    return None if race_id is None else values[values["race_id"] == race_id]
 
 
 def review_html(rv: dict) -> str:
@@ -700,7 +706,7 @@ STATE_ICON = {"ready": ":material/check_circle:", "partial": ":material/timelaps
 
 @st.cache_data(show_spinner=False)
 def _factor_values(db_path: str, date: str, stamp: str):
-    return factor_view.factor_values(db.connect(db_path), date)
+    return factor_view.factor_values_cached(db.connect(db_path), date)
 
 
 def _factor_config(cols, frame=None) -> dict:

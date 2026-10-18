@@ -12,7 +12,7 @@ import pandas as pd
 
 from .features import inner_outer, same_course
 from .jvtraining import FAST_F4
-from .predict import day_frame
+from .predict import _cached, day_frame
 
 # 画面に出す区分。cols は (列名, 画面での見出し)。
 SECTIONS: list[dict] = [
@@ -427,6 +427,17 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     t["venue"] = t["venue"].astype(str)
     keep = ["race_id", "venue", "round", "horse_name", *dict.fromkeys(c for s in SECTIONS for c, _ in s["cols"])]
     return t[[c for c in keep if c in t]].sort_values(["race_id", "number"]).reset_index(drop=True)
+
+
+def factor_values_cached(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
+    """factor_values の結果を DB の隣に保存し、データが同じなら次からはそれを返す(予想と同じしくみ)。
+
+    作り直しに過去の全成績の特徴量づくりがかかるので、画面を開き直したりオッズを取り直したりしても待たずに済ませる。
+    血統・調教の取得で件数が変わったときも、作り直す。
+    """
+    counts = tuple(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                   for t in ("pedigree", "jv_training", "training_fetched"))
+    return _cached(conn, "factors", date, True, counts, lambda: factor_values(conn, date)).copy()
 
 
 def section_status(conn: sqlite3.Connection) -> list[dict]:

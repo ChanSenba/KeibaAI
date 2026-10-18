@@ -90,3 +90,23 @@ def test_broken_cache_file_is_recomputed(tmp_path):
     (file,) = (tmp_path / predict.CACHE_DIR).glob("predict-*.pkl")
     file.write_bytes(b"not a pickle")
     pd.testing.assert_frame_equal(predict.predict_day(conn, DAY), first)
+
+
+def test_factor_values_are_reused_until_the_data_changes(tmp_path, monkeypatch):
+    from keibaai import factor_view
+
+    conn = disk_db(tmp_path)
+    calls = []
+    real = factor_view.factor_values
+    monkeypatch.setattr(factor_view, "factor_values", lambda *a, **k: calls.append(1) or real(*a, **k))
+    first = factor_view.factor_values_cached(conn, DAY)
+    assert calls == [1]
+    again = factor_view.factor_values_cached(conn, DAY)
+    assert calls == [1]  # 2回目は保存した値を返す
+    pd.testing.assert_frame_equal(first, again)
+    assert len(list((tmp_path / predict.CACHE_DIR).glob("factors-*.pkl"))) == 1
+
+    conn.execute("INSERT INTO pedigree (horse_id) VALUES ('hx')")  # 血統を取得して件数が変わった
+    conn.commit()
+    factor_view.factor_values_cached(conn, DAY)
+    assert calls == [1, 1]
