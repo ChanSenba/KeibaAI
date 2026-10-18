@@ -1304,10 +1304,14 @@ def page_review() -> None:
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
     st.caption("数字の見方", help=TIPS["review"])
-    if r.marks is not None and not r.marks.empty:
+    scope = st.segmented_control("印ごとの成績の範囲", ["この日", "保存済みの全期間"], default="この日", key="review_scope") or "この日"
+    marks = r.marks
+    if scope != "この日":  # 1日だと頭数が少ないので、結果の出ている全部の日をまとめて出す
+        marks = weekly.mark_stats(pd.concat([weekly.review_day(conn, d).horses for d in days], ignore_index=True))
+    if marks is not None and not marks.empty:
         st.subheader("印ごとの成績", anchor=False)
         pct = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
-        st.dataframe(r.marks.drop(columns=["top3"]).style.map(mark_style, subset=["mark"]), hide_index=True,
+        st.dataframe(marks.drop(columns=["top3"]).style.map(mark_style, subset=["mark"]), hide_index=True,
                      width="stretch", column_config={
             "mark": st.column_config.TextColumn("印", width="small"),
             "n": st.column_config.NumberColumn("頭数", format="%d", help="その印を付けて、走った馬の数(取消・除外は除く)"),
