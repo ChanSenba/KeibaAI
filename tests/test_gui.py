@@ -94,6 +94,9 @@ def test_day_races_and_race_entries():
     pred = gui.predict_table(conn, dt.date(2030, 1, 5))
     with_pred = gui.race_entries(conn, "202609990101", pred)
     assert len(with_pred) == 10 and with_pred["ev_market"].notna().all()
+    # 期待値の高い馬の表のコース列は、予想の表ではなく出馬表から引く
+    courses = gui.day_courses(conn, "2030-01-05")
+    assert pred["race_id"].map(courses).str.endswith("m").all()
 
 
 def test_race_choices_merge_fetched_and_listed():
