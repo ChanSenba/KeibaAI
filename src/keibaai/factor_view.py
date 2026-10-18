@@ -65,6 +65,7 @@ SECTIONS: list[dict] = [
      "note": "場所とタイムは JRA-VAN の坂路・ウッドの調教タイムから、レース前日までの直近14日の追い切り"
              "(坂路4F58秒以内・ウッド56秒以内)で作ります(取り込みは keibaai jv)。JRA-VAN にあるのは坂路とウッドだけです。"
              "短評・評価は netkeiba の最終追い切りで、取得したレースだけ出ます(keibaai training --date)。"
+             "騎乗者・脚色・併せ馬は netkeiba の調教の詳細からで、未ログインでは各レースの先頭3頭しか取れないため、取れた馬だけ出ます。"
              "評価のメンバー内の差は、A=4〜D=1 とした点数からレースの平均を引いた値です。",
      "cols": [("train_center", "トレセン"), ("train_last_place", "最後の追い切り"),
               ("jv_last_f4", "最後の4F"), ("jv_last_l1", "最後の1F"),
@@ -74,7 +75,8 @@ SECTIONS: list[dict] = [
               ("jv_last_lap1_z", "ラップ1の基準差"), ("jv_last_lap2_z", "ラップ2の基準差"), ("jv_last_lap3_z", "ラップ3の基準差"),
               ("jv_last_l1_z", "終い1Fの基準差"), ("jv_best_f4", "一番時計の4F"), ("train_best_place", "一番時計の場所"),
               ("jv_f4_vs_base", "ふだんとの差(4F)"), ("jv_f4_vs_field", "メンバー内の差(4F)"), ("jv_n14", "追い切りの本数(14日)"),
-              ("jv_days_since", "最後の追い切りから(日)"), ("train_critic", "短評"), ("train_rank", "評価"),
+              ("jv_days_since", "最後の追い切りから(日)"), ("train_day", "最終追い切りの日"), ("train_rider", "騎乗者"),
+              ("train_load", "脚色"), ("train_partner", "併せ馬"), ("train_critic", "短評"), ("train_rank", "評価"),
               ("train_rank_vs_field", "評価のメンバー内の差")]},
     {"name": "ラップ・ペース",
      "note": "ペース差 = 前半3F − 後半3F(プラスは後傾=スロー寄り)。RPCI そのものではなく、結果ページのラップからの代用です。",
@@ -146,6 +148,10 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "train_center": ("所属のトレセン(美浦・栗東)。直近14日の追い切りをした場所(JRA-VAN)", None),
     "train_last_place": ("最後の追い切りの場所。坂路か、ウッドのどのコースか(回り)。JRA-VAN になければ netkeiba のコース", None),
     "train_best_place": ("直近14日で一番時計を出した追い切りの場所", None),
+    "train_day": ("netkeiba の調教の詳細から取れた、最終追い切りの日。詳細は会員限定で、取れた馬だけ出ます", None),
+    "train_rider": ("最終追い切りに乗った人(助手・騎手など)。netkeiba の調教の詳細から取れた馬だけ出ます", None),
+    "train_load": ("最終追い切りの脚色(馬也・強め・一杯など)。netkeiba の調教の詳細から取れた馬だけ出ます", None),
+    "train_partner": ("最終追い切りの併せ馬(相手・脚色・先着か遅れか)。netkeiba の調教の詳細から取れた馬だけ出ます。空欄は併せ馬なしか未取得", None),
     "train_critic": ("最終追い切りの短評(netkeiba)。気配上昇・仕上良好・前走並み など", None),
     "train_rank": ("最終追い切りの評価。A が最も良く、D に向かって下がる", None),
     "train_rank_vs_field": ("評価を A=4〜D=1 の点にして、レース平均を引いた値。プラスほどメンバーの中で良い", "high"),
@@ -373,8 +379,9 @@ def training_place(kind: str, center: str | None, course: str | None, turn: str 
 def _training_places(conn: sqlite3.Connection, t: pd.DataFrame, date: str) -> pd.DataFrame:
     """出走馬ごとに、トレセン・最後の追い切りと一番時計の場所(JRA-VAN)。JRA-VAN にない馬は netkeiba のコース。
     調教の特徴量と同じく、レース前日までの直近14日の追い切りで見る。
-    追い方・併せ馬は、netkeiba の未ログインのページでは各レースの先頭3頭しか出ず取っていないので、出さない。"""
-    out = pd.DataFrame(index=t.index, columns=["train_center", "train_last_place", "train_best_place"], dtype=object)
+    騎乗者・脚色・併せ馬は、netkeiba の未ログインのページでは各レースの先頭3頭しか出ないので、取れた馬だけ入る。"""
+    out = pd.DataFrame(index=t.index, dtype=object, columns=[
+        "train_center", "train_last_place", "train_best_place", "train_day", "train_rider", "train_load", "train_partner"])
     ids = [h for h in set(t["horse_id"]) if isinstance(h, str)]
     day = pd.Timestamp(date)
     if ids:
@@ -393,12 +400,14 @@ def _training_places(conn: sqlite3.Connection, t: pd.DataFrame, date: str) -> pd
             out["train_best_place"] = t["horse_id"].map(best["place"])
     races = list(set(t["race_id"]))
     nk = pd.read_sql_query(
-        f"SELECT race_id, number, course FROM training WHERE seq = 0 "
+        f"SELECT race_id, number, course, date, rider, load, partner FROM training WHERE seq = 0 "
         f"AND race_id IN ({','.join('?' * len(races))})", conn, params=races) if races else pd.DataFrame()
     if not nk.empty:
         got = t[["race_id", "number"]].merge(nk, on=["race_id", "number"], how="left")
         got.index = t.index
         out["train_last_place"] = out["train_last_place"].fillna(got["course"])  # JRA-VAN にない馬は netkeiba のコース
+        for col, src in (("train_day", "date"), ("train_rider", "rider"), ("train_load", "load"), ("train_partner", "partner")):
+            out[col] = got[src].astype(object)  # 詳細が取れた馬だけ入る(取れていなければ空)
     return out
 
 
@@ -707,6 +716,12 @@ def _training_text(v: pd.DataFrame, i) -> str:
         parts.append(f"4Fは{r['jv_last_f4']:.1f}秒{tail}")
     if _has(r.get("train_critic")) or _has(r.get("train_rank")):
         parts.append("短評「" + str(r.get("train_critic") or "—") + "」・評価" + str(r.get("train_rank") or "—"))
+    if _has(r.get("train_day")):  # 調教の詳細が取れた馬
+        parts.append(f"{r['train_day']}の追い切りで、騎乗は{r['train_rider'] if _has(r.get('train_rider')) else '不明'}"
+                     + (f"・脚色は{r['train_load']}" if _has(r.get("train_load")) else ""))
+        parts.append(f"併せ馬は{r['train_partner']}" if _has(r.get("train_partner")) else "併せ馬の記載はなし(単走)")
+    elif parts:
+        parts.append("騎乗者と併せ馬は取得できていません(netkeiba の詳細が会員限定のため)")
     return "。".join(parts) + "。" if parts else "追い切りのデータを取得していないため、評価に入れていません。"
 
 
