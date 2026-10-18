@@ -221,3 +221,32 @@ def test_forecast_day_saves_flow_forecast_with_predictions(monkeypatch):
     assert weekly.forecast_day(conn, FakeFetcher(), dt.date(2025, 3, 1), now) == 5
     row = conn.execute("SELECT pace, advantage FROM flow_forecast").fetchone()
     assert row == ("ハイ", "後")
+
+
+def test_review_gives_fit_for_each_horse_from_flow_gate_and_ground():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    # 過去: 馬4(h4)は道悪で2走して3着内0回。今回は道悪(稍重)の、前残り・内枠有利のレース
+    for i, (rid, order) in enumerate([("202504010101", [1, 2, 3, 5, 4]), ("202504010201", [1, 2, 3, 5, 4])]):
+        race = Race(race_id=rid, date=f"2025-02-0{i + 1}", venue="東京", round=1, course_type="芝", distance=1600, ground="重")
+        db.save_race(conn, ParsedRace(race=race, results=[
+            Result(race_id=rid, number=n, finish=f, horse_id=f"h{n}") for f, n in enumerate(order, start=1)]))
+    race = Race(race_id="202505010101", date="2025-03-01", venue="東京", round=1, course_type="芝", distance=1600,
+                ground="稍重", pace_first3f=36.5, pace_last3f=34.5)
+    passing = {1: "1-1", 2: "3-3", 3: "3-3", 4: "4-4", 5: "5-5"}
+    db.save_race(conn, ParsedRace(race=race, results=[
+        Result(race_id="202505010101", number=n, finish=f, win_odds=2.0 * n, popularity=n, horse_id=f"h{n}",
+               passing=passing[n], last3f=35.0 + n / 10) for f, n in enumerate([1, 2, 3, 4, 5], start=1)]))
+    r = weekly.review_day(conn, "2025-03-01")
+    rv = r.reviews["202505010101"]
+    assert "稍重" in rv["track"] and "内枠有利" in rv["track"]
+    by = {t["number"]: t for t in rv["horses"]}
+    assert [t["number"] for t in rv["horses"][:4]] == [1, 2, 3, 4]  # 印のある馬が先
+    one = {x["name"]: x for x in by[1]["rows"]}
+    assert one["展開"]["grade"] == "向いた" and one["枠"]["grade"] == "向いた" and by[1]["fit"] == "向いた条件"
+    assert "序盤1番手(前)" in one["展開"]["text"] and "1番(内枠)" in one["枠"]["text"]
+    four = {x["name"]: x for x in by[4]["rows"]}
+    assert four["馬場"]["grade"] == "向かなかった" and "道悪は過去2走で3着内0回" in four["馬場"]["text"]
+    assert "上がり" in by[4]["summary"] and by[4]["sub"].startswith("4着 ・ 4番人気")
+    md = weekly.render_markdown(r)
+    assert "  - 馬場・枠: 稍重・内枠有利" in md and "◎馬1(1着 ・ 1番人気 ・ 向いた条件): 展開向いた / 枠向いた / 馬場向いた" in md
