@@ -83,12 +83,13 @@ class Review:
     races: pd.DataFrame  # レースごとのまとめ
     summary: dict
     marks: pd.DataFrame | None = None  # 印ごとの成績(mark_stats)
+    reviews: dict | None = None  # レースごとの見解(horse_reviews)
 
 
 def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
     pred = pd.read_sql_query("SELECT * FROM predictions WHERE date = ?", conn, params=(date,))
     res = pd.read_sql_query(
-        "SELECT race_id, number, finish, status, passing, last3f, time_sec, popularity AS final_pop, win_odds AS final_odds "
+        "SELECT race_id, number, finish, status, passing, last3f, horse_id, time_sec, popularity AS final_pop, win_odds AS final_odds "
         "FROM results WHERE race_id IN (SELECT race_id FROM predictions WHERE date = ?)", conn, params=(date,))
     h = pred.merge(res, on=["race_id", "number"], how="left")
     h = h[h.groupby("race_id")["finish"].transform(lambda s: s.notna().any())].copy()  # 結果が出たレースだけ
@@ -127,20 +128,58 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
         "flow_pace_races": int(races["pace_hit"].notna().sum()) if "pace_hit" in races else 0,
         "flow_pace_hits": int((races["pace_hit"] == True).sum()) if "pace_hit" in races else 0,  # noqa: E712
     }
-    return Review(date, h, races, summary, mark_stats(h))
+    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date))
 
 
 def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
-    """レースごとの (発走前の展開予想, 結果から出した実際の展開)。予想がなければ前者は None。"""
+    """レースごとの (発走前の展開予想, 結果から出した実際の展開と枠の傾き, 馬番ごとの上がり3F順位)。予想がなければ前者は None。"""
     q = ",".join("?" * len(ids))
-    runners = pd.read_sql_query(f"SELECT race_id, finish, passing FROM results WHERE race_id IN ({q})", conn, params=ids)
-    pace = pd.read_sql_query(f"SELECT race_id, pace_first3f, pace_last3f FROM races WHERE race_id IN ({q})", conn,
-                             params=ids).set_index("race_id")
+    runners = pd.read_sql_query(f"SELECT race_id, number, finish, passing, last3f FROM results WHERE race_id IN ({q})",
+                                conn, params=ids)
+    races = pd.read_sql_query(f"SELECT race_id, pace_first3f, pace_last3f, ground FROM races WHERE race_id IN ({q})", conn,
+                              params=ids).set_index("race_id")
     fc = pd.read_sql_query(f"SELECT * FROM flow_forecast WHERE race_id IN ({q})", conn, params=ids).set_index("race_id")
+    runners["l3f_rank"] = runners.groupby("race_id")["last3f"].rank(method="min")
     out = {}
     for rid, g in runners.groupby("race_id"):
-        a, b = (pace.at[rid, "pace_first3f"], pace.at[rid, "pace_last3f"]) if rid in pace.index else (None, None)
-        out[rid] = (fc.loc[rid].to_dict() if rid in fc.index else None, flow_review.race_flow(g, a, b))
+        r = races.loc[rid] if rid in races.index else None
+        a, b, ground = (None, None, None) if r is None else (r["pace_first3f"], r["pace_last3f"], r["ground"])
+        out[rid] = (fc.loc[rid].to_dict() if rid in fc.index else None, flow_review.race_flow(g, a, b, ground),
+                    g.set_index("number")["l3f_rank"])
+    return out
+
+
+def _ground_records(conn: sqlite3.Connection, h: pd.DataFrame, date: str) -> dict:
+    """馬ごとの、過去の同じ馬場状態(良・道悪)での (出走数, 3着内数)。キーは (馬の id, 馬場状態)。"""
+    ids = [i for i in h["horse_id"].dropna().unique()]
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    past = pd.read_sql_query(
+        f"SELECT r.horse_id, c.ground, r.finish FROM results r JOIN races c USING (race_id) "
+        f"WHERE r.horse_id IN ({q}) AND c.date < ? AND r.finish IS NOT NULL", conn, params=[*ids, date])
+    past["klass"] = past["ground"].map(flow_review.ground_class)
+    got = past.dropna(subset=["klass"]).groupby(["horse_id", "klass"])["finish"].agg(
+        runs="count", hits=lambda x: int((x <= 3).sum()))
+    return {k: (int(v["runs"]), int(v["hits"])) for k, v in got.iterrows()}
+
+
+def horse_reviews(conn: sqlite3.Connection, h: pd.DataFrame, flows: dict, date: str) -> dict:
+    """レースごとの見解。{race_id: {"track": 馬場と枠の傾き, "horses": [馬ごとの向き・不向き(印のある馬が先)]}}"""
+    records = _ground_records(conn, h, date)
+    order = {m: i for i, m in enumerate(MARK_ORDER)}
+    out = {}
+    for rid, g in h.groupby("race_id", sort=False):
+        if rid not in flows or g["finish"].isna().all():
+            continue
+        _, act, l3 = flows[rid]
+        g = g[g["finish"].notna() | g["status"].notna()].assign(_o=lambda d: d["mark"].map(order).fillna(len(order)))
+        horses = []
+        for _, x in g.sort_values(["_o", "finish", "number"], na_position="last").iterrows():
+            d = x.to_dict()
+            d["l3f_rank"] = l3.get(int(x["number"]), float("nan"))
+            horses.append(flow_review.horse_review(act, d, records.get((x["horse_id"], flow_review.ground_class(act["ground"])))))
+        out[rid] = {"track": flow_review.track_text(act), "horses": horses}
     return out
 
 
@@ -161,9 +200,9 @@ def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
 def _flow_row(pair) -> dict:
     """races の1行に付ける、展開の予想と実際、当たったか(予想がなければ None)。"""
     if pair is None:
-        return {"flow": "", "forecast": "", "pace_hit": None, "adv_hit": None}
-    fc, act = pair
-    return {"flow": flow_review.flow_text(act), "forecast": "" if fc is None else flow_review.forecast_text(fc),
+        return {"flow": "", "track": "", "forecast": "", "pace_hit": None, "adv_hit": None}
+    fc, act, _ = pair
+    return {"flow": flow_review.flow_text(act), "track": flow_review.track_text(act), "forecast": "" if fc is None else flow_review.forecast_text(fc),
             "pace_hit": None if fc is None or "不明" in (fc["pace"], act["pace"]) else fc["pace"] == act["pace"],
             "adv_hit": None if fc is None else fc["advantage"] == act["advantage"]}
 
@@ -223,6 +262,13 @@ def render_markdown(r: Review) -> str:
             if x["forecast"]:
                 out.append(f"  - 展開の予想: {x['forecast']}")
             out.append(f"  - 実際の展開: {x['flow']}" + (f" ← 有利不利{mark(x['adv_hit'])}" if x["forecast"] else ""))
+            rv = (r.reviews or {}).get(x["race_id"])
+            if rv:
+                out.append(f"  - 馬場・枠: {x['track']}")
+                for t in rv["horses"]:
+                    if t["mark"]:  # 印のある馬だけ。全頭は画面の回顧で見られる
+                        out.append(f"    - {t['mark']}{t['name']}({t['sub']}): "
+                                   + " / ".join(f"{f['name']}{f['grade']}" for f in t["rows"]))
     return "\n".join(out) + "\n"
 
 

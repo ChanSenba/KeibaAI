@@ -699,7 +699,7 @@ def review_html(rv: dict) -> str:
     rows = "".join(
         f'<div class="kb-rv-row"><div class="kb-rv-name">{html.escape(f["name"])}</div>'
         f'<div class="kb-rv-pt {"kb-rv-hi" if f["pt"] >= factor_view.STRONG_PT else "kb-rv-lo" if f["pt"] <= factor_view.WEAK_PT else ""}">'
-        f'<div class="kb-rv-score"><b>{f["pt"]:.1f}</b><i>/10</i></div>'
+        + ("" if "fit" in rv else f'<div class="kb-rv-score"><b>{f["pt"]:.1f}</b><i>/10</i></div>') +
         f'<div class="kb-rv-grade">{html.escape(f["grade"])}</div></div>'
         f'<div class="kb-rv-text">{html.escape(f["text"])}</div></div>' for f in rv["rows"])
     return (f'<div class="kb-review"><p class="kb-rv-summary">{html.escape(rv["summary"])}</p>{rows}</div>')
@@ -1329,10 +1329,11 @@ def page_review() -> None:
             race_head(heads.loc[race["race_id"]])
         else:
             st.markdown(f"#### {race['venue']}{int(race['round'])}R {gui.text_or_blank(race['race_name'])}")
-        review_race(r.horses[r.horses["race_id"] == race["race_id"]], race)
+        review_race(r.horses[r.horses["race_id"] == race["race_id"]], race,
+                    (r.reviews or {}).get(race["race_id"]))
 
 
-def review_race(g, race=None) -> None:
+def review_race(g, race=None, reviews=None) -> None:
     """1レースの回顧: 印を付けた馬すべての着順と、1〜3着の馬。"""
     from keibaai import weekly
 
@@ -1340,6 +1341,8 @@ def review_race(g, race=None) -> None:
         if race.get("forecast"):
             st.caption(f"展開の予想: {race['forecast']}", help=gui_help.REVIEW_COLUMNS["flow"][1])
         st.caption(f"実際の展開: {race['flow']}")
+        if race.get("track"):
+            st.caption(f"馬場・枠: {race['track']}")
 
     def place_style(v) -> str:
         return "font-weight: 700; background-color: rgba(46, 158, 91, 0.2)" if v == v and v is not None and v <= 3 else ""
@@ -1366,6 +1369,15 @@ def review_race(g, race=None) -> None:
         allh = g.sort_values(["finish", "number"], na_position="last")
         st.dataframe(allh[list(cols)].style.map(mark_style, subset=["mark"]), hide_index=True, width="stretch",
                      column_config=cols)
+    if reviews and reviews["horses"]:
+        st.subheader("回顧の見解", anchor=False)
+        st.caption("そのレースの展開・枠・馬場状態に、各馬が向いていたかを、結果と過去の成績から機械的に判定しています。"
+                   "印のある馬が先です。向いたは緑、向かなかったは赤みで示します。",
+                   help=gui_help.REVIEW_COLUMNS["flow"][1])
+        for rv in reviews["horses"]:
+            title = f"{rv['mark']} {rv['number']} {rv['name']}".strip()
+            with st.expander(f"{title} ― {rv['sub']}", expanded=bool(rv["mark"])):
+                st.html(review_html(rv))
 
 
 # ---------------------------------------------------------------- 買い方の検証
