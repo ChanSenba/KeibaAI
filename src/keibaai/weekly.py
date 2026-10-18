@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from .gui import add_marks
+from .gui import MARKS, add_marks
+
+MARK_ORDER = MARKS + ["△", "☆"]  # 印の並び。表示と集計はこの順
 
 PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_name", "horse_name", "jockey",
              "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
@@ -72,24 +74,7 @@ class Review:
     horses: pd.DataFrame  # 予想した馬ごと。結果(finish)付き
     races: pd.DataFrame  # レースごとのまとめ
     summary: dict
-    marks: pd.DataFrame | None = None  # 印ごとの成績(頭数・勝率・連対率・馬券内率・単勝回収率)
-
-
-MARK_ORDER = ["◎", "○", "▲", "△", "☆"]
-
-
-def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
-    """印ごとの成績。取消・除外(着順のない馬)は数えない。馬券内率は3着以内に入った割合。"""
-    rows = []
-    for m in MARK_ORDER:
-        g = h[(h["mark"] == m) & h["finish"].notna()]
-        if g.empty:
-            continue
-        n = len(g)
-        rows.append({"印": m, "頭数": n, "1着": int((g["finish"] == 1).sum()),
-                     "勝率": float((g["finish"] == 1).mean()), "連対率": float((g["finish"] <= 2).mean()),
-                     "馬券内率": float((g["finish"] <= 3).mean()), "単勝回収率": _roi(g, 100) / 100})
-    return pd.DataFrame(rows, columns=["印", "頭数", "1着", "勝率", "連対率", "馬券内率", "単勝回収率"])
+    marks: pd.DataFrame | None = None  # 印ごとの成績(mark_stats)
 
 
 def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
@@ -118,7 +103,7 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
             "winner_rank": None if w is None else int(w["rank"]),
             "winner_p": None if w is None else w["p_win_ability"],
             "winner_odds": None if w is None else w["odds"],
-            "top3_hit": len(top3 & marked),
+            "top3_hit": len(top3 & marked), "marked": marked_finishes(g),
         })
     races = pd.DataFrame(rows)
     ev = h[h["ev_ability"] >= 1]
@@ -132,12 +117,18 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
     return Review(date, h, races, summary, mark_stats(h))
 
 
-def _roi(bets: pd.DataFrame, stake: int) -> float:
-    return float(bets["win"].mul(bets["odds"].fillna(0)).sum() / len(bets) * 100) if len(bets) else float("nan")
-
-
-def _pct(x: float) -> str:
-    return "—" if x != x else f"{x:.0f}%"
+def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
+    """印ごとの頭数・1着・3着内と、勝率・連対率・3着内率(馬券内率)・単勝回収率。取消・除外(着順のない馬)は数えない。"""
+    rows = []
+    for m in MARK_ORDER:
+        g = h[(h["mark"] == m) & h["finish"].notna()]
+        if g.empty:
+            continue
+        n, win, top3 = len(g), int((g["finish"] == 1).sum()), int(g["finish"].between(1, 3).sum())
+        rows.append({"mark": m, "n": n, "wins": win, "top3": top3, "win_rate": win / n,
+                     "top2_rate": float(g["finish"].between(1, 2).mean()), "top3_rate": top3 / n,
+                     "roi": _roi(g, 100) / 100})
+    return pd.DataFrame(rows, columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi"])
 
 
 def finish_text(finish, status=None) -> str:
@@ -147,13 +138,19 @@ def finish_text(finish, status=None) -> str:
     return status if isinstance(status, str) and status else "—"
 
 
-def marked_finishes(horses: pd.DataFrame, race_id: str) -> list[tuple[str, int, str, str]]:
-    """そのレースの印のある馬の (印, 馬番, 馬名, 着順の表示)。印の順(◎○▲△☆)。"""
-    g = horses[(horses["race_id"] == race_id) & horses["mark"].isin(MARK_ORDER)]
-    g = g.assign(_o=g["mark"].map(MARK_ORDER.index)).sort_values(["_o", "number"])
-    status = g["status"] if "status" in g else [None] * len(g)
-    return [(m, int(n), name, finish_text(f, s))
-            for m, n, name, f, s in zip(g["mark"], g["number"], g["horse_name"], g["finish"], status)]
+def marked_finishes(g: pd.DataFrame) -> str:
+    """1レースの、印をつけた馬の着順。「◎馬1 2着 / ○馬2 1着 …」"""
+    order = {m: i for i, m in enumerate(MARK_ORDER)}
+    g = g[g["mark"].isin(order)].assign(_o=lambda d: d["mark"].map(order)).sort_values(["_o", "number"])
+    return " / ".join(f"{x['mark']}{x['horse_name']} {finish_text(x['finish'], x.get('status'))}" for _, x in g.iterrows())
+
+
+def _roi(bets: pd.DataFrame, stake: int) -> float:
+    return float(bets["win"].mul(bets["odds"].fillna(0)).sum() / len(bets) * 100) if len(bets) else float("nan")
+
+
+def _pct(x: float) -> str:
+    return "—" if x != x else f"{x:.0f}%"
 
 
 def render_markdown(r: Review) -> str:
@@ -165,10 +162,11 @@ def render_markdown(r: Review) -> str:
            f"- ◎○▲のうち3着以内に入った頭数(のべ): {s['top3_hits']}(最大 {3 * s['races']})",
            f"- 期待値≧1 の馬: {s['ev_bets']}頭を買って{s['ev_wins']}頭が勝ち、単勝回収率 {_pct(s['ev_roi'])}", "",
            "回収率は確定オッズで計算。予想は発走前に保存したものです。", ""]
-    if r.marks is not None and not r.marks.empty:
-        out += ["印ごとの成績:", ""] + [
-            f"- {m['印']}: {m['頭数']}頭・勝率 {m['勝率']:.0%}・連対率 {m['連対率']:.0%}・馬券内率 {m['馬券内率']:.0%}"
-            f"・単勝回収率 {_pct(m['単勝回収率'] * 100)}" for _, m in r.marks.iterrows()] + [""]
+    if r.marks is not None and len(r.marks):
+        out += ["## 印ごとの成績", "", "| 印 | 頭数 | 1着 | 3着内 | 3着内率 |", "|---|---|---|---|---|"]
+        out += [f"| {x['mark']} | {x['n']} | {x['wins']} | {x['top3']} | {x['top3_rate']:.0%} |"
+                for _, x in r.marks.iterrows()]
+        out += ["", "## レースごと", ""]
     for _, x in r.races.sort_values(["venue", "round"]).iterrows():
         fin = "—" if x["honmei_finish"] != x["honmei_finish"] else f"{int(x['honmei_finish'])}着"
         line = f"- **{x['venue']}{int(x['round'])}R {x['race_name']}**: ◎{x['honmei']}は{fin}。"
@@ -177,10 +175,9 @@ def render_markdown(r: Review) -> str:
                      f"・単勝{x['winner_odds']:.1f}倍)。")
             if x["winner_rank"] >= 5:
                 line += " ← 予想の下位から勝った。"
-        marked = marked_finishes(r.horses, x["race_id"])
-        if marked:
-            line += " 印の馬: " + " / ".join(f"{m}{name} {fin}" for m, _, name, fin in marked)
         out.append(line)
+        if x.get("marked"):
+            out.append(f"  - 印の着順: {x['marked']}")
     return "\n".join(out) + "\n"
 
 

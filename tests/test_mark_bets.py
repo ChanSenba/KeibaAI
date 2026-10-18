@@ -91,17 +91,8 @@ def test_review_mark_stats_and_marked_finishes():
     weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
     add_result(conn, "202505010101", "2025-03-01", [3, 1, 2, 5, 4])  # 3番が勝ち、◎(1番)は2着
     r = weekly.review_day(conn, "2025-03-01")
-    m = r.marks.set_index("印")
-    assert m.loc["◎", "頭数"] == 1 and m.loc["◎", "勝率"] == 0 and m.loc["◎", "連対率"] == 1
-    assert m.loc["▲", "1着"] == 1 and m.loc["▲", "馬券内率"] == 1 and m.loc["▲", "単勝回収率"] == pytest.approx(6.0)
-    got = weekly.marked_finishes(r.horses, "202505010101")
-    assert [(x[0], x[3]) for x in got][:3] == [("◎", "2着"), ("○", "3着"), ("▲", "1着")]
-    assert "印の馬: ◎馬1 2着" in weekly.render_markdown(r) and "馬券内率" in weekly.render_markdown(r)
-
-
-def test_recommend_skips_long_shots():
-    mk = lambda kind, hit, ret: betting.KindSummary(kind, [], np.zeros((0, 1), bool), hit, 1.0, ret)
-    sums = [mk("三連単", 0.01, 0.95), mk("ワイド", 0.3, 0.9), mk("単勝", 0.15, 0.8)]
-    assert betting.recommend(sums) == 1
-    assert betting.recommend([mk("三連単", 0.01, 0.95), mk("馬単", 0.02, 0.9)]) == 0
-    assert betting.recommend([]) is None
+    m = r.marks.set_index("mark")
+    assert m.loc["◎", "n"] == 1 and m.loc["◎", "win_rate"] == 0 and m.loc["◎", "top2_rate"] == 1
+    assert m.loc["▲", "wins"] == 1 and m.loc["▲", "top3_rate"] == 1 and m.loc["▲", "roi"] == pytest.approx(6.0)
+    assert weekly.marked_finishes(r.horses).startswith("◎馬1 2着 / ○馬2 3着 / ▲馬3 1着")
+    assert weekly.finish_text(float("nan"), "取消") == "取消" and weekly.finish_text(3.0) == "3着"

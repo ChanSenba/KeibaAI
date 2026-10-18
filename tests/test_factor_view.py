@@ -282,3 +282,25 @@ def test_model_factor_points_and_commentary():
     assert fv.EVIDENCE["p_win_pedigree"](vals.set_index("number", drop=False), 1) == "血統のデータを取得していないため、評価に入れていません。"
     assert "初コンビ" not in fv.EVIDENCE["p_win_human"](vals.set_index("number", drop=False), 1)  # 3回騎乗済み
     assert fv.race_reviews(one, pts)[0]["rows"][0]["text"] == ""  # 要素の値がなければ点数だけ
+
+
+def test_same_day_history_uses_only_earlier_rounds_of_the_same_day_venue_and_surface():
+    from keibaai import db
+
+    c = db.connect(":memory:")
+    def race(rid, rnd, venue, ct, first, last):
+        c.execute("INSERT INTO races (race_id, date, venue, round, course_type, distance, name, ground, pace_first3f, pace_last3f) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?)", (rid, "2030-02-02", venue, rnd, ct, 1600, f"{rnd}R", "良", first, last))
+        for n in range(1, 7):  # 1〜3番(内)が上位、前に付けた馬(通過順1〜2位)が上位
+            c.execute("INSERT INTO results (race_id, number, horse_id, finish, passing) VALUES (?,?,?,?,?)",
+                      (rid, n, f"{rid}{n}", n, f"{n}-{n}"))
+    race("a1", 1, "東京", "芝", 36.0, 34.0)   # 同じ日・場・芝で前のR → 入る
+    race("a2", 2, "東京", "ダ", 36.0, 34.0)   # ダートは入らない
+    race("a3", 3, "京都", "芝", 36.0, 34.0)   # 別の競馬場は入らない
+    race("a4", 4, "東京", "芝", 34.0, 36.0)   # 同じ・または後のRは入らない
+    c.commit()
+    got = fv.same_day_history(c, {"venue": "東京", "course_type": "芝", "round": 4}, "2030-02-02")
+    assert got["R"].tolist() == [1] and got["ペース"].tolist() == ["スロー"] and got["勝ち馬"].tolist() == [1]
+    assert got["先行有利度"].iloc[0] > 0 and got["内有利度"].iloc[0] > 0
+    assert "ここまで1レース" in fv.same_day_text("東京", "芝", got) and "目安" in fv.same_day_text("東京", "芝", got)
+    assert fv.same_day_history(c, {"venue": "東京", "course_type": "芝", "round": 1}, "2030-02-02").empty
