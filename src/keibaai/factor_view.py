@@ -808,7 +808,14 @@ def course_history(conn: sqlite3.Connection, race, before: str, days: int = 5) -
     df = df[df["date"].isin(sorted(df["date"].unique(), reverse=True)[:days])]
     if df.empty:
         return pd.DataFrame()
+    return _flow_rows(df).sort_values(["日付", "R"], ascending=False).reset_index(drop=True)
+
+
+def _flow_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """race_id・date・round・name・ground・pace_first3f・pace_last3f・finish・passing・number の表から、
+    レースごとの展開(ペース差・先行有利度・内有利度・勝ち馬)を1行ずつにする。"""
     from .features import parse_early_position
+    df = df.copy()
     df["field"] = df.groupby("race_id")["number"].transform("count")
     df["early"] = df["passing"].map(parse_early_position) / df["field"]
     rows = []
@@ -817,13 +824,52 @@ def course_history(conn: sqlite3.Connection, race, before: str, days: int = 5) -
         front = f["early"] <= 1 / 3
         top3 = (f["finish"] <= 3).astype(float)
         win = g[g["finish"] == 1]
+        pos = g["number"] / g["field"]
+        inner, outer = pos <= 1 / 3, pos >= 2 / 3
+        top3_all = (g["finish"] <= 3).astype(float)
         first, last = pd.to_numeric(g["pace_first3f"].iloc[0], errors="coerce"), pd.to_numeric(g["pace_last3f"].iloc[0], errors="coerce")
         rows.append({"race_id": rid, "日付": g["date"].iloc[0], "R": int(g["round"].iloc[0]), "レース": g["name"].iloc[0],
                      "馬場": g["ground"].iloc[0], "前半3F": first, "後半3F": last, "ペース差": first - last,
                      "ペース": pace_label(first - last),
                      "先行有利度": top3[front].mean() - top3[~front].mean() if front.any() and (~front).any() else np.nan,
+                     "内有利度": top3_all[inner].mean() - top3_all[outer].mean() if inner.any() and outer.any() else np.nan,
+                     "勝ち馬": int(win["number"].iloc[0]) if len(win) else np.nan,
                      "勝ち馬の位置": win["early"].iloc[0] if len(win) and win["early"].notna().any() else np.nan})
-    return pd.DataFrame(rows).sort_values(["日付", "R"], ascending=False).reset_index(drop=True)
+    return pd.DataFrame(rows)
+
+
+def same_day_history(conn: sqlite3.Connection, race, date: str) -> pd.DataFrame:
+    """同じ日・同じ競馬場・同じ芝ダで、このレースより前の R の展開(R の若い順)。結果が DB にあるレースだけ。
+
+    芝の状態や内外の有利不利は、後のレースほど変わる。メインの 11R を見るとき、同じ日の前のレースが手がかりになる。
+    """
+    venue, ct, rnd = race.get("venue"), race.get("course_type"), pd.to_numeric(race.get("round"), errors="coerce")
+    if not isinstance(venue, str) or not isinstance(ct, str) or rnd != rnd:
+        return pd.DataFrame()
+    df = pd.read_sql_query(
+        "SELECT c.race_id, c.date, c.round, c.name, c.ground, c.pace_first3f, c.pace_last3f, r.finish, r.passing, "
+        "r.number FROM races c JOIN results r USING (race_id) WHERE c.date = ? AND c.venue = ? AND c.course_type = ? "
+        "AND c.round < ? AND r.finish IS NOT NULL", conn, params=(date, venue, ct, int(rnd)))
+    if df.empty:
+        return pd.DataFrame()
+    return _flow_rows(df).sort_values("R").reset_index(drop=True)
+
+
+def same_day_text(venue: str, course_type: str, today: pd.DataFrame) -> str:
+    """同じ日の前のレースの見立て。前・内の有利度は、ここまでのレースの平均で、件数が少ないうちは目安。"""
+    if today.empty:
+        return ""
+    n = len(today)
+    diff, front, inner = today["ペース差"].mean(), today["先行有利度"].mean(), today["内有利度"].mean()
+    parts = [f"同じ日の{venue}{course_type}は、ここまで{n}レース。"]
+    if diff == diff:
+        parts.append(f"ペース差は平均 {diff:+.1f}秒で{pace_label(diff)}。")
+    for name, v, hi, lo in (("前", front, "前に付けた馬", "後ろの馬"), ("内", inner, "内の馬", "外の馬")):
+        if v == v:
+            parts.append(f"{hi}の3着内率は{lo}より {v * 100:+.0f}pt" + ("(" + (f"{name}有利" if v >= 0.1 else f"{'差し' if name == '前' else '外'}有利" if v <= -0.1 else "差は小さい") + ")") + "。")
+    if n < 4:
+        parts.append("レース数が少ないので、目安です。")
+    return "".join(parts)
 
 
 def race_flow(one: pd.DataFrame, history: pd.DataFrame) -> dict:
