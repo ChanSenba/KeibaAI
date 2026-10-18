@@ -262,5 +262,7 @@ def test_model_factor_points_and_commentary():
     assert pts["pt_p_win_quality"].tolist() == [0.0, 10.0, 5.0]
     assert "pt_p_win_training" not in pts and pts["factor_total"].tolist() == [0.0, 100.0, 50.0]
     lines = fv.race_commentary(one, pts)
-    assert len(lines) == 2 and "A" in lines[0] and "人気が勝率を大きく押し上げて" in lines[0]
+    assert len(lines) == 3 and "A" in lines[0] and "人気が勝率を大きく押し上げて" in lines[0]  # 印のない馬も載る
+    assert "(総合スコア0.0点)" in lines[0] and "(総合スコア100.0点)" in lines[1]
     assert "強みは馬の質10点" in lines[1]
+    assert lines[2].startswith("**3 C**(総合スコア50.0点)(3番人気")

@@ -583,7 +583,8 @@ def model_factor_points(one: pd.DataFrame) -> pd.DataFrame:
 
 
 def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
-    """印のついた馬(◎○▲△☆★)ごとの見解を、1頭1文のまとまりで返す。one は印・勝率つきの1レース分。
+    """全頭の見解を、1頭1文のまとまりで返す。one は印・勝率つきの1レース分。
+    印のついた馬(◎○▲△☆★)が先で、印のない馬は総合スコアの高い順。各馬の見出しに総合スコア(合計点)を入れる。
 
     強み(8点以上)・弱み(2点以下)の要素と、能力だけの勝率とオッズ込みの勝率の差から、
     その印になった理由を書く。点数はレース内の相対評価で、勝率そのものではない。
@@ -591,12 +592,16 @@ def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
     if "mark" not in one:
         return []
     order = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
-    rows = one[(one["mark"] != "") | (one.get("star", "") == "★")].copy()
+    rows = one.copy()
     rows["_o"] = rows["mark"].map(order).fillna(5)
+    rows["_total"] = -points["factor_total"].reindex(rows.index).fillna(-1) if "factor_total" in points else 0
     out = []
-    for i, r in rows.sort_values(["_o", "number"]).iterrows():
-        label = f"{r['mark']}{' ★' if r.get('star') == '★' else ''}".strip() or "★"
-        head = f"**{label} {int(r['number'])} {r['horse_name']}**"
+    for i, r in rows.sort_values(["_o", "_total", "number"]).iterrows():
+        label = f"{r['mark']}{' ★' if r.get('star') == '★' else ''}".strip()
+        head = f"**{label + ' ' if label else ''}{int(r['number'])} {r['horse_name']}**"
+        total = points["factor_total"].get(i) if "factor_total" in points else None
+        if total is not None and total == total:
+            head += f"(総合スコア{total:.1f}点)"
         if r["popularity"] == r["popularity"]:
             head += f"({int(r['popularity'])}番人気・{r['win_odds']}倍)"
         parts = []

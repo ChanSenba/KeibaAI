@@ -625,8 +625,11 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
                 name, format="%.1f", help=f"{name}の要素だけで見た勝率を、このレースの中で0〜10点にした点数(最高の馬が10点)。"
                                           "8点以上に緑の色がつきます")
     if "factor_total" in one:
-        cols["factor_total"] = st.column_config.NumberColumn(
-            "要素の合計点", format="%.1f", help="各要素の点数の平均を100点満点にしたもの。モデルの勝率そのものではありません")
+        # 総合スコアは馬名のすぐ右に置く
+        at = list(cols).index("horse_name") + 1
+        cols = {**dict(list(cols.items())[:at]), "factor_total": st.column_config.NumberColumn(
+            "総合スコア", format="%.1f", help="各要素の点数の平均を100点満点にしたもの。モデルの勝率そのものではありません"),
+            **dict(list(cols.items())[at:])}
     styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
     if "mark" in one:
         styled = styled.map(mark_style, subset=["mark"])
@@ -639,11 +642,15 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
         st.caption("出馬表の見方", help=TIPS["entry_table"])
     else:
         st.caption("印と各列の見方", help=TIPS["race_table"])
-    st.dataframe(styled, hide_index=True, width="stretch", column_config=cols)
+    # 馬名の列までは、横にスクロールしても動かさない
+    pinned = list(cols)[:list(cols).index("horse_name") + 1]
+    st.dataframe(styled, hide_index=True, width="stretch",
+                 column_config={k: ({**v, "pinned": True} if k in pinned else v) for k, v in cols.items()})
     lines = factor_view.race_commentary(one, points) if "mark" in one else []
     if lines:
         st.subheader("予想の見解", anchor=False)
-        st.caption("各要素の点数と勝率から、印の理由を文章にしたものです。点数はこのレース内の相対評価です。")
+        st.caption("全頭について、各要素の点数と勝率から、印の理由を文章にしたものです。"
+                   "印のある馬が先で、印のない馬は総合スコアの高い順です。点数はこのレース内の相対評価です。")
         with st.container(border=True):
             for line in lines:
                 st.markdown(line)
@@ -775,7 +782,8 @@ def page_factors() -> None:
     with tabs[0]:
         cols = [("number", "馬番"), ("horse_name", "馬名")] + factor_view.SUMMARY["cols"]
         cols = [c for c in cols if c[0] in one]
-        cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols, one)}
+        cfg = {"number": st.column_config.NumberColumn("馬番", format="%d", pinned=True),
+               "horse_name": st.column_config.TextColumn("馬名", pinned=True), **_factor_config(cols, one)}
         scored = factor_view.score_race(one)
         marked = scored[scored["score_mark"] != ""].sort_values("score", ascending=False)
         st.html('<div class="kb-marks">' + "".join(
@@ -813,7 +821,8 @@ def page_factors() -> None:
             if section["name"] == "騎手・厩舎":
                 cols.insert(2, ("jockey", "騎手"))
             cols = list(dict.fromkeys(c for c in cols if c[0] in one))
-            cfg = {"number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名", **_factor_config(cols, one)}
+            cfg = {"number": st.column_config.NumberColumn("馬番", format="%d", pinned=True),
+               "horse_name": st.column_config.TextColumn("馬名", pinned=True), **_factor_config(cols, one)}
             st.caption("表の見方", help=section["note"] + TIPS["factor_section"] + gui_help.link(f"factors-{i}"))
             st.dataframe(_factor_table(one, cols), hide_index=True, width="stretch", column_config=cfg)
 
