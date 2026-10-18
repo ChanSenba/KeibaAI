@@ -96,6 +96,20 @@ def test_pedigree_names_and_status_follow_what_is_collected(conn):
         conn.commit()
 
 
+def test_pedigree_status_counts_only_horses_in_results(conn):
+    """血統の表に成績にいない馬が大量に入っていても、「取得済み」は成績の馬の数を超えない(分子 > 分母にならない)。"""
+    n_horses = conn.execute("SELECT COUNT(DISTINCT horse_id) FROM results").fetchone()[0]
+    conn.execute("INSERT INTO pedigree (horse_id) VALUES ('h0')")
+    conn.executemany("INSERT INTO pedigree (horse_id) VALUES (?)", [(f"outsider{i}",) for i in range(n_horses + 5)])
+    conn.commit()
+    try:
+        text = {s["name"]: s for s in fv.section_status(conn)}["血統"]["text"]
+        assert text == f"1 / {n_horses:,} 頭ぶん取得済み"
+    finally:
+        conn.execute("DELETE FROM pedigree")
+        conn.commit()
+
+
 def test_training_values_and_status_follow_what_is_collected(conn):
     race_id = conn.execute("SELECT race_id FROM entry_races WHERE date = ?", (DAY,)).fetchone()[0]
     past = conn.execute("SELECT race_id FROM races ORDER BY date LIMIT 1").fetchone()[0]
