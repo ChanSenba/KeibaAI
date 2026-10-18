@@ -145,3 +145,18 @@ def test_write_evaluation_has_report_and_live_trend(tmp_path):
     path = weekly.write_evaluation(conn, dt.date(2026, 6, 1), tmp_path / "e")
     text = path.read_text(encoding="utf-8")
     assert "2026-06-01 学習・評価" in text and "勝AUC" in text and "実運用の推移" in text and "2025-03-01" in text
+
+
+def test_review_lists_every_marked_horse_and_top3_rate_per_mark():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [3, 1, 2, 5, 4])  # 着順: 3番1着、1番2着、2番3着、5番4着、4番5着
+    r = weekly.review_day(conn, "2025-03-01")
+    m = r.marks.set_index("mark")
+    assert m.loc["◎", "top3"] == 1 and m.loc["◎", "top3_rate"] == 1.0  # ◎(1番)は2着
+    assert list(r.marks["mark"]) == ["◎", "○", "▲", "△"]
+    assert all(m.loc[k, "n"] == 1 for k in ("◎", "○", "▲"))
+    md = weekly.render_markdown(r)
+    assert "## 印ごとの成績" in md and "| ◎ | 1 | 0 | 1 | 100% |" in md
+    line = [x for x in md.splitlines() if "印の着順" in x][0]
+    assert line.startswith("  - 印の着順: ◎馬1 2着 / ○馬2 3着 / ▲馬3 1着") and "△馬4 5着" in line
