@@ -19,6 +19,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .db import LOCK_TIMEOUT
+
 JRA_VENUES = {f"{i:02d}" for i in range(1, 11)}
 
 # 券種 → (レコード種別, 表, 組の馬番の数, 始まり, 1件の幅, 件数, オッズの幅(複勝・ワイドは2つ), 人気の幅)
@@ -124,7 +126,7 @@ def _lines(path: Path):
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=LOCK_TIMEOUT)
     conn.executescript(SCHEMA)
     return conn
 
