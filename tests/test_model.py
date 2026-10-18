@@ -6,7 +6,8 @@ import pytest
 
 from keibaai import db
 from keibaai.features import build_features, load_results
-from keibaai.model import baseline_market, evaluate, format_report
+from keibaai import model
+from keibaai.model import baseline_market, evaluate, format_report, train_rows
 from keibaai.parse import ParsedRace, Race, Result
 
 
@@ -115,3 +116,11 @@ def test_build_features_with_mixed_null_passing():
     conn.execute("UPDATE results SET passing = '3-3-2-1' WHERE number % 2 = 0")  # 残りは NULL
     out = build_features(load_results(conn))
     assert out["early_pos_rel_3"].notna().any()
+
+
+def test_train_rows_drop_races_before_train_from(monkeypatch):
+    """学習の行は TRAIN_FROM 以後だけ。それより前の成績は過去走の特徴量にだけ使う。"""
+    df = pd.DataFrame({"date": pd.to_datetime(["2018-12-28", "2019-01-05", "2020-06-01"])})
+    assert list(train_rows(df)["date"].dt.year) == [2019, 2020]
+    monkeypatch.setattr(model, "TRAIN_FROM", "2020-01-01")
+    assert list(train_rows(df)["date"].dt.year) == [2020]
