@@ -109,8 +109,12 @@ SMALL_SHARE, SMALL_EV_MIN = 0.3, 1.05
 
 def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
                ev_min: float = 1.0, g2: float = 1.0, g3: float = 1.0,
-               min_hit: float = 0.0) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
+               min_hit: float = 0.0, *, only: frozenset[int] | None = None,
+               must: int | None = None) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
     """オッズのある全買い目の期待値を出し、ev_min 以上で的中確率が min_hit 以上のものを候補にして返す。
+
+    only を渡すと、その馬番だけでできる買い目に絞る。must を渡すと、その馬番を含む買い目だけにする(軸)。
+    確率は出走馬全体で計算したままで、絞るのは候補だけ。
 
     戻り値: (候補, 並び(m,3), 並びの確率(m,), 候補×並びの的中表(候補数, m))。
     numbers は馬番、p はその勝率(合計1)。odds[券種][馬番の組] = 倍率。
@@ -122,6 +126,8 @@ def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int
     for kind in KINDS:
         for key, o in odds.get(kind, {}).items():
             if not o or o <= 0 or any(k not in idx for k in key):
+                continue
+            if (only is not None and any(k not in only for k in key)) or (must is not None and must not in key):
                 continue
             combo = tuple(idx[k] for k in key)
             h = hits(order, kind, combo, n)
@@ -171,7 +177,8 @@ class Plan:
 def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
               bankroll: int = 100_000, cap: int = 10_000, kelly_scale: float = 0.5, ev_min: float = 1.0,
               max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD,
-              min_hit: float = MIN_HIT, equal_stake: int = 0) -> Plan:
+              min_hit: float = MIN_HIT, equal_stake: int = 0, *, only: frozenset[int] | None = None,
+              must: int | None = None) -> Plan:
     """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。
 
     equal_stake が正のときは配分をせず、候補を期待値の高い順に、1点 equal_stake 円ずつ上限まで買う。
@@ -179,9 +186,9 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
     cap = min(cap, bankroll)
     p = np.asarray(p, dtype=float)
     p = p / p.sum()
-    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3, min_hit)
+    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3, min_hit, only=only, must=must)
     if not bets:
-        all_bets, *_ = candidates(numbers, p, odds, 0.0, g2, g3)
+        all_bets, *_ = candidates(numbers, p, odds, 0.0, g2, g3, only=only, must=must)
         top = sorted(all_bets, key=lambda b: -b.ev)[:5]
         return Plan([], note=f"見送り: 期待値が1を超え、的中確率が{min_hit:.0%}以上の買い目がありません", top_ev=top)
     keep = np.argsort([-b.ev for b in bets])[:max_candidates]

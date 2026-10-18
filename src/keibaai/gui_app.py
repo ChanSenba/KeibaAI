@@ -914,9 +914,60 @@ ALLOCATIONS = ["ケリー基準で配分", "配分なし(同額)"]
 KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全部(攻めすぎ注意)": 1.0}
 
 
+USER_MARKS = ["◎", "○", "▲", "△", "☆"]
+
+
+def ai_marks(table, race_id: str) -> dict[int, str]:
+    """予想がつけた印({馬番: 印})。"""
+    one = table[(table["race_id"] == race_id) & table["mark"].isin(USER_MARKS)]
+    return {int(n): m for n, m in zip(one["number"], one["mark"])}
+
+
+def race_marks(table, race_id: str) -> dict[int, str]:
+    """そのレースの印。自分でつけたものがあればそれ、なければ予想がつけた印。"""
+    mine = st.session_state.get("user_marks", {}).get(race_id)
+    return dict(mine) if mine is not None else ai_marks(table, race_id)
+
+
+def marks_text(marks: dict[int, str]) -> str:
+    return " ".join(f"{m}{n}" for m, n in sorted(((m, n) for n, m in marks.items()),
+                                                  key=lambda x: (MARK_SORT.get(x[0], 9), x[1]))) or "なし"
+
+
+def mark_editor(conn, race_id: str, table) -> dict[int, str]:
+    """出馬表に自分の印をつける表。最初は予想がつけた印が入っていて、直せる。つけた印を返す。"""
+    one = gui.race_entries(conn, race_id, table)
+    marks = race_marks(table, race_id)
+    ver = st.session_state.setdefault("mark_ver", {}).get(race_id, 0)
+    p_col = "p_win_market" if one["p_win_market"].notna().any() else "p_win_ability"
+    df = pd.DataFrame({
+        "your": [marks.get(int(n), "") for n in one["number"]], "number": one["number"], "horse_name": one["horse_name"],
+        "win_odds": one["win_odds"], "popularity": one["popularity"], "p": one[p_col], "ai": one["mark"].fillna("")})
+    edited = st.data_editor(
+        df, hide_index=True, width="stretch", key=f"marks_{race_id}_{ver}",
+        disabled=[c for c in df if c != "your"],
+        column_config={
+            "your": st.column_config.SelectboxColumn("あなたの印", options=["", *USER_MARKS], required=True, width="small",
+                                                  help="買いたい馬に印をつけます。空にすると、その馬は買い目に使いません"),
+            "number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名",
+            "win_odds": st.column_config.NumberColumn("単勝", format="%.1f", help="出馬表を取ったときのオッズ。買い方を出すときに取り直します"),
+            "popularity": st.column_config.NumberColumn("人気", format="%d"),
+            "p": st.column_config.NumberColumn("勝率(予想)", format="percent",
+                                               help="予想の勝率。オッズ込みの勝率があればそれ、なければ能力のみ"),
+            "ai": st.column_config.TextColumn("予想の印", width="small", help="予想がつけた印。参考のために残しています")})
+    new = {int(n): m for n, m in zip(edited["number"], edited["your"]) if m in USER_MARKS}
+    st.session_state.setdefault("user_marks", {})[race_id] = new
+    if new != ai_marks(table, race_id) and st.button("予想の印に戻す", icon=":material/undo:", key=f"marks_reset_{race_id}"):
+        st.session_state["user_marks"].pop(race_id, None)
+        st.session_state["mark_ver"][race_id] = ver + 1
+        st.rerun()
+    return new
+
+
 def page_bets() -> None:
     header("Bets", "買い方",
-           "予想の確率と当日のオッズから、期待値の高い券種・買い目と金額の配分を出します。1レースでも、その日の全レースでも。")
+           "出馬表に印をつけると、その馬たちで作れる買い目から、最新のオッズで期待値の高いものと金額の配分を出します。"
+           "1レースでも、その日の全レースでも。")
     conn = connection()
     today = dt.date.today()
     pred = st.session_state.get("prediction")
@@ -949,6 +1000,16 @@ def page_bets() -> None:
         race, box = race_picker(races, key=f"bets_{date}")
         with box:
             race_head(race)
+            mark_editor(conn, race["race_id"], table)
+    else:
+        st.caption(":material/info: 全レースのときは、予想の印を使います。レースごとに印を直したいときは「1レースだけ」にして直すと、"
+                   "直した印がここでも使われます。")
+    c0, c00 = st.columns(2)
+    restrict = c0.toggle("印をつけた馬だけで買い目を作る", value=True, key="bets_restrict",
+                         help="入れると、印をつけた馬だけでできる買い目から選びます。勝率は出走馬全体で出したままで、変わるのは候補だけです。"
+                              "切ると、印に関係なく全頭の買い目から選びます")
+    axis = c00.toggle("◎を軸にする", key="bets_axis", disabled=not restrict,
+                      help="◎の馬を必ず含む買い目だけにします。◎が複数あるときは、いちばん若い馬番の◎が軸です")
     c1, c2, c3 = st.columns(3)
     mode = st.segmented_control("資金配分", ALLOCATIONS, default=ALLOCATIONS[0], key="bets_alloc", width="stretch",
                                 help="ケリー基準は、期待値の高い買い目ほど多く張る配分。配分なしは、期待値の高い順に、どの買い目も同じ金額ずつ買う") or ALLOCATIONS[0]
@@ -966,33 +1027,49 @@ def page_bets() -> None:
         kelly = KELLY_CHOICES[c3.selectbox("賭け方の強さ", list(KELLY_CHOICES),
                                            help="資金が長い目で最も増える配分(ケリー基準)を、どれだけ抑えるか")]
     n = 1 if single else len(races)
-    st.caption(f":material/info: 1レースごとに全券種のオッズを取るので、6回アクセスします(30秒ほど)。"
-               f"{'' if single else f'全{n}レースで約{n * 30 // 60 + 1}分かかります。'}初回は、混ぜ方を決めるのに数分かかります。")
-    if st.button("買い方を出す" if single else "全レースの買い方を出す", type="primary", icon=":material/calculate:"):
+    st.caption(f":material/info: 押した時点の最新のオッズを取り直して計算します。1レースごとに全券種のオッズを取るので、"
+               f"6回アクセスします(30秒ほど)。{'' if single else f'全{n}レースで約{n * 30 // 60 + 1}分かかります。'}"
+               "初回は、混ぜ方を決めるのに数分かかります。")
+    if st.button("最新のオッズで買い方を出す" if single else "最新のオッズで全レースの買い方を出す", type="primary",
+                 icon=":material/calculate:"):
         try:
             blends = st.session_state.setdefault("blends", {})
             if date not in blends:
                 with st.spinner("モデルとオッズの混ぜ方を決めています(数分かかります)"):
                     blends[date] = gui.blend_for(conn, date)
             targets = races if single is False else races[races["race_id"] == race["race_id"]]
-            plans = plan_races(table, targets, blends[date], bankroll, cap, kelly, stake)
-            st.session_state["bet_plans"] = (date, single, plans, blends[date])
+            used = {rid: race_marks(table, rid) for rid in targets["race_id"]} if restrict else None
+            plans = plan_races(table, targets, blends[date], bankroll, cap, kelly, stake, marks=used,
+                               axis=axis and restrict)
+            st.session_state["bet_plans"] = (date, single, plans, blends[date], dt.datetime.now(), used,
+                                             (restrict, axis and restrict))
         except (ValueError, RuntimeError) as e:
             st.error(str(e))
     saved = st.session_state.get("bet_plans")
     if not saved or saved[0] != date or saved[1] != single:
         return
-    _, _, plans, blend = saved
+    _, _, plans, blend, at, used, settings = saved
+    st.caption(f":material/schedule: オッズは {at:%H:%M} に取得しました。")
     if single:
         if race["race_id"] not in plans:
             return
+        counted = None if used is None else used.get(race["race_id"])
+        if used is not None:
+            st.caption(f":material/label: 計算に使った印: {marks_text(counted or {})}"
+                       f"{'(◎軸)' if settings[1] else ''}")
+        if settings != (restrict, axis and restrict) or (counted is not None and counted != race_marks(table, race["race_id"])):
+            st.warning("印か設定を変えたので、この結果は前のものです。もう一度ボタンを押してください。",
+                       icon=":material/info:")
         show_plan(plans[race["race_id"]], blend)
         return
     show_day_plans(races, plans, blend)
 
 
-def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equal_stake: int = 0) -> dict:
+def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equal_stake: int = 0,
+               marks: dict | None = None, axis: bool = False) -> dict:
     """レースごとの買い方を出す。{race_id: (買い方 または 理由の文字列, レース名)}。
+
+    marks({race_id: {馬番: 印}})を渡すと、印をつけた馬だけでできる買い目に絞る。
 
     複数レースのときは、残りの資金をレース数で割った額を1レースの上限にして、合計が資金を超えないようにする。
     """
@@ -1011,7 +1088,8 @@ def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equ
         try:
             odds = gui.fetch_bet_odds(fetcher, r.race_id, conn=connection())
             plan, _ = gui.bet_plan_for(table, r.race_id, odds, blend, bankroll, min(cap, share, remaining), kelly,
-                                     equal_stake)
+                                     equal_stake, marked=None if marks is None else marks.get(r.race_id, {}),
+                                     axis=axis)
         except (ValueError, RuntimeError) as e:
             out[r.race_id] = (str(e), label)
             continue

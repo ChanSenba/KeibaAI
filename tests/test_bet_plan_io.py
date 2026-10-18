@@ -111,3 +111,20 @@ def test_cli_bets_runs_end_to_end(tmp_path, monkeypatch, capsys):
         cli.main(["bets", "--date", "2030-01-05", "--race-id", "nope", "--db", str(path)])
     with pytest.raises(SystemExit, match="出馬表がありません"):  # トレースバックではなくメッセージだけで終わる
         cli.main(["bets", "--date", "2031-01-05", "--race-id", "nope", "--db", str(path)])
+
+
+def test_bet_plan_for_uses_only_marked_horses_and_explains_when_nothing_is_left():
+    pred = pd.DataFrame({"race_id": ["r1"] * 4, "number": [1, 2, 3, 4], "p_win_ability": [0.25] * 4,
+                         "p_win_market": [0.58, 0.25, 0.15, 0.02]})
+    odds = {"単勝": {(1,): 3.0, (2,): 4.0, (3,): 8.0, (4,): 60.0}, "馬連": {(1, 2): 5.0, (1, 3): 12.0, (3, 4): 80.0}}
+    blend = Blend(1.0, 0.0, 0, 0)
+    free, _ = gui.bet_plan_for(pred, "r1", odds, blend)
+    marked, _ = gui.bet_plan_for(pred, "r1", odds, blend, marked={1: "◎", 2: "○"})
+    assert {b.numbers for b in marked.bets} <= {(1,), (2,), (1, 2)} and marked.bets
+    assert any(3 in b.numbers or 4 in b.numbers for b in free.bets)  # 印なしなら、ほかの馬の買い目も入る
+    axis, _ = gui.bet_plan_for(pred, "r1", odds, blend, marked={1: "◎", 2: "○", 3: "▲"}, axis=True)
+    assert axis.bets and all(1 in b.numbers for b in axis.bets)
+    none, _ = gui.bet_plan_for(pred, "r1", odds, blend, marked={4: "◎"})  # 60倍の単勝は期待値 1.2 だが、的中確率 2% は低すぎる
+    assert none.bets == [] and "印をつけた馬(◎4)" in none.note
+    with pytest.raises(ValueError, match="印をつけた馬がいません"):
+        gui.bet_plan_for(pred, "r1", odds, blend, marked={})

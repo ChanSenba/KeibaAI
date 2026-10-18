@@ -330,13 +330,17 @@ def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection
 
 
 def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
-                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0):
+                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0,
+                 marked: dict[int, str] | None = None, axis: bool = False):
     """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
 
     勝率は、オッズ込みのモデルの勝率と、いま取ったオッズの確率を blend の重みで混ぜたもの。
     過去7年の検証で、能力のモデルと混ぜるより当たりやすかった(LogLoss 0.2053 → 0.2048。同じ買い方の回収率は
     馬連 86.7% → 90.4%、ワイド 86.8% → 90.0%)。能力のモデルは、混ぜても重みがほぼ 0 になり、オッズに何も足せていなかった。
     出馬表を取ったときにオッズがなくてオッズ込みの勝率が出せていない場合は、いまのオッズの確率だけを使う。
+
+    marked({馬番: 印})を渡すと、印をつけた馬だけでできる買い目に絞る(勝率は出走馬全体で出したまま、変わるのは候補だけ)。
+    axis なら、◎の馬(複数なら若い馬番)を必ず含む買い目だけにする。
     """
     from .betting import make_plan
     from .blend import Blend, apply_blend
@@ -352,9 +356,20 @@ def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bank
         blend = Blend(0.0, 1.0, blend.loglik, blend.baseline_loglik)
     if one["win_odds"].notna().sum() < 3:
         raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
+    only = must = None
+    if marked is not None:
+        if not marked:
+            raise ValueError("印をつけた馬がいません。出馬表で、買いたい馬に印をつけてください")
+        only = frozenset(int(n) for n in marked)
+        honmei = sorted(int(n) for n, m in marked.items() if m == "◎")
+        must = honmei[0] if axis and honmei else None
     mixed = apply_blend(one, blend)
     plan = make_plan([int(n) for n in mixed["number"]], mixed["p_win"].to_numpy(), odds, bankroll, cap, kelly_scale,
-                     equal_stake=equal_stake)
+                     equal_stake=equal_stake, only=only, must=must)
+    if only is not None and not plan.bets:
+        shown = " ".join(f"{m}{n}" for n, m in sorted(marked.items()))
+        plan.note = (f"見送り: 印をつけた馬({shown}{'・◎軸' if must is not None else ''})の買い目に、"
+                     f"期待値が1を超えて的中確率の十分あるものがありません。印を増やすか、変えてみてください")
     return plan, mixed
 
 
