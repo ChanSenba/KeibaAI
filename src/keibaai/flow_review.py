@@ -21,8 +21,8 @@ FRONT_EDGE = 0.2  # 前の馬と他の馬の3着内率の差がこれ以上な�
 FRONT_SHARE_HIGH = 0.40  # 先行しそうな馬の割合がこれ以上なら、ハイペースの予想
 FRONT_SHARE_LOW = 0.20  # これ以下なら、スローペースの予想
 INNER_EDGE = 0.2  # 内の馬(馬番が前の3分の1)と外の馬(後ろの3分の1)の3着内率の差がこれ以上なら、内有利・外有利
-GROUND_GOOD, GROUND_BAD = 0.4, 0.0  # 同じ馬場状態での過去の3着内率がこれ以上なら向く、GROUND_BAD 以下(2走以上)なら向かない
-GROUND_MIN_RUNS = 2
+RECORD_GOOD, RECORD_BAD = 0.4, 0.0  # 同じ条件(馬場状態・コース・距離)での過去の3着内率がこれ以上なら向く、RECORD_BAD 以下なら向かない
+RECORD_MIN_RUNS = 2  # これ未満の出走しかなければ判定しない
 
 ADVANTAGE = {"前": "前有利", "後": "後ろ有利", None: "有利不利なし"}
 
@@ -149,20 +149,25 @@ def _horse_gate(f: dict, number: int) -> tuple[str, str]:
     return ("向いた" if side == f["gate"] else "向かなかった"), f"{where}。{f['gate']}枠有利の馬場"
 
 
-def _horse_ground(f: dict, record) -> tuple[str, str]:
-    """record = (同じ馬場状態の過去の出走数, 3着内数)。"""
-    klass = ground_class(f.get("ground"))
-    if klass is None or record is None or record[0] < GROUND_MIN_RUNS:
-        return "判定なし", f"{klass or '馬場不明'}の出走実績が{GROUND_MIN_RUNS}走に満たない"
+def _horse_record(f_name: str, label: str, record) -> tuple[str, str]:
+    """record = (同じ条件の過去の出走数, 3着内数)。label は「道悪」「東京の芝」「芝1600m前後」など。"""
+    if record is None or record[0] < RECORD_MIN_RUNS:
+        return "判定なし", f"{label}の出走実績が{RECORD_MIN_RUNS}走に満たない"
     runs, hits = record
-    text = f"{klass}は過去{runs}走で3着内{hits}回({hits / runs:.0%})"
-    return ("向いた" if hits / runs >= GROUND_GOOD else "向かなかった" if hits / runs <= GROUND_BAD else "普通"), text
+    text = f"{label}は過去{runs}走で3着内{hits}回({hits / runs:.0%})"
+    return ("向いた" if hits / runs >= RECORD_GOOD else "向かなかった" if hits / runs <= RECORD_BAD else "普通"), text
 
 
-def horse_review(f: dict, h: dict, record) -> dict:
-    """1頭の向き・不向きの見解(予想ページの見解と同じ形)。h は mark / number / horse_name / finish / status / final_pop / passing / l3f_rank。"""
-    checks = [("展開", *_horse_position(f, h["passing"])), ("枠", *_horse_gate(f, int(h["number"]))),
-              ("馬場", *_horse_ground(f, record))]
+def horse_review(f: dict, h: dict, records: dict, race: dict | None = None) -> dict:
+    """1頭の向き・不向きの見解(予想ページの見解と同じ形)。h は mark / number / horse_name / finish / status / final_pop / passing / l3f_rank。
+    records は horse_records の結果(馬場・コース・距離)。race は競馬場・芝ダ・距離・馬場状態。"""
+    race = race or {}
+    kind = race.get("course_type") or ""
+    labels = {"馬場": ground_class(f.get("ground")) or "馬場不明",
+              "コース": f"{race.get('venue') or ''}の{kind}",
+              "距離": f"{kind}{int(race['distance'])}m前後" if race.get("distance") == race.get("distance") and race.get("distance") else "距離不明"}
+    checks = [("展開", *_horse_position(f, h["passing"])), ("枠", *_horse_gate(f, int(h["number"])))]
+    checks += [(k, *_horse_record(k, labels[k], records.get(k))) for k in ("馬場", "コース", "距離")]
     good = sum(c[1] == "向いた" for c in checks)
     bad = sum(c[1] == "向かなかった" for c in checks)
     overall = "向いた条件" if good > bad else "向かない条件" if bad > good else "どちらとも言えない条件"

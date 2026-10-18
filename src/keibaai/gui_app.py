@@ -1371,7 +1371,7 @@ def review_race(g, race=None, reviews=None) -> None:
                      column_config=cols)
     if reviews and reviews["horses"]:
         st.subheader("回顧の見解", anchor=False)
-        st.caption("そのレースの展開・枠・馬場状態に、各馬が向いていたかを、結果と過去の成績から機械的に判定しています。"
+        st.caption("そのレースの展開・枠・馬場状態・コース・距離に、各馬が向いていたかを、結果と過去の成績から機械的に判定しています。"
                    "印のある馬が先です。向いたは緑、向かなかったは赤みで示します。",
                    help=gui_help.REVIEW_COLUMNS["flow"][1])
         for rv in reviews["horses"]:
