@@ -107,3 +107,28 @@ def test_course_flow_uses_only_earlier_days_at_the_same_course():
     assert (out.loc[12:, "course_pace_diff_5"] == (1.5 - 3.0) / 2).all()  # 3日目は両方の平均
     assert out.loc[12:, "course_front_edge_5"].iloc[0] == 0.0  # +1(前が有利)と −1(後ろが有利)の平均
     assert out.loc[12, "front_x_course_edge"] == 0.0
+
+
+def test_same_course_needs_same_venue_and_inner_outer():
+    from keibaai.features import same_course
+
+    tokyo = {"venue": "東京", "course_type": "芝", "distance": 1600, "course": None}
+    assert same_course({**tokyo}, tokyo)
+    assert not same_course({**tokyo, "venue": "京都"}, tokyo)  # 距離が同じだけでは同コースではない
+    assert not same_course({**tokyo, "distance": 1800}, tokyo)
+    assert not same_course({**tokyo, "course_type": "ダ"}, tokyo)
+    nakayama = {"venue": "中山", "course_type": "芝", "distance": 1600, "course": "内"}
+    assert same_course({**nakayama, "course": None}, nakayama)  # netkeiba は内回りを書かない
+    assert not same_course({**nakayama, "course": "外"}, nakayama)
+
+
+def test_course_flow_keeps_inner_and_outer_apart():
+    from keibaai.features import _course_flow
+
+    def day(date, rid, course, first, last):
+        return pd.DataFrame({"race_id": rid, "venue": "京都", "course_type": "芝", "distance": 1600, "course": course,
+                             "date": pd.Timestamp(date), "finish": [1, 2, 3, 4], "early_pos": [0.1, 0.3, 0.6, 0.9],
+                             "pace_first3f": first, "pace_last3f": last, "early_pos_rel_3": 0.5})
+    out = _course_flow(pd.concat([day("2030-01-05", "a", "外", 36.0, 34.0), day("2030-01-06", "b", "内", 34.0, 35.0),
+                                  day("2030-01-12", "c", "外", np.nan, np.nan)], ignore_index=True))
+    assert (out.loc[8:, "course_pace_diff_5"] == 2.0).all()  # 内回りの日は外回りの直近に入れない

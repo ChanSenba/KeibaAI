@@ -10,6 +10,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from .jvrace import INNER_OUTER_VENUES
 from .jvtraining import JV_FEATURES, add_jv_features
 
 CATEGORICAL = ["course_type", "venue", "ground", "sex", "train_critic"]
@@ -26,7 +27,7 @@ MARKET_FEATURES = ["win_odds", "popularity"]
 # 記事(予想ファクター)に沿った特徴量。すべて「そのレースより前」の情報だけで作る
 APTITUDE_FEATURES = ["horse_ct_top3_rate", "horse_venue_top3_rate", "horse_dir_top3_rate", "horse_ground_top3_rate",
                      "prev_same_ct_finish",
-                     # 組み合わせの条件: 競馬場×芝ダ×距離帯のコース、芝ダ×馬場状態、同じレース名。件数も付ける
+                     # 組み合わせの条件: 競馬場×芝ダ×距離帯(同コースではない。距離は400m刻み)、芝ダ×馬場状態、同じレース名。件数も付ける
                      "horse_course_top3_rate", "horse_course_n", "horse_ctground_top3_rate",
                      "horse_race_top3_rate", "horse_race_n"]
 FORM_FEATURES = ["l3f_rank_3", "time_diff_5", "pos_gain_3",
@@ -45,10 +46,33 @@ PACE_FEATURES = ["style_front_rate", "style_closer_rate", "n_front_runners", "fr
                  "style_vs_field", "inner_pos"]
 # ラップ: 過去のレースのペース(前半3F − 後半3F。正なら後傾=スロー)と、自分の上がりが場のラップよりどれだけ速かったか
 LAP_FEATURES = ["prev_pace_diff", "pace_diff_3", "l3f_vs_lap_3"]
-# 同じコース(競馬場・芝ダ・距離)の直近5開催日の展開: ペース差(前半3F−後半3F。正なら後傾=スロー)の平均と、
+# 同コース(同じ競馬場の、芝ダ・内回り外回り・距離が同じコース)の直近5開催日の展開: ペース差(前半3F−後半3F。正なら後傾=スロー)の平均と、
 # 前に付けた馬(序盤の位置が前の3分の1)の3着内率 − そのほかの馬の率の平均。そのレースの顔ぶれの脚質との組み合わせで効く
 COURSE_FLOW_FEATURES = ["course_pace_diff_5", "course_front_edge_5", "front_x_course_edge"]
 COURSE_FLOW_DAYS = 5
+COURSE_KEYS = ["venue", "course_type", "inout", "distance"]  # 同コースの条件(inout は inner_outer の値)
+
+
+def inner_outer(venue, course_type, course) -> str:
+    """同コースを見分けるための内回り・外回りの別(外 / 内 / 外-内 など)。別のないコースは空文字。
+
+    netkeiba は内回りを書かない(外回りだけ「外」)が、JRA-VAN は「内」と書くので、内外の別がある競馬場の芝で
+    空のものは内回りとみなしてそろえる。
+    """
+    if isinstance(course, str) and course:
+        return course
+    return "内" if course_type == "芝" and venue in INNER_OUTER_VENUES else ""
+
+
+def same_course(a, b) -> bool:
+    """同コースか。同じ競馬場で、芝ダ・内回り外回り・距離が同じ(回りは競馬場と芝ダで決まる)。距離だけ同じなら違う。"""
+    if not isinstance(a.get("venue"), str) or a.get("venue") != b.get("venue") or a.get("course_type") != b.get("course_type"):
+        return False
+    da, db_ = pd.to_numeric(a.get("distance"), errors="coerce"), pd.to_numeric(b.get("distance"), errors="coerce")
+    if da != da or da != db_:
+        return False
+    return inner_outer(a.get("venue"), a.get("course_type"), a.get("course")) == \
+        inner_outer(b.get("venue"), b.get("course_type"), b.get("course"))
 # 血統: 父・母の父の産駒が、同じ条件でこれまでどれだけ3着以内に来たか(結果は「そのレースより前」だけ)
 PEDIGREE_FEATURES = ["sire_n", "sire_top3_rate", "sire_ctdist_top3_rate", "sire_ground_top3_rate",
                      "damsire_n", "damsire_top3_rate", "damsire_ctdist_top3_rate"]
@@ -76,8 +100,8 @@ BIAS_WINDOW = "10D"
 def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
-        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.distance, c.ground,
-               c.pace_first3f, c.pace_last3f,
+        SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.course, c.distance,
+               c.ground, c.pace_first3f, c.pace_last3f,
                p.sire_id, p.damsire_id, t.rank AS train_rank, t.critic AS train_critic
         FROM results r JOIN races c USING (race_id) LEFT JOIN pedigree p USING (horse_id)
         LEFT JOIN training t ON t.race_id = r.race_id AND t.number = r.number AND t.seq = 0
@@ -185,8 +209,11 @@ def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _course_flow(df: pd.DataFrame) -> pd.DataFrame:
-    """同じコースの直近 COURSE_FLOW_DAYS 開催日の展開(ペース差・先行有利度)を、各行に付ける。当日のレースは含めない。"""
-    keys = ["venue", "course_type", "distance"]
+    """同コースの直近 COURSE_FLOW_DAYS 開催日の展開(ペース差・先行有利度)を、各行に付ける。当日のレースは含めない。"""
+    keys = COURSE_KEYS
+    if "course" not in df:
+        df["course"] = None
+    df["inout"] = [inner_outer(v, c, x) for v, c, x in zip(df["venue"], df["course_type"], df["course"])]
     done = df[df["finish"].notna() & df["early_pos"].notna() & df["venue"].notna()].copy()
     done["_front"] = (done["early_pos"] <= 1 / 3)
     done["_top3"] = (done["finish"] <= 3).astype(float)

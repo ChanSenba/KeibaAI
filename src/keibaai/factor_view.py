@@ -10,6 +10,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from .features import inner_outer, same_course
 from .jvtraining import FAST_F4
 from .predict import day_frame
 
@@ -22,8 +23,10 @@ SECTIONS: list[dict] = [
               ("body_weight", "馬体重"), ("body_weight_diff", "前走比"), ("bw_vs_avg", "平均体重との差"),
               ("weight_carried", "斤量"), ("weight_ratio", "斤量体重比"), ("weight_change", "斤量の増減")]},
     {"name": "適性(着度数)",
-     "note": "今回と同じ条件での過去の成績を『1着-2着-3着-着外』で表します。距離は今回の±200mです。",
-     "cols": [("rec_ct", "同じ芝/ダート"), ("rec_dist", "同じ距離帯"), ("rec_dir", "同じ回り"),
+     "note": "今回と同じ条件での過去の成績を『1着-2着-3着-着外』で表します。"
+             "同コースは、同じ競馬場で芝ダ・内回り外回り・距離が同じコースです。同じ距離は、競馬場を問わず距離がちょうど同じ走り、"
+             "距離帯は今回の±200mです。",
+     "cols": [("rec_course", "同コース"), ("rec_same_dist", "同じ距離"), ("rec_ct", "同じ芝/ダート"), ("rec_dist", "同じ距離帯"), ("rec_dir", "同じ回り"),
               ("rec_venue", "同じ競馬場"), ("rec_ground", "同じ馬場状態"), ("same_dist_top3_rate", "距離帯の3着内率")]},
     {"name": "近走・ローテーション",
      "note": "近5走は新しい順の着順です。叩き2走目などは、休み明け(90日以上)からの数え方です。",
@@ -40,7 +43,7 @@ SECTIONS: list[dict] = [
     {"name": "馬場・枠・展開",
      "note": "トラックバイアスは直近10日以内の同じ競馬場・芝ダートの偏り(正なら先行有利・内有利)。"
              "ペース予想は、メンバーの脚質構成からの目安です。"
-             "同コースの直近は、同じ競馬場・芝ダ・距離の直近5開催日(この日より前)の平均です。"
+             "同コースの直近は、同じ競馬場で芝ダ・内回り外回り・距離が同じコースの、直近5開催日(この日より前)の平均です。"
              "展開適性は、この馬の脚質が、ペース予想と同コース直近の展開に合っているかの点(プラスは合う)です。",
      "cols": [("bracket", "枠"), ("number", "馬番"), ("inner_pos", "内外(馬番/頭数)"),
               ("track_front_bias", "先行有利度"), ("track_inner_bias", "内有利度"), ("pace_forecast", "ペース予想"),
@@ -91,6 +94,8 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "weight_carried": ("騎手が背負う重さ(kg)。軽いほど有利", "low"),
     "weight_ratio": ("斤量 ÷ 馬体重。小さいほど体に対して負担が軽い", "low"),
     "weight_change": ("前走からの斤量の増減(kg)。減っているほど楽になる", "low"),
+    "rec_course": ("同コース(同じ競馬場で、芝ダ・内回り外回り・距離が今回と同じ)での『1着-2着-3着-着外』", "record"),
+    "rec_same_dist": ("今回と同じ距離(競馬場は問わない)での『1着-2着-3着-着外』。同じ距離での経験", "record"),
     "rec_ct": ("今回と同じ芝/ダートでの『1着-2着-3着-着外』", "record"),
     "rec_dist": ("今回の距離±200mでの『1着-2着-3着-着外』", "record"),
     "rec_dir": ("今回と同じ回り(右/左)での『1着-2着-3着-着外』", "record"),
@@ -159,8 +164,8 @@ COLUMN_INFO: dict[str, tuple[str, str | None]] = {
     "jv_last_f2_z": ("最後の追い切りの2F − 同じコース・時期の中央値(秒)。マイナスは、終いが速い", "low"),
     "jv_last_l1_z": ("最後の追い切りの最後の1F − 同じコース・時期の中央値(秒)。マイナスは、終いが速い", "low"),
     "jv_last_accel": ("最後の追い切りの 最初の1Fのラップ − 最後の1Fのラップ(秒)。プラスは加速、マイナスは失速", "high"),
-    "course_pace_diff_5": ("同じコース(競馬場・芝ダ・距離)の直近5開催日の、前半3F − 後半3Fの平均(秒)。プラスは後傾=スロー、マイナスはハイペースが続いている", None),
-    "course_front_edge_5": ("同じコースの直近5開催日の、前に付けた馬の3着内率 − ほかの馬の率の平均。プラスは先行有利、マイナスは差し有利", None),
+    "course_pace_diff_5": ("同コース(同じ競馬場の、芝ダ・内回り外回り・距離が同じコース)の直近5開催日の、前半3F − 後半3Fの平均(秒)。プラスは後傾=スロー、マイナスはハイペースが続いている", None),
+    "course_front_edge_5": ("同コースの直近5開催日の、前に付けた馬の3着内率 − ほかの馬の率の平均。プラスは先行有利、マイナスは差し有利", None),
     "pace_fit": ("この馬の脚質が、ペース予想と同コース直近の展開に合うか。プラスは合う(スローや先行有利なら逃げ・先行、ハイペースや差し有利なら差し・追込)", "high"),
     "jv_last_lap1": ("最後の追い切りの最初の1F(4F−3F)のラップ(秒)。長い追い切りの出だしの速さ", None),
     "jv_last_lap2": ("最後の追い切りの2つ目の1F(3F−2F)のラップ(秒)", None),
@@ -311,9 +316,12 @@ def _records(target: pd.DataFrame, hist: pd.DataFrame) -> pd.DataFrame:
     for _, t in target.iterrows():
         g = by_horse.get(t["horse_id"])
         if g is None:
-            rows.append({k: "0-0-0-0" for k in ("rec_ct", "rec_dist", "rec_dir", "rec_venue", "rec_ground")})
+            rows.append({k: "0-0-0-0" for k in ("rec_course", "rec_same_dist", "rec_ct", "rec_dist", "rec_dir", "rec_venue",
+                                                 "rec_ground")})
             continue
         rows.append({
+            "rec_course": _record(g.loc[[same_course(r, t) for _, r in g.iterrows()], "finish"]),
+            "rec_same_dist": _record(g.loc[g["distance"] == t["distance"], "finish"]),
             "rec_ct": _record(g.loc[g["course_type"] == t["course_type"], "finish"]),
             "rec_dist": _record(g.loc[(g["distance"] - t["distance"]).abs() <= 200, "finish"]),
             "rec_dir": _record(g.loc[g["direction"] == t["direction"], "finish"]) if isinstance(t["direction"], str)
@@ -461,7 +469,7 @@ def gate_bias(conn: sqlite3.Connection, race, before: str) -> pd.DataFrame:
     """このコースと、この A〜E コースでの、内・中・外の枠の過去の 3 着内率(参考。予想には使っていない)。
 
     枠は馬番を頭数で3等分して、内(前の3分の1)・中・外とする。before(YYYY-MM-DD)より前のレースだけを数える。
-    行は「同じコース」(競馬場・芝ダ・距離・内外回り)と「同じ A〜E」(競馬場・芝ダ・柵)。分からない行は出さない。
+    行は「同コース」(競馬場・芝ダ・内外回り・距離)と「同じ A〜E」(競馬場・芝ダ・柵)。分からない行は出さない。
     """
     venue, ct = race.get("venue"), race.get("course_type")
     if not isinstance(venue, str) or not isinstance(ct, str):
@@ -476,11 +484,11 @@ def gate_bias(conn: sqlite3.Connection, race, before: str) -> pd.DataFrame:
     pos = df["number"] / df.groupby("race_id")["number"].transform("count")
     df["gate"] = np.select([pos <= 1 / 3, pos <= 2 / 3], GATES[:2], GATES[2])
     df["top3"] = (df["finish"] <= 3).astype(float)
-    same = lambda col, v: df[col].isna() if v is None or v != v else df[col] == v
+    inout = pd.Series([inner_outer(venue, ct, c) for c in df["course"]], index=df.index, dtype=object)
     rows = []
     distance = pd.to_numeric(race.get("distance"), errors="coerce")
     if distance == distance:
-        rows.append(("同じコース", df[(df["distance"] == distance) & same("course", race.get("course"))]))
+        rows.append(("同コース", df[(df["distance"] == distance) & (inout == inner_outer(venue, ct, race.get("course")))]))
     rail = race.get("rail")
     if isinstance(rail, str) and rail:
         rows.append((f"同じ {rail}コース", df[df["rail"] == rail]))
@@ -620,7 +628,7 @@ def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
 
 # ---------------------------------------------------------------- レース展開
 def course_history(conn: sqlite3.Connection, race, before: str, days: int = 5) -> pd.DataFrame:
-    """同じコース(競馬場・芝ダ・距離)の、before より前の直近 days 開催日のレースごとの展開。新しい順。
+    """同コース(同じ競馬場の、芝ダ・内回り外回り・距離が同じコース)の、before より前の直近 days 開催日のレースごとの展開。新しい順。
 
     列: 日付・レース・馬場・前半3F・後半3F・ペース差・ペース・先行有利度(前に付けた馬の3着内率 − ほかの馬)・
     勝ち馬の位置(最初のコーナーの位置÷頭数)。コースが分からなければ空。
@@ -629,16 +637,18 @@ def course_history(conn: sqlite3.Connection, race, before: str, days: int = 5) -
     distance = pd.to_numeric(race.get("distance"), errors="coerce")
     if not isinstance(venue, str) or not isinstance(ct, str) or distance != distance:
         return pd.DataFrame()
-    dates = [r[0] for r in conn.execute(
-        "SELECT DISTINCT date FROM races WHERE venue = ? AND course_type = ? AND distance = ? AND date < ? "
-        "ORDER BY date DESC LIMIT ?", (venue, ct, int(distance), before, days))]
-    if not dates:
+    inout = inner_outer(venue, ct, race.get("course"))
+    ids = [rid for rid, date, course in conn.execute(
+        "SELECT race_id, date, course FROM races WHERE venue = ? AND course_type = ? AND distance = ? AND date < ? "
+        "ORDER BY date DESC", (venue, ct, int(distance), before)) if inner_outer(venue, ct, course) == inout]
+    if not ids:
         return pd.DataFrame()
-    q = ",".join("?" * len(dates))
+    q = ",".join("?" * len(ids))
     df = pd.read_sql_query(
         f"SELECT c.race_id, c.date, c.round, c.name, c.ground, c.pace_first3f, c.pace_last3f, r.finish, r.passing, "
-        f"r.number FROM races c JOIN results r USING (race_id) WHERE c.venue = ? AND c.course_type = ? "
-        f"AND c.distance = ? AND c.date IN ({q}) AND r.finish IS NOT NULL", conn, params=[venue, ct, int(distance), *dates])
+        f"r.number FROM races c JOIN results r USING (race_id) WHERE c.race_id IN ({q}) AND r.finish IS NOT NULL",
+        conn, params=ids)
+    df = df[df["date"].isin(sorted(df["date"].unique(), reverse=True)[:days])]
     if df.empty:
         return pd.DataFrame()
     from .features import parse_early_position
