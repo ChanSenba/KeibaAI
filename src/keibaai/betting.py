@@ -323,13 +323,19 @@ def equal_payout_stakes(odds: list[float], budget: int) -> list[int]:
     return stakes
 
 
-def equal_payout_plan(chosen: list[KindSummary], prob: np.ndarray, budget: int) -> Plan:
-    """選んだ券種を、予算を券種の数で等分し、券種ごとに、どれが当たっても同じくらいの払戻になるように買う。"""
+def equal_payout_plan(chosen: list[KindSummary], prob: np.ndarray, budget: int,
+                      amounts: list[int] | None = None) -> Plan:
+    """選んだ券種を、券種ごとに、どれが当たっても同じくらいの払戻になるように買う。
+
+    amounts を渡すと券種ごとにその金額(100円未満は切り捨て)、なければ予算を券種の数で等分する。
+    """
     if not chosen:
         return Plan([], note="券種を選んでください")
-    share = budget // len(chosen) // UNIT * UNIT
+    if amounts is None:
+        amounts = [budget // len(chosen)] * len(chosen)
     bets, rows, notes = [], [], []
-    for s in chosen:
+    for s, amount in zip(chosen, amounts):
+        share = int(amount) // UNIT * UNIT
         k = min(len(s.bets), share // UNIT)
         if k == 0:
             notes.append(f"{s.kind}は予算が足りず買えません")
@@ -341,7 +347,7 @@ def equal_payout_plan(chosen: list[KindSummary], prob: np.ndarray, budget: int) 
             bets.append(Bet(b.kind, b.numbers, b.odds, b.prob, b.ev, st))
             rows.append(h)
     if not bets:
-        return Plan([], note="予算が足りません。予算を増やすか、券種を減らしてください")
+        return Plan([], note="金額が足りません。金額を増やすか、券種を減らしてください")
     total = sum(b.stake for b in bets)
     hit_any = float(prob[np.array(rows).any(axis=0)].sum())
     exp = sum(b.stake * b.ev for b in bets)

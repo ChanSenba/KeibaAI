@@ -96,3 +96,13 @@ def test_review_mark_stats_and_marked_finishes():
     assert m.loc["▲", "wins"] == 1 and m.loc["▲", "top3_rate"] == 1 and m.loc["▲", "roi"] == pytest.approx(6.0)
     assert weekly.marked_finishes(r.horses).startswith("◎馬1 2着 / ○馬2 3着 / ▲馬3 1着")
     assert weekly.finish_text(float("nan"), "取消") == "取消" and weekly.finish_text(3.0) == "3着"
+
+
+def test_equal_payout_plan_uses_amount_per_kind():
+    numbers = list(range(1, 9))
+    p = 1 / np.array([2.0 * i for i in numbers])
+    sums, prob = betting.mark_summaries(numbers, p, odds_for(), {1: "◎", 2: "○", 3: "▲"}, no_torigami=False)
+    by = {s.kind: s for s in sums}
+    plan = betting.equal_payout_plan([by["馬連"], by["単勝"]], prob, 10_000, [2_050, 500])
+    spent = {k: sum(b.stake for b in plan.bets if b.kind == k) for k in ("馬連", "単勝")}
+    assert spent == {"馬連": 2_000, "単勝": 500}  # 100円未満は切り捨て
