@@ -452,9 +452,10 @@ def page_predict() -> None:
         st.subheader("期待値の高い馬", anchor=False, help=TIPS["top_ev"])
         key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
         top = table.dropna(subset=[key]).nlargest(8, key)
+        courses = gui.day_courses(conn, date.isoformat())  # 予想の表にはコースの列がないので出馬表から引く
         with st.container(border=True):
             st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R",
-                       course=top.apply(gui.course_text, axis=1))[
+                       course=top["race_id"].map(courses).fillna(""))[
                 ["race", "course", "mark", "star", "number", "horse_name", "win_odds", "p_win_ability", "p_win_market",
                  "ev_ability", "ev_market"]].style.map(mark_style, subset=["mark"]),
                 hide_index=True, width="stretch", column_config={

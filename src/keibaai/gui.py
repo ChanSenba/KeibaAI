@@ -127,6 +127,11 @@ def day_races(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     )
 
 
+def day_courses(conn: sqlite3.Connection, date: str) -> dict[str, str]:
+    """その日の各レースのコースの表記(race_id → 例: 芝・右回り 1600m)。"""
+    return {rid: course_text(r) for rid, r in day_races(conn, date).set_index("race_id").iterrows()}
+
+
 def race_entries(conn: sqlite3.Connection, race_id: str, prediction: pd.DataFrame | None = None) -> pd.DataFrame:
     """1レースの出馬表(馬番順)。予想があれば勝率と期待値の列を足す。"""
     df = pd.read_sql_query(
