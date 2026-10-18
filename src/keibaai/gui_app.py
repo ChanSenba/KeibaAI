@@ -680,7 +680,8 @@ def review_html(rv: dict) -> str:
     rows = "".join(
         f'<div class="kb-rv-row"><div class="kb-rv-name">{html.escape(f["name"])}</div>'
         f'<div class="kb-rv-pt {"kb-rv-hi" if f["pt"] >= factor_view.STRONG_PT else "kb-rv-lo" if f["pt"] <= factor_view.WEAK_PT else ""}">'
-        f'<b>{f["pt"]:.1f}</b><i>/10</i><span>{html.escape(f["grade"])}</span></div>'
+        f'<div class="kb-rv-score"><b>{f["pt"]:.1f}</b><i>/10</i></div>'
+        f'<div class="kb-rv-grade">{html.escape(f["grade"])}</div></div>'
         f'<div class="kb-rv-text">{html.escape(f["text"])}</div></div>' for f in rv["rows"])
     return (f'<div class="kb-review"><p class="kb-rv-summary">{html.escape(rv["summary"])}</p>{rows}</div>')
 
