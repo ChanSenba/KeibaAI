@@ -1095,6 +1095,39 @@ BET_COLUMNS = {
 
 
 # ---------------------------------------------------------------- 回顧
+MARK_SORT = {m: i for i, m in enumerate(gui.REVIEW_MARKS)}
+STAT_COLUMNS = {
+    "頭数": st.column_config.NumberColumn("頭数", format="%d", help="着順のある馬の数(取消・除外・中止は除く)"),
+    "1着率": st.column_config.NumberColumn("1着率", format="%.1f%%"),
+    "連対率": st.column_config.NumberColumn("連対率", format="%.1f%%", help="2着以内に入った割合"),
+    "馬券内率": st.column_config.NumberColumn("馬券内率", format="%.1f%%", help="3着以内に入った割合"),
+    "単勝回収率": st.column_config.NumberColumn("単勝回収率", format="%.0f%%", help="全部、単勝100円ずつ買った場合(確定オッズ)"),
+}
+RESULT_COLUMNS = {
+    "mark": st.column_config.TextColumn("印", width="small"), "number": st.column_config.NumberColumn("馬番", format="%d"),
+    "horse_name": "馬名", "p_win_ability": st.column_config.NumberColumn("勝率(能力)", format="percent",
+                                                                        help="発走前に出した、オッズを見ない勝率"),
+    "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f", help="勝率(能力) × 単勝オッズ"),
+    "popularity": st.column_config.NumberColumn("人気", format="%d"),
+    "finish": st.column_config.NumberColumn("着順", format="%d"),
+}
+
+
+def finish_text(f) -> str:
+    return "—" if f != f else f"{int(f)}着"
+
+
+def marked_chips(horses: pd.DataFrame) -> str:
+    """印をつけた馬の全頭を、「◎ 7 馬名 1着」の形で印の順に並べる。3着以内は色をつける。"""
+    marked = horses[horses["mark"].isin(MARK_SORT)].copy()
+    marked["_k"] = marked["mark"].map(MARK_SORT)
+    marked = marked.sort_values(["_k", "number"])
+    return '<div class="kb-marks">' + "".join(
+        f'<span class="kb-mark{" kb-mark-hit" if r.finish <= 3 else ""}"><b>{r.mark}</b>{int(r.number)} '
+        f'{html.escape(str(r.horse_name))}<small>{finish_text(r.finish)}</small></span>'
+        for r in marked.itertuples()) + "</div>"
+
+
 def page_review() -> None:
     from keibaai import weekly
 
@@ -1118,12 +1151,38 @@ def page_review() -> None:
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
     st.caption("数字の見方", help=TIPS["review"])
-    st.markdown(weekly.render_markdown(r).replace("# ", "### ", 1))
-    with st.expander("馬ごとの予想と結果", icon=":material/table:"):
-        cols = ["venue", "round", "number", "horse_name", "mark", "p_win_ability", "ev_ability", "popularity", "finish"]
-        st.dataframe(r.horses[cols].sort_values(["venue", "round", "number"]), hide_index=True, width="stretch",
-                     column_config={c: st.column_config.Column(label, help=t)
-                                    for c, (label, t) in gui_help.REVIEW_COLUMNS.items()})
+
+    st.subheader("印ごとの成績", anchor=False, help=TIPS["review_marks"])
+    scope = st.segmented_control("集計の範囲", ["この日", "保存済みの全期間"], default="この日", key="review_scope") or "この日"
+    horses = r.horses if scope == "この日" else gui.review_horses(conn, days)
+    table = gui.mark_stats(horses)
+    with st.container(border=True):
+        shown = table.assign(**{c: table[c] * 100 for c in ("1着率", "連対率", "馬券内率")})  # 列の表示は % の数字で
+        st.dataframe(shown, hide_index=True, width="stretch", column_config=STAT_COLUMNS)
+        st.caption(f"{'この日' if scope == 'この日' else f'{len(days)}日分の保存済みの予想のうち、結果が出た日'}の、"
+                   f"着順のある {int(table['頭数'].iloc[-1]):,} 頭。1日だけだと頭数が少ないので、傾向は全期間で見てください。")
+
+    st.subheader("レース別", anchor=False)
+    races = r.races.sort_values(["venue", "round"])
+    race, box = race_picker(races, key=f"review_{day}")
+    info = gui.review_races_info(conn, [race["race_id"]]).get(race["race_id"], {})
+    one = r.horses[r.horses["race_id"] == race["race_id"]]
+    with box:
+        st.html(gui.race_head_html({**info, "venue": race["venue"], "round": race["round"], "name": race["race_name"],
+                                    "runners": len(one)}))
+        st.html(marked_chips(one))
+        line = f"◎{race['honmei']}は{finish_text(race['honmei_finish'])}。"
+        if pd.notna(race["winner_rank"]):
+            line += (f"勝ち馬は{race['winner']}(予想{int(race['winner_rank'])}位・勝率{race['winner_p']:.0%}"
+                     f"・単勝{race['winner_odds']:.1f}倍)。")
+            if race["winner_rank"] >= 5:
+                line += " 予想の下位から勝ちました。"
+        st.caption(line)
+        shown = one.sort_values(["finish", "number"], na_position="last")
+        cols = [c for c in RESULT_COLUMNS if c in shown]
+        st.dataframe(shown[cols], hide_index=True, width="stretch", column_config=RESULT_COLUMNS)
+
+
 # ---------------------------------------------------------------- 買い方の検証
 def page_backtest() -> None:
     header("Simulation", "馬券シミュレーション",

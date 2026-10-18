@@ -173,6 +173,47 @@ def review_dates(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date DESC")]
 
 
+REVIEW_MARKS = ["◎", "○", "▲", "△", "☆"]
+
+
+def review_horses(conn: sqlite3.Connection, days: list[str]) -> pd.DataFrame:
+    """days の回顧(予想した馬ごとの、結果付きの表)をまとめる。結果がまだない日は入らない。"""
+    from .weekly import review_day
+
+    parts = [r.horses for r in (review_day(conn, d) for d in days) if r.summary["races"]]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
+def mark_stats(horses: pd.DataFrame) -> pd.DataFrame:
+    """印ごとの成績。着順のある馬だけを数える(取消・除外・中止は含めない)。最後に、比べるための全頭の行を付ける。
+
+    1着率・連対率(2着以内)・馬券内率(3着以内)は割合(0〜1)、単勝回収率は % で、確定オッズ(なければ予想時のオッズ)。
+    """
+    cols = ["印", "頭数", "1着率", "連対率", "馬券内率", "単勝回収率"]
+    if horses.empty:
+        return pd.DataFrame(columns=cols)
+    ran = horses[horses["finish"].notna()]
+
+    def row(label: str, g: pd.DataFrame) -> dict:
+        n = len(g)
+        win = g["finish"] == 1
+        return {"印": label, "頭数": n, "1着率": win.mean(), "連対率": (g["finish"] <= 2).mean(),
+                "馬券内率": (g["finish"] <= 3).mean(), "単勝回収率": (win * g["odds"].fillna(0)).sum() / n * 100}
+
+    rows = [row(m, ran[ran["mark"] == m]) for m in REVIEW_MARKS if (ran["mark"] == m).any()]
+    rows.append(row("全頭(比べる用)", ran))
+    return pd.DataFrame(rows, columns=cols)
+
+
+def review_races_info(conn: sqlite3.Connection, race_ids: list[str]) -> dict[str, dict]:
+    """回顧のレース見出し用に、結果の DB から条件(コース・距離・馬場など)を引く。{race_id: 行}。"""
+    if not race_ids:
+        return {}
+    q = ",".join("?" * len(race_ids))
+    df = pd.read_sql_query(f"SELECT * FROM races WHERE race_id IN ({q})", conn, params=race_ids)
+    return {r["race_id"]: r for r in df.to_dict("records")}
+
+
 def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_min: float,
                  max_odds: float | None, stake: int, blend: bool = False):
     """(レース数, まとめの表, ルールごとの精算済み買い目)。学習は test_from より前だけを使う。"""
