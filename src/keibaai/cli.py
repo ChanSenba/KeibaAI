@@ -166,6 +166,9 @@ def main(argv=None) -> None:
     wk.add_argument("--db", default="data/keiba.db")
     wk.add_argument("--cache", default="data/cache")
     wk.add_argument("--reviews", default="data/reviews", help="回顧のファイルを置くフォルダ")
+    wk.add_argument("--evals", default="data/evals", help="学習・評価の結果を置くフォルダ(--after-races のとき)")
+    wk.add_argument("--after-races", action="store_true",
+                    help="最終レース後の実行用(日曜の夜): 今日の分も回顧し、学習・評価を書く。今週末の予想は作らない")
     wk.add_argument("--today", help="今日の日付(YYYY-MM-DD)。試すとき用")
     _add_source(wk, "成績と出馬表")
     bt = sub.add_parser("backtest", help="過去のレースで単勝の買い方ルールを再現し、回収率などを表示")
@@ -334,8 +337,11 @@ def main(argv=None) -> None:
 
         today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
         out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews,
-                         jv=(args.raw, args.python32))
+                         jv=(args.raw, args.python32), after_races=args.after_races,
+                         evals_dir=args.evals if args.after_races else None)
         print(f"reviewed: {', '.join(out['reviewed']) or 'なし'}")
+        if out["evaluated"]:
+            print(f"evaluated: {out['evaluated']}")
         for d, n in out["forecast"].items():
             print(f"forecast {d}: {n}頭" if n else f"forecast {d}: 出馬表がまだありません")
         return
