@@ -72,12 +72,30 @@ class Review:
     horses: pd.DataFrame  # 予想した馬ごと。結果(finish)付き
     races: pd.DataFrame  # レースごとのまとめ
     summary: dict
+    marks: pd.DataFrame | None = None  # 印ごとの成績(頭数・勝率・連対率・馬券内率・単勝回収率)
+
+
+MARK_ORDER = ["◎", "○", "▲", "△", "☆"]
+
+
+def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
+    """印ごとの成績。取消・除外(着順のない馬)は数えない。馬券内率は3着以内に入った割合。"""
+    rows = []
+    for m in MARK_ORDER:
+        g = h[(h["mark"] == m) & h["finish"].notna()]
+        if g.empty:
+            continue
+        n = len(g)
+        rows.append({"印": m, "頭数": n, "1着": int((g["finish"] == 1).sum()),
+                     "勝率": float((g["finish"] == 1).mean()), "連対率": float((g["finish"] <= 2).mean()),
+                     "馬券内率": float((g["finish"] <= 3).mean()), "単勝回収率": _roi(g, 100) / 100})
+    return pd.DataFrame(rows, columns=["印", "頭数", "1着", "勝率", "連対率", "馬券内率", "単勝回収率"])
 
 
 def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
     pred = pd.read_sql_query("SELECT * FROM predictions WHERE date = ?", conn, params=(date,))
     res = pd.read_sql_query(
-        "SELECT race_id, number, finish, passing, last3f, time_sec, popularity AS final_pop, win_odds AS final_odds "
+        "SELECT race_id, number, finish, status, passing, last3f, time_sec, popularity AS final_pop, win_odds AS final_odds "
         "FROM results WHERE race_id IN (SELECT race_id FROM predictions WHERE date = ?)", conn, params=(date,))
     h = pred.merge(res, on=["race_id", "number"], how="left")
     h = h[h.groupby("race_id")["finish"].transform(lambda s: s.notna().any())].copy()  # 結果が出たレースだけ
@@ -111,7 +129,7 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
         "honmei_roi": _roi(h[h["mark"] == "◎"], stake), "ev_bets": len(ev), "ev_wins": int(ev["win"].sum()),
         "ev_roi": _roi(ev, stake),
     }
-    return Review(date, h, races, summary)
+    return Review(date, h, races, summary, mark_stats(h))
 
 
 def _roi(bets: pd.DataFrame, stake: int) -> float:
@@ -120,6 +138,22 @@ def _roi(bets: pd.DataFrame, stake: int) -> float:
 
 def _pct(x: float) -> str:
     return "—" if x != x else f"{x:.0f}%"
+
+
+def finish_text(finish, status=None) -> str:
+    """着順の表示。着順がなければ取消・除外などの理由(なければ —)。"""
+    if finish == finish and finish is not None:
+        return f"{int(finish)}着"
+    return status if isinstance(status, str) and status else "—"
+
+
+def marked_finishes(horses: pd.DataFrame, race_id: str) -> list[tuple[str, int, str, str]]:
+    """そのレースの印のある馬の (印, 馬番, 馬名, 着順の表示)。印の順(◎○▲△☆)。"""
+    g = horses[(horses["race_id"] == race_id) & horses["mark"].isin(MARK_ORDER)]
+    g = g.assign(_o=g["mark"].map(MARK_ORDER.index)).sort_values(["_o", "number"])
+    status = g["status"] if "status" in g else [None] * len(g)
+    return [(m, int(n), name, finish_text(f, s))
+            for m, n, name, f, s in zip(g["mark"], g["number"], g["horse_name"], g["finish"], status)]
 
 
 def render_markdown(r: Review) -> str:
@@ -131,6 +165,10 @@ def render_markdown(r: Review) -> str:
            f"- ◎○▲のうち3着以内に入った頭数(のべ): {s['top3_hits']}(最大 {3 * s['races']})",
            f"- 期待値≧1 の馬: {s['ev_bets']}頭を買って{s['ev_wins']}頭が勝ち、単勝回収率 {_pct(s['ev_roi'])}", "",
            "回収率は確定オッズで計算。予想は発走前に保存したものです。", ""]
+    if r.marks is not None and not r.marks.empty:
+        out += ["印ごとの成績:", ""] + [
+            f"- {m['印']}: {m['頭数']}頭・勝率 {m['勝率']:.0%}・連対率 {m['連対率']:.0%}・馬券内率 {m['馬券内率']:.0%}"
+            f"・単勝回収率 {_pct(m['単勝回収率'] * 100)}" for _, m in r.marks.iterrows()] + [""]
     for _, x in r.races.sort_values(["venue", "round"]).iterrows():
         fin = "—" if x["honmei_finish"] != x["honmei_finish"] else f"{int(x['honmei_finish'])}着"
         line = f"- **{x['venue']}{int(x['round'])}R {x['race_name']}**: ◎{x['honmei']}は{fin}。"
@@ -139,6 +177,9 @@ def render_markdown(r: Review) -> str:
                      f"・単勝{x['winner_odds']:.1f}倍)。")
             if x["winner_rank"] >= 5:
                 line += " ← 予想の下位から勝った。"
+        marked = marked_finishes(r.horses, x["race_id"])
+        if marked:
+            line += " 印の馬: " + " / ".join(f"{m}{name} {fin}" for m, _, name, fin in marked)
         out.append(line)
     return "\n".join(out) + "\n"
 

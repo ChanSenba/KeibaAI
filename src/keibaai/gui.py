@@ -288,16 +288,13 @@ def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection
     return out
 
 
-def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
-                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0):
-    """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
+def mixed_probs(prediction: pd.DataFrame, race_id: str, odds: dict, blend) -> pd.DataFrame:
+    """そのレースの各馬の勝率(p_win)。オッズ込みのモデルの勝率と、いま取ったオッズの確率を blend の重みで混ぜたもの。
 
-    勝率は、オッズ込みのモデルの勝率と、いま取ったオッズの確率を blend の重みで混ぜたもの。
     過去7年の検証で、能力のモデルと混ぜるより当たりやすかった(LogLoss 0.2053 → 0.2048。同じ買い方の回収率は
     馬連 86.7% → 90.4%、ワイド 86.8% → 90.0%)。能力のモデルは、混ぜても重みがほぼ 0 になり、オッズに何も足せていなかった。
     出馬表を取ったときにオッズがなくてオッズ込みの勝率が出せていない場合は、いまのオッズの確率だけを使う。
     """
-    from .betting import make_plan
     from .blend import Blend, apply_blend
 
     cols = ["race_id", "number", "p_win_ability"] + (["p_win_market"] if "p_win_market" in prediction.columns else [])
@@ -311,10 +308,45 @@ def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bank
         blend = Blend(0.0, 1.0, blend.loglik, blend.baseline_loglik)
     if one["win_odds"].notna().sum() < 3:
         raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
-    mixed = apply_blend(one, blend)
+    return apply_blend(one, blend)
+
+
+def market_probs(odds: dict) -> pd.DataFrame:
+    """単勝オッズだけから出した各馬の勝率(オッズの逆数を合計1にしたもの)。予想がないときに使う。"""
+    win = {k[0]: v for k, v in odds.get("単勝", {}).items() if v and v > 0}
+    if len(win) < 3:
+        raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
+    t = pd.DataFrame({"number": list(win), "win_odds": list(win.values())}).sort_values("number")
+    t["p_win"] = (1 / t["win_odds"]) / (1 / t["win_odds"]).sum()
+    return t.reset_index(drop=True)
+
+
+def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
+                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0):
+    """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
+
+    勝率は mixed_probs のもの。
+    """
+    from .betting import make_plan
+
+    mixed = mixed_probs(prediction, race_id, odds, blend)
     plan = make_plan([int(n) for n in mixed["number"]], mixed["p_win"].to_numpy(), odds, bankroll, cap, kelly_scale,
                      equal_stake=equal_stake)
     return plan, mixed
+
+
+def load_user_marks(conn: sqlite3.Connection, race_id: str) -> dict[int, str]:
+    """買い方ページで保存した、そのレースのユーザーの印 {馬番: 印}。"""
+    return {int(n): m for n, m in conn.execute("SELECT number, mark FROM user_marks WHERE race_id = ?", (race_id,))}
+
+
+def save_user_marks(conn: sqlite3.Connection, race_id: str, marks: dict[int, str], now: dt.datetime | None = None) -> None:
+    """そのレースのユーザーの印を置き換える。空の印の馬は保存しない。"""
+    stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    with conn:
+        conn.execute("DELETE FROM user_marks WHERE race_id = ?", (race_id,))
+        conn.executemany("INSERT INTO user_marks (race_id, number, mark, updated_at) VALUES (?,?,?,?)",
+                         [(race_id, int(n), m, stamp) for n, m in marks.items() if m])
 
 
 def blend_for(conn: sqlite3.Connection, date: dt.date):
