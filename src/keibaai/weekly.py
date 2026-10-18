@@ -149,36 +149,57 @@ def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
     return out
 
 
-def _ground_records(conn: sqlite3.Connection, h: pd.DataFrame, date: str) -> dict:
-    """馬ごとの、過去の同じ馬場状態(良・道悪)での (出走数, 3着内数)。キーは (馬の id, 馬場状態)。"""
+def _past_runs(conn: sqlite3.Connection, h: pd.DataFrame, date: str) -> pd.DataFrame:
+    """今日の出走馬の、これまでの出走(馬場状態・競馬場・芝ダ・距離・着順)。"""
     ids = [i for i in h["horse_id"].dropna().unique()]
     if not ids:
-        return {}
+        return pd.DataFrame(columns=["horse_id", "ground", "venue", "course_type", "distance", "finish"])
     q = ",".join("?" * len(ids))
-    past = pd.read_sql_query(
-        f"SELECT r.horse_id, c.ground, r.finish FROM results r JOIN races c USING (race_id) "
-        f"WHERE r.horse_id IN ({q}) AND c.date < ? AND r.finish IS NOT NULL", conn, params=[*ids, date])
-    past["klass"] = past["ground"].map(flow_review.ground_class)
-    got = past.dropna(subset=["klass"]).groupby(["horse_id", "klass"])["finish"].agg(
-        runs="count", hits=lambda x: int((x <= 3).sum()))
-    return {k: (int(v["runs"]), int(v["hits"])) for k, v in got.iterrows()}
+    return pd.read_sql_query(
+        f"SELECT r.horse_id, c.ground, c.venue, c.course_type, c.distance, r.finish FROM results r "
+        f"JOIN races c USING (race_id) WHERE r.horse_id IN ({q}) AND c.date < ? AND r.finish IS NOT NULL",
+        conn, params=[*ids, date])
+
+
+def _record(past: pd.DataFrame, mask: pd.Series) -> tuple[int, int]:
+    g = past[mask]
+    return len(g), int((g["finish"] <= 3).sum())
+
+
+def horse_records(past: pd.DataFrame, horse_id, race: dict) -> dict:
+    """1頭の、このレースと同じ条件での過去の (出走数, 3着内数)。馬場状態(良・道悪)・コース(同じ競馬場と芝ダ)・
+    距離(同じ芝ダで±200m)。"""
+    p = past[past["horse_id"] == horse_id]
+    klass = flow_review.ground_class(race.get("ground"))
+    dist = race.get("distance")
+    same_type = p["course_type"] == race.get("course_type")
+    return {
+        "馬場": _record(p, p["ground"].map(flow_review.ground_class) == klass) if klass else None,
+        "コース": _record(p, same_type & (p["venue"] == race.get("venue"))),
+        "距離": _record(p, same_type & ((p["distance"] - dist).abs() <= 200)) if dist == dist and dist is not None else None,
+    }
 
 
 def horse_reviews(conn: sqlite3.Connection, h: pd.DataFrame, flows: dict, date: str) -> dict:
     """レースごとの見解。{race_id: {"track": 馬場と枠の傾き, "horses": [馬ごとの向き・不向き(印のある馬が先)]}}"""
-    records = _ground_records(conn, h, date)
+    past = _past_runs(conn, h, date)
+    ids = list(h["race_id"].unique())
+    q = ",".join("?" * len(ids))
+    info = pd.read_sql_query(f"SELECT race_id, venue, course_type, distance, ground FROM races WHERE race_id IN ({q})",
+                             conn, params=ids).set_index("race_id").to_dict("index")
     order = {m: i for i, m in enumerate(MARK_ORDER)}
     out = {}
     for rid, g in h.groupby("race_id", sort=False):
         if rid not in flows or g["finish"].isna().all():
             continue
         _, act, l3 = flows[rid]
+        race = info.get(rid, {})
         g = g[g["finish"].notna() | g["status"].notna()].assign(_o=lambda d: d["mark"].map(order).fillna(len(order)))
         horses = []
         for _, x in g.sort_values(["_o", "finish", "number"], na_position="last").iterrows():
             d = x.to_dict()
             d["l3f_rank"] = l3.get(int(x["number"]), float("nan"))
-            horses.append(flow_review.horse_review(act, d, records.get((x["horse_id"], flow_review.ground_class(act["ground"])))))
+            horses.append(flow_review.horse_review(act, d, horse_records(past, x["horse_id"], race), race))
         out[rid] = {"track": flow_review.track_text(act), "horses": horses}
     return out
 

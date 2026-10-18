@@ -247,6 +247,9 @@ def test_review_gives_fit_for_each_horse_from_flow_gate_and_ground():
     assert "序盤1番手(前)" in one["展開"]["text"] and "1番(内枠)" in one["枠"]["text"]
     four = {x["name"]: x for x in by[4]["rows"]}
     assert four["馬場"]["grade"] == "向かなかった" and "道悪は過去2走で3着内0回" in four["馬場"]["text"]
+    assert one["コース"]["grade"] == "向いた" and "東京の芝は過去2走で3着内2回(100%)" in one["コース"]["text"]
+    assert one["距離"]["grade"] == "向いた" and "芝1600m前後は過去2走で3着内2回" in one["距離"]["text"]
+    assert four["コース"]["grade"] == "向かなかった" and four["距離"]["grade"] == "向かなかった"
     assert "上がり" in by[4]["summary"] and by[4]["sub"].startswith("4着 ・ 4番人気")
     md = weekly.render_markdown(r)
-    assert "  - 馬場・枠: 稍重・内枠有利" in md and "◎馬1(1着 ・ 1番人気 ・ 向いた条件): 展開向いた / 枠向いた / 馬場向いた" in md
+    assert "  - 馬場・枠: 稍重・内枠有利" in md and "◎馬1(1着 ・ 1番人気 ・ 向いた条件): 展開向いた / 枠向いた / 馬場向いた / コース向いた / 距離向いた" in md
