@@ -232,3 +232,21 @@ def test_course_history_lists_recent_days_before_the_date(conn):
     assert not h.empty and (pd.to_datetime(h["日付"]) < pd.Timestamp(DAY)).all()
     assert h["日付"].is_monotonic_decreasing
     assert fv.course_history(conn, {"venue": None, "course_type": "芝", "distance": 1600}, DAY).empty
+
+
+def test_model_factor_points_and_commentary():
+    import pandas as pd
+    from keibaai import factor_view as fv
+
+    one = pd.DataFrame({
+        "number": [1, 2, 3], "horse_name": ["A", "B", "C"], "popularity": [1, 2, 3], "win_odds": [2.0, 4.0, 9.0],
+        "p_win_ability": [0.10, 0.40, 0.20], "p_win_market": [0.40, 0.35, 0.10],
+        "ev_ability": [0.2, 1.6, 1.8], "ev_market": [0.8, 1.4, 0.9],
+        "p_win_quality": [0.2, 0.5, 0.3], "p_win_training": [None, None, None],
+        "mark": ["◎", "○", ""], "star": ["", "", ""]})
+    pts = fv.model_factor_points(one)
+    assert pts["pt_p_win_quality"].tolist() == [0.0, 10.0, 5.0]
+    assert "pt_p_win_training" not in pts and pts["factor_total"].tolist() == [0.0, 100.0, 50.0]
+    lines = fv.race_commentary(one, pts)
+    assert len(lines) == 2 and "A" in lines[0] and "人気が勝率を大きく押し上げて" in lines[0]
+    assert "強みは馬の質10点" in lines[1]

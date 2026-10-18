@@ -612,16 +612,52 @@ def race_detail(conn, race, race_id: str, prediction) -> None:
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(h))}</span>'
             for m, n, h in zip(marked["mark"], marked["number"], marked["horse_name"])) + "</div>")
+    points = factor_view.model_factor_points(one) if "mark" in one else pd.DataFrame(index=one.index)
+    one = pd.concat([one, points], axis=1)
     cols = {**({"mark": PRED_COLUMNS["mark"], "star": PRED_COLUMNS["star"]} if "mark" in one else {}), **ENTRY_COLUMNS,
             **(PRED_COLUMNS if prediction is not None else {})}
+    # 要素ごとの勝率は、点数(0〜10点)で見せる。勝率そのものは、能力・オッズ込みの2列だけ残す
+    for c, name in factor_view.MODEL_FACTORS.items():
+        cols.pop(c, None)
+        if f"pt_{c}" in one:
+            cols[f"pt_{c}"] = st.column_config.NumberColumn(
+                name, format="%.1f", help=f"{name}の要素だけで見た勝率を、このレースの中で0〜10点にした点数(最高の馬が10点)。"
+                                          "8点以上に緑の色がつきます")
+    if "factor_total" in one:
+        cols["factor_total"] = st.column_config.NumberColumn(
+            "要素の合計点", format="%.1f", help="各要素の点数の平均を100点満点にしたもの。モデルの勝率そのものではありません")
     styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
     if "mark" in one:
         styled = styled.map(mark_style, subset=["mark"])
+    pt_cols = [c for c in cols if c.startswith("pt_")]
+    if pt_cols:
+        styled = styled.map(point_style, subset=pt_cols)
+    if "factor_total" in cols:
+        styled = styled.map(total_style, subset=["factor_total"])
     if prediction is None:
         st.caption("出馬表の見方", help=TIPS["entry_table"])
     else:
         st.caption("印と各列の見方", help=TIPS["race_table"])
     st.dataframe(styled, hide_index=True, width="stretch", column_config=cols)
+    lines = factor_view.race_commentary(one, points) if "mark" in one else []
+    if lines:
+        st.subheader("予想の見解", anchor=False)
+        st.caption("各要素の点数と勝率から、印の理由を文章にしたものです。点数はこのレース内の相対評価です。")
+        with st.container(border=True):
+            for line in lines:
+                st.markdown(line)
+
+
+def point_style(v) -> str:
+    """要素の点数のセルの色。10点に近いほど濃い緑。"""
+    if v != v or v is None or v < factor_view.STRONG_PT:
+        return ""
+    return ("background-color: rgba(46, 158, 91, 0.45); font-weight: 700" if v >= 9.95
+            else "background-color: rgba(46, 158, 91, 0.2)")
+
+
+def total_style(v) -> str:
+    return "font-weight: 700; background-color: rgba(46, 158, 91, 0.12)"
 
 
 MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}

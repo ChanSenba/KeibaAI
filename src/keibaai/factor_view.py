@@ -550,6 +550,73 @@ def score_day(values: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(parts).reindex(values.index) if parts else pd.DataFrame(index=values.index)
 
 
+# ---------------------------------------------------------------- 予想の要素別の点数と見解(予想ページ用)
+# 要素ごとのモデルの勝率(p_win_*)と、画面での名前。factors.COLUMN と同じ並び
+MODEL_FACTORS: dict[str, str] = {"p_win_quality": "馬の質", "p_win_fit": "適性", "p_win_rotation": "ローテ",
+                                 "p_win_human": "騎手・厩舎", "p_win_track": "展開・馬場",
+                                 "p_win_pedigree": "血統", "p_win_training": "調教"}
+STRONG_PT, WEAK_PT = 8.0, 2.0  # 見解で「強み」「弱み」と書く点数
+
+
+def model_factor_points(one: pd.DataFrame) -> pd.DataFrame:
+    """1レースの予想の表から、要素ごとの勝率を同じレースの中で 0〜10 点にした表を返す。
+
+    列は pt_<p_win_*>(いちばん高い馬が10点、低い馬が0点)と factor_total(点数の平均を100点満点にしたもの)。
+    値のない要素(血統・調教を取得していないなど)は出さない。
+    """
+    out = pd.DataFrame(index=one.index)
+    for c in MODEL_FACTORS:
+        if c in one and one[c].notna().any():
+            out[f"pt_{c}"] = column_points(one[c], "high")
+    pts = out[[c for c in out if c.startswith("pt_")]]
+    out["factor_total"] = pts.mean(axis=1) * 10 if len(pts.columns) else np.nan
+    return out
+
+
+def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
+    """印のついた馬(◎○▲△☆★)ごとの見解を、1頭1文のまとまりで返す。one は印・勝率つきの1レース分。
+
+    強み(8点以上)・弱み(2点以下)の要素と、能力だけの勝率とオッズ込みの勝率の差から、
+    その印になった理由を書く。点数はレース内の相対評価で、勝率そのものではない。
+    """
+    if "mark" not in one:
+        return []
+    order = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
+    rows = one[(one["mark"] != "") | (one.get("star", "") == "★")].copy()
+    rows["_o"] = rows["mark"].map(order).fillna(5)
+    out = []
+    for i, r in rows.sort_values(["_o", "number"]).iterrows():
+        label = f"{r['mark']}{' ★' if r.get('star') == '★' else ''}".strip() or "★"
+        head = f"**{label} {int(r['number'])} {r['horse_name']}**"
+        if r["popularity"] == r["popularity"]:
+            head += f"({int(r['popularity'])}番人気・{r['win_odds']}倍)"
+        parts = []
+        pa, pm = r.get("p_win_ability"), r.get("p_win_market")
+        if pa == pa and pm == pm and pa is not None and pm is not None:
+            parts.append(f"勝率は能力で{pa * 100:.1f}%、オッズ込みで{pm * 100:.1f}%。")
+            if pm >= pa * 1.5 and pm - pa >= 0.03:
+                parts.append("人気が勝率を大きく押し上げていて、能力だけなら評価は下がります。")
+            elif pa >= pm * 1.3 and pa - pm >= 0.02:
+                parts.append("能力はオッズ(人気)の評価より高く、妙味があります。")
+        elif pa == pa and pa is not None:
+            parts.append(f"能力だけの勝率は{pa * 100:.1f}%(オッズ未取得)。")
+        got = {MODEL_FACTORS[c]: points.loc[i, f"pt_{c}"] for c in MODEL_FACTORS if f"pt_{c}" in points}
+        strong = [f"{k}{v:.0f}点" for k, v in sorted(got.items(), key=lambda kv: -kv[1]) if v >= STRONG_PT]
+        weak = [f"{k}{v:.0f}点" for k, v in sorted(got.items(), key=lambda kv: kv[1]) if v <= WEAK_PT]
+        if strong:
+            parts.append("強みは" + "・".join(strong) + "。")
+        if weak:
+            parts.append("弱みは" + "・".join(weak) + "。")
+        if not strong and not weak and got:
+            parts.append("どの要素も突出せず、全体のバランスで評価しています。")
+        if r.get("mark") == "☆":
+            parts.append(f"能力の期待値が{r['ev_ability']:.2f}と1を超える穴馬です。")
+        if r.get("star") == "★":
+            parts.append(f"オッズ込みの期待値が{r['ev_market']:.2f}で、オッズより高く評価されています(買えば得になる印ではありません)。")
+        out.append(head + " " + "".join(parts))
+    return out
+
+
 # ---------------------------------------------------------------- レース展開
 def course_history(conn: sqlite3.Connection, race, before: str, days: int = 5) -> pd.DataFrame:
     """同じコース(競馬場・芝ダ・距離)の、before より前の直近 days 開催日のレースごとの展開。新しい順。
