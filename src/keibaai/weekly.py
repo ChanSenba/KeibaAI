@@ -116,7 +116,8 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
             "top3_hit": len(top3 & marked), "marked": marked_finishes(g), **_flow_row(flows.get(rid)),
         })
     races = pd.DataFrame(rows)
-    ev = h[h["ev_ability"] >= 1]
+    # 能力のみの期待値は人気薄を高く見すぎて、全頭の半分が1を超える。オッズ込みがあればそちらで数える
+    ev = h[h["ev_market"].fillna(h["ev_ability"]) >= 1]
     summary = {
         "races": len(races),
         "honmei_wins": int(races["honmei_win"].sum()) if len(races) else 0,
