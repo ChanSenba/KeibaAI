@@ -147,12 +147,17 @@ def test_training_places_in_one_section(conn):
             (horse, "2029-12-01", "0700", "wood", "1", "2", "0", 50.0)]  # 14日より前
     conn.executemany("INSERT INTO jv_training (horse_id, date, time, kind, center, course, turn, f4) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
-    conn.execute("INSERT INTO training (race_id, number, seq, course) VALUES (?, ?, 0, '栗坂')", (race_id, number))
+    conn.execute("INSERT INTO training (race_id, number, seq, course, date, rider, load, partner) "
+                 "VALUES (?, ?, 0, '栗坂', '2030-01-02', '助手', '一杯', '内ロングトールサリー馬也と併せ０秒２遅れ')", (race_id, number))
     conn.commit()
     try:
         v = fv.factor_values(conn, DAY)
         r = v[(v["race_id"] == race_id) & (v["number"] == number)].iloc[0]
         assert (r["train_center"], r["train_last_place"], r["train_best_place"]) == ("栗東", "坂路", "CW(右)")
+        assert (r["train_day"], r["train_rider"], r["train_load"]) == ("2030-01-02", "助手", "一杯")
+        assert "ロングトールサリー" in r["train_partner"]
+        others = v[(v["race_id"] == race_id) & (v["number"] != number)]
+        assert others["train_partner"].isna().all()  # 詳細が取れていない馬は空
         assert {s["name"]: s for s in fv.section_status(conn)}["調教"]["state"] == "ready"
         names = [s["name"] for s in fv.SECTIONS]
         assert names.count("調教") == 1 and not any("JRA-VAN" in n for n in names)
@@ -304,3 +309,14 @@ def test_same_day_history_uses_only_earlier_rounds_of_the_same_day_venue_and_sur
     assert got["先行有利度"].iloc[0] > 0 and got["内有利度"].iloc[0] > 0
     assert "ここまで1レース" in fv.same_day_text("東京", "芝", got) and "目安" in fv.same_day_text("東京", "芝", got)
     assert fv.same_day_history(c, {"venue": "東京", "course_type": "芝", "round": 1}, "2030-02-02").empty
+
+
+def test_training_text_says_partner_and_rider_or_that_they_are_missing():
+    vals = pd.DataFrame({"number": [1, 2, 3], "train_last_place": ["坂路"] * 3, "jv_last_f4": [52.0, 53.0, 54.0],
+                         "train_day": ["2030-01-02", "2030-01-02", None], "train_rider": ["助手", None, None],
+                         "train_load": ["一杯", None, None], "train_partner": ["内Aと併せ０秒２遅れ", None, None]}
+                        ).set_index("number", drop=False)
+    one = fv.EVIDENCE["p_win_training"](vals, 1)
+    assert "騎乗は助手・脚色は一杯" in one and "併せ馬は内Aと併せ０秒２遅れ" in one
+    assert "騎乗は不明" in fv.EVIDENCE["p_win_training"](vals, 2) and "併せ馬の記載はなし(単走)" in fv.EVIDENCE["p_win_training"](vals, 2)
+    assert "騎乗者と併せ馬は取得できていません" in fv.EVIDENCE["p_win_training"](vals, 3)
