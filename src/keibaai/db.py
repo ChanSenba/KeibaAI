@@ -98,11 +98,14 @@ CREATE INDEX IF NOT EXISTS idx_races_date ON races(date);
 """
 
 
+LOCK_TIMEOUT = 60  # 他の接続が書き込み中のとき、書き込みの順番を待つ秒数(標準の5秒だと、長い取得と重なって落ちる)
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     path = Path(path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=LOCK_TIMEOUT)
     try:
         conn.executescript(SCHEMA)
         _add_missing_columns(conn)

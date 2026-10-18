@@ -17,7 +17,7 @@ def test_initialized_db_opens_during_another_transaction(tmp_path, monkeypatch, 
     other.execute(transaction)
     other.execute('SELECT * FROM races').fetchall()  # 読み取りトランザクションも実際にロックする
     real_connect = sqlite3.connect
-    monkeypatch.setattr(db.sqlite3, 'connect', lambda path: real_connect(path, timeout=0.05))
+    monkeypatch.setattr(db.sqlite3, 'connect', lambda path, **kw: real_connect(path, timeout=0.05))
     try:
         conn = db.connect(path)
         try:
@@ -45,8 +45,8 @@ def test_partial_revision_install_is_repaired(tmp_path):
 def test_failed_initialization_closes_connection(tmp_path, monkeypatch):
     opened = []
     real_connect = sqlite3.connect
-    def connect(path):
-        conn = real_connect(path)
+    def connect(path, **kw):
+        conn = real_connect(path, **kw)
         opened.append(conn)
         return conn
     def fail(conn):
@@ -64,3 +64,11 @@ def test_failed_initialization_closes_connection(tmp_path, monkeypatch):
     other.commit()
     assert other.execute('SELECT race_id FROM races').fetchall() == [('recovered',)]
     other.close()
+
+
+def test_connect_waits_for_other_writers(tmp_path, monkeypatch):
+    seen = {}
+    real_connect = sqlite3.connect
+    monkeypatch.setattr(db.sqlite3, 'connect', lambda path, **kw: seen.update(kw) or real_connect(path, **kw))
+    db.connect(tmp_path / 'k.db').close()
+    assert seen['timeout'] == db.LOCK_TIMEOUT >= 30
