@@ -1329,12 +1329,17 @@ def page_review() -> None:
             race_head(heads.loc[race["race_id"]])
         else:
             st.markdown(f"#### {race['venue']}{int(race['round'])}R {gui.text_or_blank(race['race_name'])}")
-        review_race(r.horses[r.horses["race_id"] == race["race_id"]])
+        review_race(r.horses[r.horses["race_id"] == race["race_id"]], race)
 
 
-def review_race(g) -> None:
+def review_race(g, race=None) -> None:
     """1レースの回顧: 印を付けた馬すべての着順と、1〜3着の馬。"""
     from keibaai import weekly
+
+    if race is not None and race.get("flow"):  # 発走前の展開予想と、結果から出した実際の展開
+        if race.get("forecast"):
+            st.caption(f"展開の予想: {race['forecast']}", help=gui_help.REVIEW_COLUMNS["flow"][1])
+        st.caption(f"実際の展開: {race['flow']}")
 
     def place_style(v) -> str:
         return "font-weight: 700; background-color: rgba(46, 158, 91, 0.2)" if v == v and v is not None and v <= 3 else ""

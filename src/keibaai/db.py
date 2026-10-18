@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS predictions (
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL,
     PRIMARY KEY (race_id, number)
 );
+-- 発走前の展開予想(レースごと)。回顧で、結果から出した実際の展開と比べる
+CREATE TABLE IF NOT EXISTS flow_forecast (
+    race_id TEXT PRIMARY KEY, n_front INTEGER, front_share REAL, course_edge REAL, course_pace_diff REAL,
+    pace TEXT, advantage TEXT, basis TEXT, saved_at TEXT
+);
 -- 買い方ページでユーザーが付けた印(レースの馬ごと)。印を外した馬は行を消す
 CREATE TABLE IF NOT EXISTS user_marks (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, mark TEXT NOT NULL, updated_at TEXT,
