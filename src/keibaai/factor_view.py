@@ -582,12 +582,140 @@ def model_factor_points(one: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
-    """全頭の見解を、1頭1文のまとまりで返す。one は印・勝率つきの1レース分。
-    印のついた馬(◎○▲△☆★)が先で、印のない馬は総合スコアの高い順。各馬の見出しに総合スコア(合計点)を入れる。
+def _rank_text(vals: pd.DataFrame, col: str, i) -> str:
+    """列 col での、i 行目の馬のメンバー中の順位(「メンバー中2位」)。良い向きがなかったり、値がなければ空。"""
+    good = COLUMN_INFO.get(col, (None, None))[1]
+    if good is None or col not in vals:
+        return ""
+    score = _good_score(vals[col], good)
+    if pd.isna(score.get(i)) or score.dropna().nunique() < 2:
+        return ""
+    return f"メンバー中{int(score.rank(method='min', ascending=False)[i])}位"
 
-    強み(8点以上)・弱み(2点以下)の要素と、能力だけの勝率とオッズ込みの勝率の差から、
-    その印になった理由を書く。点数はレース内の相対評価で、勝率そのものではない。
+
+def _num(v, fmt: str = "{:.1f}") -> str:
+    return fmt.format(v) if isinstance(v, (int, float, np.floating)) and v == v else "—"
+
+
+def _has(v) -> bool:
+    return v is not None and v == v and v != "" and v != "—"
+
+
+def _quality_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    parts = []
+    if _has(r.get("last5")):
+        extra = [t for t in (f"平均着順{_num(r.get('avg_finish_5'))}", _rank_text(v, "avg_finish_5", i)) if t and "—" not in t]
+        parts.append(f"近5走は{r['last5']}" + (f"({'・'.join(extra)})" if extra else ""))
+    if _has(r.get("time_diff_5")):
+        parts.append(f"勝ち馬とのタイム差は平均{_num(r['time_diff_5'], '{:.2f}')}秒({_rank_text(v, 'time_diff_5', i) or '順位なし'})")
+    if _has(r.get("l3f_rank_3")):
+        parts.append(f"上がりは頭数比{_num(r['l3f_rank_3'], '{:.2f}')}の順位({_rank_text(v, 'l3f_rank_3', i) or '順位なし'})")
+    cc = r.get("class_change")
+    if _has(cc) and cc != 0:
+        parts.append("前走から格下げで相手が楽になる" if cc < 0 else "前走から昇級で相手が強くなる")
+    return "。".join(parts) + "。" if parts else "過去の出走が少なく、近走の材料がありません。"
+
+
+def _fit_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    names = [("rec_ct", "芝/ダ"), ("rec_dist", "距離帯"), ("rec_dir", "回り"), ("rec_venue", "競馬場"), ("rec_ground", "馬場")]
+    got = [f"{n} {r[c]}" for c, n in names if _has(r.get(c))]
+    if not got:
+        return "同じ条件の成績がありません。"
+    text = "今回と同じ条件の成績(1着-2着-3着-着外)は、" + "・".join(got) + "。"
+    top3 = lambda c: sum(int(x) for x in str(r.get(c, "0-0-0-0")).split("-")[:3]) if _has(r.get(c)) else 0
+    text += "近い距離で3着内の実績があります。" if top3("rec_dist") else "近い距離での3着内の実績はありません。"
+    return text
+
+
+def _rotation_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    if not _has(r.get("rotation")):
+        return "前走の情報がありません(初出走など)。"
+    text = f"{r['rotation']}"
+    if _has(r.get("days_since_last")):
+        text += f"(前走から{int(r['days_since_last'])}日)"
+    return text + "。"
+
+
+def _human_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    parts = []
+    if _has(r.get("jockey")):
+        rank = f"今年の勝利数{int(r['jockey_wins_year'])}勝・リーディング{int(r['jockey_rank'])}位" if _has(r.get("jockey_rank")) else ""
+        parts.append(f"{r['jockey']}騎手" + (f"({rank})" if rank else ""))
+    for col, label in (("jockey_ct_top3_rate", "同じ芝/ダでの3着内率"), ("jockey_venue_top3_rate", "この競馬場での3着内率")):
+        if _has(r.get(col)):
+            parts.append(f"{label}{r[col] * 100:.0f}%({_rank_text(v, col, i) or '順位なし'})")
+    if _has(r.get("pair_n")) and r["pair_n"] > 0:
+        parts.append(f"この馬とは{int(r['pair_n'])}回で3着内率{_num(r.get('pair_top3_rate', np.nan) * 100, '{:.0f}')}%")
+    elif _has(r.get("pair_n")):
+        parts.append("この馬とは初コンビ")
+    if r.get("jockey_change") == "乗り替わり":
+        parts.append("前走から乗り替わり")
+    return "。".join(parts) + "。" if parts else "騎手の情報がありません。"
+
+
+def _track_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    parts = []
+    if _has(r.get("style")):
+        parts.append(f"脚質は{r['style']}と推定")
+    if _has(r.get("pace_forecast")):
+        parts.append(f"このメンバーのペース予想は{r['pace_forecast']}")
+    fit = r.get("pace_fit")
+    if _has(fit):
+        parts.append("展開は向く" if fit > 0.1 else "展開は向きにくい" if fit < -0.1 else "展開による有利不利は小さい")
+    if _has(r.get("number")) and _has(r.get("inner_pos")):
+        pos = "内" if r["inner_pos"] <= 1 / 3 else "外" if r["inner_pos"] > 2 / 3 else "中"
+        parts.append(f"{int(r['number'])}番は{pos}寄りの枠")
+    return "。".join(parts) + "。" if parts else "展開・枠の材料がありません。"
+
+
+def _pedigree_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    if not _has(r.get("sire")):
+        return "血統のデータを取得していないため、評価に入れていません。"
+    parts = [f"父{r['sire']}" + (f"・母の父{r['damsire']}" if _has(r.get("damsire")) else "")]
+    for col, label in (("sire_ctdist_top3_rate", "父の産駒の同じ芝ダ×距離帯での3着内率"),
+                       ("damsire_ctdist_top3_rate", "母の父の産駒の同じ条件での3着内率")):
+        if _has(r.get(col)):
+            parts.append(f"{label}{r[col] * 100:.0f}%({_rank_text(v, col, i) or '順位なし'})")
+    return "。".join(parts) + "。"
+
+
+def _training_text(v: pd.DataFrame, i) -> str:
+    r = v.loc[i]
+    parts = []
+    if _has(r.get("train_last_place")):
+        parts.append(f"最後の追い切りは{r['train_last_place']}")
+    if _has(r.get("jv_last_f4")):
+        z = r.get("jv_last_f4_z")
+        tail = f"(同じコースの標準より{abs(z):.1f}秒{'速い' if z < 0 else '遅い'})" if _has(z) else ""
+        parts.append(f"4Fは{r['jv_last_f4']:.1f}秒{tail}")
+    if _has(r.get("train_critic")) or _has(r.get("train_rank")):
+        parts.append("短評「" + str(r.get("train_critic") or "—") + "」・評価" + str(r.get("train_rank") or "—"))
+    return "。".join(parts) + "。" if parts else "追い切りのデータを取得していないため、評価に入れていません。"
+
+
+# 要素ごとの根拠の書き方(MODEL_FACTORS の並び)
+EVIDENCE = {"p_win_quality": _quality_text, "p_win_fit": _fit_text, "p_win_rotation": _rotation_text,
+            "p_win_human": _human_text, "p_win_track": _track_text, "p_win_pedigree": _pedigree_text,
+            "p_win_training": _training_text}
+
+
+def grade_label(pt: float) -> str:
+    return ("高評価" if pt >= STRONG_PT else "やや高評価" if pt >= 6 else "平均的" if pt >= 4
+            else "やや低評価" if pt > WEAK_PT else "低評価")
+
+
+def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame | None = None) -> list[dict]:
+    """全頭の見解。印のついた馬(◎○▲△☆★)が先で、印のない馬は総合スコアの高い順。
+
+    one は印・勝率つきの1レース分、points は model_factor_points、values は factor_values の同じレース分(なくてもよい)。
+    各馬: {title(印・馬番・馬名), sub(総合スコア・人気・オッズ), summary(勝率と印の理由), rows(要素ごとの
+    {name, pt, grade, text}。text は values があるとき、その要素の根拠の文)}。
     """
     if "mark" not in one:
         return []
@@ -595,15 +723,18 @@ def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
     rows = one.copy()
     rows["_o"] = rows["mark"].map(order).fillna(5)
     rows["_total"] = -points["factor_total"].reindex(rows.index).fillna(-1) if "factor_total" in points else 0
+    vals = None
+    if values is not None and len(values):
+        vals = values.drop_duplicates("number").set_index("number", drop=False)
     out = []
     for i, r in rows.sort_values(["_o", "_total", "number"]).iterrows():
         label = f"{r['mark']}{' ★' if r.get('star') == '★' else ''}".strip()
-        head = f"**{label + ' ' if label else ''}{int(r['number'])} {r['horse_name']}**"
+        sub = []
         total = points["factor_total"].get(i) if "factor_total" in points else None
         if total is not None and total == total:
-            head += f"(総合スコア{total:.1f}点)"
+            sub.append(f"総合スコア{total:.1f}点")
         if r["popularity"] == r["popularity"]:
-            head += f"({int(r['popularity'])}番人気・{r['win_odds']}倍)"
+            sub.append(f"{int(r['popularity'])}番人気・{r['win_odds']}倍")
         parts = []
         pa, pm = r.get("p_win_ability"), r.get("p_win_market")
         if pa == pa and pm == pm and pa is not None and pm is not None:
@@ -627,7 +758,17 @@ def race_commentary(one: pd.DataFrame, points: pd.DataFrame) -> list[str]:
             parts.append(f"能力の期待値が{r['ev_ability']:.2f}と1を超える穴馬です。")
         if r.get("star") == "★":
             parts.append(f"オッズ込みの期待値が{r['ev_market']:.2f}で、オッズより高く評価されています(買えば得になる印ではありません)。")
-        out.append(head + " " + "".join(parts))
+        factors = []
+        for c, name in MODEL_FACTORS.items():
+            if f"pt_{c}" not in points:
+                continue
+            pt = float(points.loc[i, f"pt_{c}"])
+            text = ""
+            if vals is not None and int(r["number"]) in vals.index:
+                text = EVIDENCE[c](vals, int(r["number"]))
+            factors.append({"name": name, "pt": pt, "grade": grade_label(pt), "text": text})
+        out.append({"mark": label, "number": int(r["number"]), "name": r["horse_name"], "sub": " ・ ".join(sub),
+                    "summary": "".join(parts), "rows": factors})
     return out
 
 

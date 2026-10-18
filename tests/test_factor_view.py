@@ -261,8 +261,24 @@ def test_model_factor_points_and_commentary():
     pts = fv.model_factor_points(one)
     assert pts["pt_p_win_quality"].tolist() == [0.0, 10.0, 5.0]
     assert "pt_p_win_training" not in pts and pts["factor_total"].tolist() == [0.0, 100.0, 50.0]
-    lines = fv.race_commentary(one, pts)
-    assert len(lines) == 3 and "A" in lines[0] and "人気が勝率を大きく押し上げて" in lines[0]  # 印のない馬も載る
-    assert "(総合スコア0.0点)" in lines[0] and "(総合スコア100.0点)" in lines[1]
-    assert "強みは馬の質10点" in lines[1]
-    assert lines[2].startswith("**3 C**(総合スコア50.0点)(3番人気")
+    vals = pd.DataFrame({
+        "number": [1, 2, 3], "last5": ["1-2-3", "4-5-6", "—"], "avg_finish_5": [2.0, 5.0, np.nan],
+        "time_diff_5": [0.3, 0.9, np.nan], "l3f_rank_3": [0.2, 0.5, np.nan], "class_change": [0, -1, np.nan],
+        "rec_ct": ["1-0-0-1", "0-0-0-3", "0-0-0-0"], "rec_dist": ["1-0-0-1", "0-0-0-3", "0-0-0-0"],
+        "rec_dir": ["—", "—", "—"], "rec_venue": ["0-0-0-0"] * 3, "rec_ground": ["0-0-0-0"] * 3,
+        "rotation": ["叩き2走目", "休み明け", "—"], "days_since_last": [28.0, 120.0, np.nan],
+        "jockey": ["甲", "乙", "丙"], "jockey_rank": [1, 10, np.nan], "jockey_wins_year": [50, 5, np.nan],
+        "jockey_ct_top3_rate": [0.4, 0.2, np.nan], "pair_n": [3, 0, np.nan], "pair_top3_rate": [0.5, np.nan, np.nan],
+        "jockey_change": ["継続", "乗り替わり", "—"], "style": ["逃げ", "差し", "不明"], "pace_forecast": ["ハイペース"] * 3,
+        "pace_fit": [-0.5, 0.5, 0.0], "inner_pos": [0.1, 0.5, 0.9], "sire": [None, None, None]})
+    reviews = fv.race_reviews(one, pts, vals)
+    assert len(reviews) == 3 and reviews[0]["name"] == "A"  # 印のない馬も載る
+    assert "人気が勝率を大きく押し上げて" in reviews[0]["summary"] and reviews[0]["sub"].startswith("総合スコア0.0点")
+    assert "強みは馬の質10点" in reviews[1]["summary"] and reviews[2]["sub"].startswith("総合スコア50.0点")
+    quality = reviews[1]["rows"][0]
+    assert quality["name"] == "馬の質" and quality["pt"] == 10.0 and quality["grade"] == "高評価"
+    assert "近5走は4-5-6" in quality["text"] and "格下げ" in quality["text"]
+    assert [r["name"] for r in reviews[0]["rows"]] == ["馬の質"]  # 値のない要素は出さない
+    assert fv.EVIDENCE["p_win_pedigree"](vals.set_index("number", drop=False), 1) == "血統のデータを取得していないため、評価に入れていません。"
+    assert "初コンビ" not in fv.EVIDENCE["p_win_human"](vals.set_index("number", drop=False), 1)  # 3回騎乗済み
+    assert fv.race_reviews(one, pts)[0]["rows"][0]["text"] == ""  # 要素の値がなければ点数だけ

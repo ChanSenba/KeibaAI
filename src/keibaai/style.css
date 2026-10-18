@@ -199,3 +199,26 @@ button, a, [role="button"] { touch-action: manipulation; }
 .kb-fl-good, .kb-fl-none { font-size: 0.72rem; padding: 0 0.4rem; border-radius: 999px; }
 .kb-fl-good { background: rgba(46, 158, 91, 0.2); color: light-dark(#1d6b3c, #8fd9ad); }
 .kb-fl-none { background: light-dark(#eef0f3, #2b2f36); opacity: 0.8; }
+
+/* ---- 予想の見解(馬ごとの、要素別の評価) ---- */
+.kb-review { display: grid; gap: 0.5rem; font-size: 0.92rem; }
+.kb-rv-summary { margin: 0; color: var(--kb-muted, inherit); }
+.kb-rv-row {
+  display: grid;
+  grid-template-columns: 6.5rem 6.5rem 1fr;
+  gap: 0.2rem 0.8rem;
+  align-items: baseline;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--kb-line);
+}
+.kb-rv-name { font-weight: 700; }
+.kb-rv-pt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kb-rv-pt b { font-size: 1.15rem; }
+.kb-rv-pt span { margin-left: 0.4rem; font-size: 0.8rem; opacity: 0.75; }
+.kb-rv-hi b { color: var(--kb-accent); }
+.kb-rv-lo { opacity: 0.7; }
+.kb-rv-text { line-height: 1.6; }
+@media (max-width: 640px) {
+  .kb-rv-row { grid-template-columns: 6rem 1fr; }
+  .kb-rv-text { grid-column: 1 / -1; }
+}
