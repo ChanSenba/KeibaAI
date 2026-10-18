@@ -1,4 +1,5 @@
 import datetime as dt
+from pathlib import Path
 
 import pandas as pd
 
@@ -96,9 +97,9 @@ def test_weekly_command_runs_run_weekly(tmp_path, monkeypatch, capsys):
 
     seen = {}
 
-    def fake(conn, fetcher, today, reviews_dir, jv=None):
+    def fake(conn, fetcher, today, reviews_dir, jv=None, after_races=False, evals_dir=None):
         seen.update(today=today, reviews=str(reviews_dir), jv=jv)
-        return {"reviewed": ["2025-03-01"], "forecast": {"2025-03-08": 0, "2025-03-09": 12}}
+        return {"reviewed": ["2025-03-01"], "forecast": {"2025-03-08": 0, "2025-03-09": 12}, "evaluated": None}
 
     monkeypatch.setattr(weekly, "run_weekly", fake)
     cli.main(["weekly", "--db", str(tmp_path / "k.db"), "--cache", str(tmp_path / "c"),
@@ -112,7 +113,7 @@ def test_weekly_with_jv_takes_results_and_entries_from_jravan(tmp_path, monkeypa
     from keibaai import jvlink
 
     calls = []
-    monkeypatch.setattr(weekly, "unreviewed_dates", lambda conn, today, d: ["2025-03-01"])
+    monkeypatch.setattr(weekly, "unreviewed_dates", lambda conn, today, d, include_today=False: ["2025-03-01"])
     monkeypatch.setattr(weekly, "review_day", lambda conn, d: weekly.Review(d, None, None, {"races": 0}))
     monkeypatch.setattr(jvlink, "fetch_results", lambda conn, s, e, raw, py, today=None: calls.append(("results", s)))
     monkeypatch.setattr(jvlink, "fetch_entries", lambda conn, d, odds, raw, py, now=None: calls.append(("entries", d)) or 0)
@@ -121,3 +122,26 @@ def test_weekly_with_jv_takes_results_and_entries_from_jravan(tmp_path, monkeypa
                             jv=("raw", "py32"))
     assert calls == [("results", dt.date(2025, 3, 1)), ("entries", "2025-03-08"), ("entries", "2025-03-09")]
     assert out["forecast"] == {"2025-03-08": 0, "2025-03-09": 0}
+
+
+def test_after_races_reviews_today_and_writes_evaluation(tmp_path, monkeypatch):
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [3, 1, 2, 5, 4])
+    today = dt.date(2025, 3, 1)
+    assert weekly.unreviewed_dates(conn, today, tmp_path, include_today=True) == ["2025-03-01"]
+    monkeypatch.setattr(weekly, "forecast_day", lambda *a, **k: 1 / 0)  # 日曜の夜は予想を作らない
+    monkeypatch.setattr(weekly, "write_evaluation", lambda conn, t, d: Path(d) / f"{t}.md")
+    out = weekly.run_weekly(conn, FakeFetcher(), today, tmp_path / "r", now=dt.datetime(2025, 3, 1, 18, 30),
+                            after_races=True, evals_dir=tmp_path / "e")
+    assert out["reviewed"] == ["2025-03-01"] and out["forecast"] == {}
+    assert out["evaluated"] == str(tmp_path / "e" / "2025-03-01.md")
+
+
+def test_write_evaluation_has_report_and_live_trend(tmp_path):
+    conn = synthetic_db()
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [3, 1, 2, 5, 4])
+    path = weekly.write_evaluation(conn, dt.date(2026, 6, 1), tmp_path / "e")
+    text = path.read_text(encoding="utf-8")
+    assert "2026-06-01 学習・評価" in text and "勝AUC" in text and "実運用の推移" in text and "2025-03-01" in text

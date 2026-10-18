@@ -57,10 +57,12 @@ def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datet
     return save_predictions(conn, predict_day(conn, date.isoformat()), now)
 
 
-def unreviewed_dates(conn: sqlite3.Connection, today: dt.date, reviews_dir: Path) -> list[str]:
-    """予想があり、今日より前で、回顧のファイルがまだない日。"""
+def unreviewed_dates(conn: sqlite3.Connection, today: dt.date, reviews_dir: Path,
+                     include_today: bool = False) -> list[str]:
+    """予想があり、今日より前(include_today なら今日も含む)で、回顧のファイルがまだない日。"""
+    last = today + dt.timedelta(days=1) if include_today else today
     days = [r[0] for r in conn.execute(
-        "SELECT DISTINCT date FROM predictions WHERE date < ? ORDER BY date", (today.isoformat(),))]
+        "SELECT DISTINCT date FROM predictions WHERE date < ? ORDER BY date", (last.isoformat(),))]
     return [d for d in days if not (reviews_dir / f"{d}.md").exists()]
 
 
@@ -142,10 +144,13 @@ def render_markdown(r: Review) -> str:
 
 
 def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: str | Path,
-               now: dt.datetime | None = None, jv: tuple[str, str] | None = None) -> dict:
+               now: dt.datetime | None = None, jv: tuple[str, str] | None = None,
+               after_races: bool = False, evals_dir: str | Path | None = None) -> dict:
     """毎週の処理。何度実行しても、済んだ分は飛ばす(木〜金と月曜の両方に同じ命令を登録できる)。
 
     jv=(書き出し先, 32bit Python) なら、成績と出馬表を JRA-VAN から取る(なければ netkeiba)。
+    after_races=True は最終レース後の実行用(日曜の夜): 今日の分も回顧し、今週末の予想は作らず、
+    evals_dir があれば学習・評価の結果も書く。
     """
     from . import jvlink
     from .cli import collect_day
@@ -153,8 +158,8 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
     now = now or dt.datetime.now()
     reviews_dir = Path(reviews_dir)
     reviews_dir.mkdir(parents=True, exist_ok=True)
-    out = {"reviewed": [], "forecast": {}}
-    for d in unreviewed_dates(conn, today, reviews_dir):
+    out = {"reviewed": [], "forecast": {}, "evaluated": None}
+    for d in unreviewed_dates(conn, today, reviews_dir, include_today=after_races):
         if jv:
             day = dt.date.fromisoformat(d)
             jvlink.fetch_results(conn, day, day, jv[0], jv[1], today=today)
@@ -164,9 +169,60 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
         if r.summary["races"]:  # 結果がまだなら、次回に回す
             (reviews_dir / f"{d}.md").write_text(render_markdown(r), encoding="utf-8")
             out["reviewed"].append(d)
+    if after_races:
+        if evals_dir is not None:
+            out["evaluated"] = str(write_evaluation(conn, today, evals_dir))
+        return out
     for d in _upcoming_weekend(today):
         out["forecast"][d.isoformat()] = forecast_day(conn, fetcher, d, now, jv)
     return out
+
+
+EVAL_YEARS = 1  # 評価期間: 今日からさかのぼる年数(それ以前で学習する)
+
+
+def live_trend(conn: sqlite3.Connection) -> pd.DataFrame:
+    """回顧した日ごとの、実運用の成績(発走前に保存した予想と確定結果の照合)。"""
+    rows = []
+    for (d,) in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date").fetchall():
+        s = review_day(conn, d).summary
+        if s["races"]:
+            rows.append({"日付": d, "レース数": s["races"], "◎1着": s["honmei_wins"],
+                         "◎単勝回収率(%)": s["honmei_roi"], "期待値≧1の頭数": s["ev_bets"],
+                         "期待値≧1の回収率(%)": s["ev_roi"]})
+    return pd.DataFrame(rows)
+
+
+def write_evaluation(conn: sqlite3.Connection, today: dt.date, evals_dir: str | Path) -> Path:
+    """学習・評価(直近 EVAL_YEARS 年を評価期間にした keibaai train と同じ3行)と、実運用の推移を書く。"""
+    from .features import build_features, load_results
+    from .model import baseline_market, evaluate, format_report
+
+    evals_dir = Path(evals_dir)
+    evals_dir.mkdir(parents=True, exist_ok=True)
+    test_from = (today - dt.timedelta(days=365 * EVAL_YEARS)).isoformat()
+    df = build_features(load_results(conn))
+    r_abil, test = evaluate(df, test_from, use_market=False)
+    r_mkt, _ = evaluate(df, test_from, use_market=True)
+    trend = live_trend(conn)
+    out = [f"# {today.isoformat()} 学習・評価", "", f"評価期間: {test_from} 以降(それ以前で学習)", "",
+           "```", format_report([baseline_market(test), r_abil, r_mkt]), "```", "",
+           "## 実運用の推移(発走前に保存した予想と確定結果)", ""]
+    if trend.empty:
+        out.append("回顧できた日はまだありません。")
+    else:
+        out.append(trend.to_markdown(index=False, floatfmt=".0f") if _has_tabulate() else trend.to_string(index=False))
+    path = evals_dir / f"{today.isoformat()}.md"
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return path
+
+
+def _has_tabulate() -> bool:
+    try:
+        import tabulate  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _upcoming_weekend(today: dt.date) -> list[dt.date]:
