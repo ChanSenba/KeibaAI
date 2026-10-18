@@ -214,6 +214,7 @@ button, a, [role="button"] { touch-action: manipulation; }
 .kb-rv-name { font-weight: 700; }
 .kb-rv-pt { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kb-rv-pt b { font-size: 1.15rem; }
+.kb-rv-pt i { font-style: normal; font-size: 0.85rem; opacity: 0.7; }
 .kb-rv-pt span { margin-left: 0.4rem; font-size: 0.8rem; opacity: 0.75; }
 .kb-rv-hi b { color: var(--kb-accent); }
 .kb-rv-lo { opacity: 0.7; }

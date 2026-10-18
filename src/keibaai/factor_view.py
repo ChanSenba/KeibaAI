@@ -12,7 +12,7 @@ import pandas as pd
 
 from .features import inner_outer, same_course
 from .jvtraining import FAST_F4
-from .predict import day_frame
+from .predict import _cached, day_frame
 
 # 画面に出す区分。cols は (列名, 画面での見出し)。
 SECTIONS: list[dict] = [
@@ -429,6 +429,17 @@ def factor_values(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     return t[[c for c in keep if c in t]].sort_values(["race_id", "number"]).reset_index(drop=True)
 
 
+def factor_values_cached(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
+    """factor_values の結果を DB の隣に保存し、データが同じなら次からはそれを返す(予想と同じしくみ)。
+
+    作り直しに過去の全成績の特徴量づくりがかかるので、画面を開き直したりオッズを取り直したりしても待たずに済ませる。
+    血統・調教の取得で件数が変わったときも、作り直す。
+    """
+    counts = tuple(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                   for t in ("pedigree", "jv_training", "training_fetched"))
+    return _cached(conn, "factors", date, True, counts, lambda: factor_values(conn, date)).copy()
+
+
 def section_status(conn: sqlite3.Connection) -> list[dict]:
     """各区分のデータが揃っているか。state は ready / partial / missing。"""
     n_horses = conn.execute("SELECT COUNT(DISTINCT horse_id) FROM results").fetchone()[0]
@@ -732,7 +743,7 @@ def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame |
         sub = []
         total = points["factor_total"].get(i) if "factor_total" in points else None
         if total is not None and total == total:
-            sub.append(f"総合スコア{total:.1f}点")
+            sub.append(f"総合スコア{total:.1f}/100")
         if r["popularity"] == r["popularity"]:
             sub.append(f"{int(r['popularity'])}番人気・{r['win_odds']}倍")
         parts = []
@@ -746,8 +757,8 @@ def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame |
         elif pa == pa and pa is not None:
             parts.append(f"能力だけの勝率は{pa * 100:.1f}%(オッズ未取得)。")
         got = {MODEL_FACTORS[c]: points.loc[i, f"pt_{c}"] for c in MODEL_FACTORS if f"pt_{c}" in points}
-        strong = [f"{k}{v:.0f}点" for k, v in sorted(got.items(), key=lambda kv: -kv[1]) if v >= STRONG_PT]
-        weak = [f"{k}{v:.0f}点" for k, v in sorted(got.items(), key=lambda kv: kv[1]) if v <= WEAK_PT]
+        strong = [f"{k}{v:.0f}/10" for k, v in sorted(got.items(), key=lambda kv: -kv[1]) if v >= STRONG_PT]
+        weak = [f"{k}{v:.0f}/10" for k, v in sorted(got.items(), key=lambda kv: kv[1]) if v <= WEAK_PT]
         if strong:
             parts.append("強みは" + "・".join(strong) + "。")
         if weak:

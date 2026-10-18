@@ -273,8 +273,8 @@ def test_model_factor_points_and_commentary():
         "pace_fit": [-0.5, 0.5, 0.0], "inner_pos": [0.1, 0.5, 0.9], "sire": [None, None, None]})
     reviews = fv.race_reviews(one, pts, vals)
     assert len(reviews) == 3 and reviews[0]["name"] == "A"  # 印のない馬も載る
-    assert "人気が勝率を大きく押し上げて" in reviews[0]["summary"] and reviews[0]["sub"].startswith("総合スコア0.0点")
-    assert "強みは馬の質10点" in reviews[1]["summary"] and reviews[2]["sub"].startswith("総合スコア50.0点")
+    assert "人気が勝率を大きく押し上げて" in reviews[0]["summary"] and reviews[0]["sub"].startswith("総合スコア0.0/100")
+    assert "強みは馬の質10/10" in reviews[1]["summary"] and reviews[2]["sub"].startswith("総合スコア50.0/100")
     quality = reviews[1]["rows"][0]
     assert quality["name"] == "馬の質" and quality["pt"] == 10.0 and quality["grade"] == "高評価"
     assert "近5走は4-5-6" in quality["text"] and "格下げ" in quality["text"]
