@@ -173,47 +173,6 @@ def review_dates(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date DESC")]
 
 
-REVIEW_MARKS = ["◎", "○", "▲", "△", "☆"]
-
-
-def review_horses(conn: sqlite3.Connection, days: list[str]) -> pd.DataFrame:
-    """days の回顧(予想した馬ごとの、結果付きの表)をまとめる。結果がまだない日は入らない。"""
-    from .weekly import review_day
-
-    parts = [r.horses for r in (review_day(conn, d) for d in days) if r.summary["races"]]
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-
-
-def mark_stats(horses: pd.DataFrame) -> pd.DataFrame:
-    """印ごとの成績。着順のある馬だけを数える(取消・除外・中止は含めない)。最後に、比べるための全頭の行を付ける。
-
-    1着率・連対率(2着以内)・馬券内率(3着以内)は割合(0〜1)、単勝回収率は % で、確定オッズ(なければ予想時のオッズ)。
-    """
-    cols = ["印", "頭数", "1着率", "連対率", "馬券内率", "単勝回収率"]
-    if horses.empty:
-        return pd.DataFrame(columns=cols)
-    ran = horses[horses["finish"].notna()]
-
-    def row(label: str, g: pd.DataFrame) -> dict:
-        n = len(g)
-        win = g["finish"] == 1
-        return {"印": label, "頭数": n, "1着率": win.mean(), "連対率": (g["finish"] <= 2).mean(),
-                "馬券内率": (g["finish"] <= 3).mean(), "単勝回収率": (win * g["odds"].fillna(0)).sum() / n * 100}
-
-    rows = [row(m, ran[ran["mark"] == m]) for m in REVIEW_MARKS if (ran["mark"] == m).any()]
-    rows.append(row("全頭(比べる用)", ran))
-    return pd.DataFrame(rows, columns=cols)
-
-
-def review_races_info(conn: sqlite3.Connection, race_ids: list[str]) -> dict[str, dict]:
-    """回顧のレース見出し用に、結果の DB から条件(コース・距離・馬場など)を引く。{race_id: 行}。"""
-    if not race_ids:
-        return {}
-    q = ",".join("?" * len(race_ids))
-    df = pd.read_sql_query(f"SELECT * FROM races WHERE race_id IN ({q})", conn, params=race_ids)
-    return {r["race_id"]: r for r in df.to_dict("records")}
-
-
 def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_min: float,
                  max_odds: float | None, stake: int, blend: bool = False):
     """(レース数, まとめの表, ルールごとの精算済み買い目)。学習は test_from より前だけを使う。"""
@@ -329,20 +288,13 @@ def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection
     return out
 
 
-def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
-                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0,
-                 marked: dict[int, str] | None = None, axis: bool = False):
-    """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
+def mixed_probs(prediction: pd.DataFrame, race_id: str, odds: dict, blend) -> pd.DataFrame:
+    """そのレースの各馬の勝率(p_win)。オッズ込みのモデルの勝率と、いま取ったオッズの確率を blend の重みで混ぜたもの。
 
-    勝率は、オッズ込みのモデルの勝率と、いま取ったオッズの確率を blend の重みで混ぜたもの。
     過去7年の検証で、能力のモデルと混ぜるより当たりやすかった(LogLoss 0.2053 → 0.2048。同じ買い方の回収率は
     馬連 86.7% → 90.4%、ワイド 86.8% → 90.0%)。能力のモデルは、混ぜても重みがほぼ 0 になり、オッズに何も足せていなかった。
     出馬表を取ったときにオッズがなくてオッズ込みの勝率が出せていない場合は、いまのオッズの確率だけを使う。
-
-    marked({馬番: 印})を渡すと、印をつけた馬だけでできる買い目に絞る(勝率は出走馬全体で出したまま、変わるのは候補だけ)。
-    axis なら、◎の馬(複数なら若い馬番)を必ず含む買い目だけにする。
     """
-    from .betting import make_plan
     from .blend import Blend, apply_blend
 
     cols = ["race_id", "number", "p_win_ability"] + (["p_win_market"] if "p_win_market" in prediction.columns else [])
@@ -356,21 +308,45 @@ def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bank
         blend = Blend(0.0, 1.0, blend.loglik, blend.baseline_loglik)
     if one["win_odds"].notna().sum() < 3:
         raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
-    only = must = None
-    if marked is not None:
-        if not marked:
-            raise ValueError("印をつけた馬がいません。出馬表で、買いたい馬に印をつけてください")
-        only = frozenset(int(n) for n in marked)
-        honmei = sorted(int(n) for n, m in marked.items() if m == "◎")
-        must = honmei[0] if axis and honmei else None
-    mixed = apply_blend(one, blend)
+    return apply_blend(one, blend)
+
+
+def market_probs(odds: dict) -> pd.DataFrame:
+    """単勝オッズだけから出した各馬の勝率(オッズの逆数を合計1にしたもの)。予想がないときに使う。"""
+    win = {k[0]: v for k, v in odds.get("単勝", {}).items() if v and v > 0}
+    if len(win) < 3:
+        raise ValueError("単勝オッズのある馬が3頭に満たないため、買い方を出せません(発売前の可能性があります)")
+    t = pd.DataFrame({"number": list(win), "win_odds": list(win.values())}).sort_values("number")
+    t["p_win"] = (1 / t["win_odds"]) / (1 / t["win_odds"]).sum()
+    return t.reset_index(drop=True)
+
+
+def bet_plan_for(prediction: pd.DataFrame, race_id: str, odds: dict, blend, bankroll: int = 100_000,
+                 cap: int = 10_000, kelly_scale: float = 0.5, equal_stake: int = 0):
+    """予想(predict_table の結果)と全券種のオッズから、そのレースの買い方を出す。(買い方, 混ぜた勝率の表) を返す。
+
+    勝率は mixed_probs のもの。
+    """
+    from .betting import make_plan
+
+    mixed = mixed_probs(prediction, race_id, odds, blend)
     plan = make_plan([int(n) for n in mixed["number"]], mixed["p_win"].to_numpy(), odds, bankroll, cap, kelly_scale,
-                     equal_stake=equal_stake, only=only, must=must)
-    if only is not None and not plan.bets:
-        shown = " ".join(f"{m}{n}" for n, m in sorted(marked.items()))
-        plan.note = (f"見送り: 印をつけた馬({shown}{'・◎軸' if must is not None else ''})の買い目に、"
-                     f"期待値が1を超えて的中確率の十分あるものがありません。印を増やすか、変えてみてください")
+                     equal_stake=equal_stake)
     return plan, mixed
+
+
+def load_user_marks(conn: sqlite3.Connection, race_id: str) -> dict[int, str]:
+    """買い方ページで保存した、そのレースのユーザーの印 {馬番: 印}。"""
+    return {int(n): m for n, m in conn.execute("SELECT number, mark FROM user_marks WHERE race_id = ?", (race_id,))}
+
+
+def save_user_marks(conn: sqlite3.Connection, race_id: str, marks: dict[int, str], now: dt.datetime | None = None) -> None:
+    """そのレースのユーザーの印を置き換える。空の印の馬は保存しない。"""
+    stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    with conn:
+        conn.execute("DELETE FROM user_marks WHERE race_id = ?", (race_id,))
+        conn.executemany("INSERT INTO user_marks (race_id, number, mark, updated_at) VALUES (?,?,?,?)",
+                         [(race_id, int(n), m, stamp) for n, m in marks.items() if m])
 
 
 def blend_for(conn: sqlite3.Connection, date: dt.date):

@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS predictions (
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL,
     PRIMARY KEY (race_id, number)
 );
+-- 買い方ページでユーザーが付けた印(レースの馬ごと)。印を外した馬は行を消す
+CREATE TABLE IF NOT EXISTS user_marks (
+    race_id TEXT NOT NULL, number INTEGER NOT NULL, mark TEXT NOT NULL, updated_at TEXT,
+    PRIMARY KEY (race_id, number)
+);
 -- 血統(父・母・母の父)。馬ごとに1回取得する
 CREATE TABLE IF NOT EXISTS pedigree (
     horse_id TEXT PRIMARY KEY,

@@ -168,10 +168,6 @@ h1 { font-size: var(--kb-h1) !important; }
   font-variant-numeric: tabular-nums;
 }
 .kb-mark b { color: var(--kb-accent); }
-.kb-mark small { color: var(--kb-muted); }
-/* 回顧: 3着以内に入った馬 */
-.kb-mark-hit { border-color: var(--kb-accent); background: var(--kb-accent-subtle); }
-.kb-mark-hit small { color: inherit; font-weight: 600; }
 
 /* ---- 押したときの反応とフォーカス表示 ---- */
 :is(.stButton, .stPageLink) :is(button, a):active,

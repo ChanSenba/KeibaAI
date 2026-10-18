@@ -176,36 +176,3 @@ def test_course_text_names_turn_inner_outer_and_rail():
     assert gui.course_text(s(direction="右", course="内2周", rail="C")) == "芝・右回り・内回り2周・Cコース 1600m"
     out = gui.race_head_html(s(round=11, direction="右", course="外", rail="B", ground="良"))
     assert "京都11R" in out and "芝・右回り・外回り・Bコース 1600m ・ 良" in out
-
-def test_mark_stats_rates_per_mark_and_overall():
-    import pandas as pd
-
-    h = pd.DataFrame({
-        "mark": ["◎", "◎", "◎", "○", "○", "", "", ""],
-        "finish": [1, 2, 5, 3, 4, 6, float("nan"), 7],  # NaN は取消・中止などで数えない
-        "odds": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-    })
-    t = gui.mark_stats(h).set_index("印")
-    a = t.loc["◎"]
-    assert a["頭数"] == 3 and a["1着率"] == 1 / 3 and a["連対率"] == 2 / 3 and a["馬券内率"] == 2 / 3
-    assert abs(a["単勝回収率"] - 2.0 / 3 * 100) < 1e-9  # 1着の2.0倍だけ戻る
-    o = t.loc["○"]
-    assert o["頭数"] == 2 and o["1着率"] == 0 and o["馬券内率"] == 0.5 and o["単勝回収率"] == 0
-    assert "△" not in t.index  # その印の馬がいなければ行を出さない
-    assert t.loc["全頭(比べる用)", "頭数"] == 7 and t.loc["全頭(比べる用)", "馬券内率"] == 3 / 7
-    assert list(gui.mark_stats(pd.DataFrame()).columns) == ["印", "頭数", "1着率", "連対率", "馬券内率", "単勝回収率"]
-
-
-def test_review_horses_combines_days_with_results():
-    from test_weekly import add_result, pred_table
-    from keibaai import db, weekly
-
-    conn = db.connect(":memory:")
-    weekly.save_predictions(conn, pred_table("202505010101", "2025-03-01"), dt.datetime(2025, 2, 28, 20))
-    weekly.save_predictions(conn, pred_table("202505010201", "2025-03-08"), dt.datetime(2025, 3, 7, 20))
-    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])  # 3/8 はまだ結果がない
-    got = gui.review_horses(conn, ["2025-03-08", "2025-03-01"])
-    assert set(got["race_id"]) == {"202505010101"} and len(got) == 5
-    assert gui.review_horses(conn, ["2025-03-08"]).empty
-    info = gui.review_races_info(conn, ["202505010101", "nope"])
-    assert info["202505010101"]["distance"] == 1600 and "nope" not in info

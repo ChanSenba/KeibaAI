@@ -109,12 +109,8 @@ SMALL_SHARE, SMALL_EV_MIN = 0.3, 1.05
 
 def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
                ev_min: float = 1.0, g2: float = 1.0, g3: float = 1.0,
-               min_hit: float = 0.0, *, only: frozenset[int] | None = None,
-               must: int | None = None) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
+               min_hit: float = 0.0) -> tuple[list[Bet], np.ndarray, np.ndarray, np.ndarray]:
     """オッズのある全買い目の期待値を出し、ev_min 以上で的中確率が min_hit 以上のものを候補にして返す。
-
-    only を渡すと、その馬番だけでできる買い目に絞る。must を渡すと、その馬番を含む買い目だけにする(軸)。
-    確率は出走馬全体で計算したままで、絞るのは候補だけ。
 
     戻り値: (候補, 並び(m,3), 並びの確率(m,), 候補×並びの的中表(候補数, m))。
     numbers は馬番、p はその勝率(合計1)。odds[券種][馬番の組] = 倍率。
@@ -126,8 +122,6 @@ def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int
     for kind in KINDS:
         for key, o in odds.get(kind, {}).items():
             if not o or o <= 0 or any(k not in idx for k in key):
-                continue
-            if (only is not None and any(k not in only for k in key)) or (must is not None and must not in key):
                 continue
             combo = tuple(idx[k] for k in key)
             h = hits(order, kind, combo, n)
@@ -177,8 +171,7 @@ class Plan:
 def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
               bankroll: int = 100_000, cap: int = 10_000, kelly_scale: float = 0.5, ev_min: float = 1.0,
               max_candidates: int = 300, g2: float = GAMMA_2ND, g3: float = GAMMA_3RD,
-              min_hit: float = MIN_HIT, equal_stake: int = 0, *, only: frozenset[int] | None = None,
-              must: int | None = None) -> Plan:
+              min_hit: float = MIN_HIT, equal_stake: int = 0) -> Plan:
     """1レースの買い方。bankroll は使える資金、cap はこのレースに使う上限、kelly_scale は配分を抑える割合。
 
     equal_stake が正のときは配分をせず、候補を期待値の高い順に、1点 equal_stake 円ずつ上限まで買う。
@@ -186,9 +179,9 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
     cap = min(cap, bankroll)
     p = np.asarray(p, dtype=float)
     p = p / p.sum()
-    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3, min_hit, only=only, must=must)
+    bets, order, prob, hit = candidates(numbers, p, odds, ev_min, g2, g3, min_hit)
     if not bets:
-        all_bets, *_ = candidates(numbers, p, odds, 0.0, g2, g3, only=only, must=must)
+        all_bets, *_ = candidates(numbers, p, odds, 0.0, g2, g3)
         top = sorted(all_bets, key=lambda b: -b.ev)[:5]
         return Plan([], note=f"見送り: 期待値が1を超え、的中確率が{min_hit:.0%}以上の買い目がありません", top_ev=top)
     keep = np.argsort([-b.ev for b in bets])[:max_candidates]
@@ -224,3 +217,133 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
     exp_ret = sum(b.stake * b.ev for b in final) / total
     return Plan(final, total=total, hit_prob=float(hit_any), expected_return=float(exp_ret),
                 expected_profit=float(sum(b.stake * (b.ev - 1) for b in final)), worst=-total, note=note)
+
+
+# ---------------------------------------------------------------- 印からの買い方
+MARKS = ["◎", "○", "▲", "△", "☆"]
+
+
+def mark_combos(marks: dict[int, str]) -> dict[str, list[tuple[int, ...]]]:
+    """ユーザーの印から、券種ごとの買い目(馬番の組)を組む。◎が軸。
+
+    単勝・複勝は ◎。馬連・ワイドは ◎ から印の馬への流し、馬単は ◎ → 印の馬。
+    三連複は ◎ − ○▲ − 印の馬、三連単は ◎ → ○▲ → 印の馬のフォーメーション(○▲がなければ印の馬どうし)。
+    """
+    honmei = [n for n, m in marks.items() if m == "◎"]
+    if len(honmei) != 1:
+        raise ValueError("◎ を1頭だけ付けてください")
+    a = honmei[0]
+    others = sorted((n for n, m in marks.items() if m in MARKS[1:]), key=lambda n: (MARKS.index(marks[n]), n))
+    second = [n for n in others if marks[n] in ("○", "▲")] or others
+    out: dict[str, list[tuple[int, ...]]] = {"単勝": [(a,)], "複勝": [(a,)]}
+    if others:
+        out["馬連"] = [tuple(sorted((a, x))) for x in others]
+        out["ワイド"] = list(out["馬連"])
+        out["馬単"] = [(a, x) for x in others]
+    if len(others) >= 2:
+        out["三連複"] = sorted({tuple(sorted((a, x, y))) for x in second for y in others if y != x})
+        out["三連単"] = [(a, x, y) for x in second for y in others if y != x]
+    return out
+
+
+@dataclass
+class KindSummary:
+    """印から組んだ、1つの券種の買い目のまとめ(どれが当たっても同じ払戻になるように買ったとき)。"""
+    kind: str
+    bets: list[Bet]  # オッズのある買い目(トリガミを外すときは外したあと)
+    hit: np.ndarray  # 買い目 × 並びの的中表
+    hit_prob: float  # どれか1つでも当たる確率
+    synthetic: float  # 合成オッズ = 1 / Σ(1/オッズ)。1 未満なら、当たっても払戻が買った金額に届かない(トリガミ)
+    expected_return: float  # 期待回収率 = 合成オッズ × 的中確率の合計
+    dropped: int = 0  # トリガミを避けるために外した点数
+
+
+def mark_summaries(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int, ...], float]],
+                   marks: dict[int, str], no_torigami: bool = True, g2: float = GAMMA_2ND,
+                   g3: float = GAMMA_3RD) -> tuple[list[KindSummary], np.ndarray]:
+    """印の買い目を券種ごとにまとめる。期待回収率の高い順。(まとめ, 並びの確率) を返す。
+
+    numbers は出走する全馬の馬番、p はその勝率。no_torigami なら、合成オッズが1以上になるまでオッズの低い買い目を外す。
+    """
+    p = np.asarray(p, dtype=float)
+    p = p / p.sum()
+    n = len(numbers)
+    order, prob = harville_outcomes(p, g2, g3)
+    idx = {num: i for i, num in enumerate(numbers)}
+    out = []
+    for kind, combos in mark_combos(marks).items():
+        if kind == "複勝" and place_slots(n) == 0:
+            continue
+        table = odds.get(kind, {})
+        bets, rows = [], []
+        for key in combos:
+            o = table.get(key)
+            if not o or o <= 0 or any(k not in idx for k in key):
+                continue
+            h = hits(order, kind, tuple(idx[k] for k in key), n)
+            pr = float(prob[h].sum())
+            bets.append(Bet(kind, key, float(o), pr, pr * o))
+            rows.append(h)
+        if not bets:
+            continue
+        keep = sorted(range(len(bets)), key=lambda i: -bets[i].odds)
+        dropped = 0
+        while no_torigami and len(keep) > 1 and sum(1 / bets[i].odds for i in keep) > 1:
+            keep.pop()  # いちばんオッズの低い買い目を外す
+            dropped += 1
+        keep.sort(key=lambda i: -bets[i].prob)
+        bs, hit = [bets[i] for i in keep], np.array([rows[i] for i in keep], dtype=bool)
+        syn = 1 / sum(1 / b.odds for b in bs)
+        out.append(KindSummary(kind, bs, hit, float(prob[hit.any(axis=0)].sum()), syn,
+                               syn * sum(b.prob for b in bs), dropped))
+    out.sort(key=lambda s: -s.expected_return)
+    return out, prob
+
+
+# おすすめの券種は、どれか当たる確率がこれ以上のものから選ぶ(三連単の数点のような、まず当たらない券種を推さない)
+RECOMMEND_MIN_HIT = 0.10
+
+
+def recommend(sums: list[KindSummary]) -> int | None:
+    """おすすめの券種の位置。的中確率が RECOMMEND_MIN_HIT 以上の中で期待回収率がいちばん高いもの(なければ全体で)。"""
+    if not sums:
+        return None
+    ok = [i for i, s in enumerate(sums) if s.hit_prob >= RECOMMEND_MIN_HIT] or list(range(len(sums)))
+    return max(ok, key=lambda i: sums[i].expected_return)
+
+
+def equal_payout_stakes(odds: list[float], budget: int) -> list[int]:
+    """どれが当たっても払戻がなるべく同じになる、100円単位の金額。まず全部に100円、残りは払戻のいちばん少ない買い目に足す。"""
+    stakes = [UNIT] * len(odds)
+    total = UNIT * len(odds)
+    while total + UNIT <= budget:
+        i = min(range(len(odds)), key=lambda j: stakes[j] * odds[j])
+        stakes[i] += UNIT
+        total += UNIT
+    return stakes
+
+
+def equal_payout_plan(chosen: list[KindSummary], prob: np.ndarray, budget: int) -> Plan:
+    """選んだ券種を、予算を券種の数で等分し、券種ごとに、どれが当たっても同じくらいの払戻になるように買う。"""
+    if not chosen:
+        return Plan([], note="券種を選んでください")
+    share = budget // len(chosen) // UNIT * UNIT
+    bets, rows, notes = [], [], []
+    for s in chosen:
+        k = min(len(s.bets), share // UNIT)
+        if k == 0:
+            notes.append(f"{s.kind}は予算が足りず買えません")
+            continue
+        if k < len(s.bets):  # 予算が足りないときは、当たりやすい買い目から(bets は的中確率の高い順)
+            notes.append(f"{s.kind}は予算が足りず、当たりやすい{k}点だけにしています")
+        stakes = equal_payout_stakes([b.odds for b in s.bets[:k]], share)
+        for b, st, h in zip(s.bets[:k], stakes, s.hit[:k]):
+            bets.append(Bet(b.kind, b.numbers, b.odds, b.prob, b.ev, st))
+            rows.append(h)
+    if not bets:
+        return Plan([], note="予算が足りません。予算を増やすか、券種を減らしてください")
+    total = sum(b.stake for b in bets)
+    hit_any = float(prob[np.array(rows).any(axis=0)].sum())
+    exp = sum(b.stake * b.ev for b in bets)
+    return Plan(bets, total=total, hit_prob=hit_any, expected_return=exp / total, expected_profit=exp - total,
+                worst=-total, note="。".join(notes))

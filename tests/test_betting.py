@@ -138,16 +138,3 @@ def test_small_bankroll_still_gets_100_yen_bets():
     plan = bt.make_plan(NUMS, P, odds, bankroll=1000, cap=10_000)
     assert plan.bets and all(b.stake >= 100 for b in plan.bets) and plan.total <= 300  # 資金の3割まで
     assert plan.note
-
-
-def test_candidates_only_and_must_restrict_the_combos_not_the_probabilities():
-    odds = {"単勝": {(1,): 3.0, (2,): 3.0}, "馬連": {(1, 2): 9.0, (1, 3): 9.0, (3, 4): 9.0}}
-    base, *_ = bt.candidates(NUMS, P, odds, ev_min=0.0)
-    only12, *_ = bt.candidates(NUMS, P, odds, ev_min=0.0, only=frozenset({1, 2}))
-    assert {(c.kind, c.numbers) for c in only12} == {("単勝", (1,)), ("単勝", (2,)), ("馬連", (1, 2))}
-    axis1, *_ = bt.candidates(NUMS, P, odds, ev_min=0.0, must=1)
-    assert {(c.kind, c.numbers) for c in axis1} == {("単勝", (1,)), ("馬連", (1, 2)), ("馬連", (1, 3))}
-    same = {(c.kind, c.numbers): c.prob for c in base}
-    assert all(np.isclose(c.prob, same[(c.kind, c.numbers)]) for c in only12 + axis1)  # 確率は全頭で出したまま
-    plan = bt.make_plan(NUMS, P, {"単勝": {(1,): 2.0, (2,): 3.0}}, only=frozenset({1}))
-    assert plan.bets == [] and "見送り" in plan.note

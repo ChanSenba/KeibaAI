@@ -931,66 +931,182 @@ def page_past_races() -> None:
 # ---------------------------------------------------------------- 買い方(1レース)
 ALLOCATIONS = ["ケリー基準で配分", "配分なし(同額)"]
 KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全部(攻めすぎ注意)": 1.0}
-
-
-USER_MARKS = ["◎", "○", "▲", "△", "☆"]
-
-
-def ai_marks(table, race_id: str) -> dict[int, str]:
-    """予想がつけた印({馬番: 印})。"""
-    one = table[(table["race_id"] == race_id) & table["mark"].isin(USER_MARKS)]
-    return {int(n): m for n, m in zip(one["number"], one["mark"])}
-
-
-def race_marks(table, race_id: str) -> dict[int, str]:
-    """そのレースの印。自分でつけたものがあればそれ、なければ予想がつけた印。"""
-    mine = st.session_state.get("user_marks", {}).get(race_id)
-    return dict(mine) if mine is not None else ai_marks(table, race_id)
-
-
-def marks_text(marks: dict[int, str]) -> str:
-    return " ".join(f"{m}{n}" for m, n in sorted(((m, n) for n, m in marks.items()),
-                                                  key=lambda x: (MARK_SORT.get(x[0], 9), x[1]))) or "なし"
-
-
-def mark_editor(conn, race_id: str, table) -> dict[int, str]:
-    """出馬表に自分の印をつける表。最初は予想がつけた印が入っていて、直せる。つけた印を返す。"""
-    one = gui.race_entries(conn, race_id, table)
-    marks = race_marks(table, race_id)
-    ver = st.session_state.setdefault("mark_ver", {}).get(race_id, 0)
-    p_col = "p_win_market" if one["p_win_market"].notna().any() else "p_win_ability"
-    df = pd.DataFrame({
-        "your": [marks.get(int(n), "") for n in one["number"]], "number": one["number"], "horse_name": one["horse_name"],
-        "win_odds": one["win_odds"], "popularity": one["popularity"], "p": one[p_col], "ai": one["mark"].fillna("")})
-    edited = st.data_editor(
-        df, hide_index=True, width="stretch", key=f"marks_{race_id}_{ver}",
-        disabled=[c for c in df if c != "your"],
-        column_config={
-            "your": st.column_config.SelectboxColumn("あなたの印", options=["", *USER_MARKS], required=True, width="small",
-                                                  help="買いたい馬に印をつけます。空にすると、その馬は買い目に使いません"),
-            "number": st.column_config.NumberColumn("馬番", format="%d"), "horse_name": "馬名",
-            "win_odds": st.column_config.NumberColumn("単勝", format="%.1f", help="出馬表を取ったときのオッズ。買い方を出すときに取り直します"),
-            "popularity": st.column_config.NumberColumn("人気", format="%d"),
-            "p": st.column_config.NumberColumn("勝率(予想)", format="percent",
-                                               help="予想の勝率。オッズ込みの勝率があればそれ、なければ能力のみ"),
-            "ai": st.column_config.TextColumn("予想の印", width="small", help="予想がつけた印。参考のために残しています")})
-    new = {int(n): m for n, m in zip(edited["number"], edited["your"]) if m in USER_MARKS}
-    st.session_state.setdefault("user_marks", {})[race_id] = new
-    if new != ai_marks(table, race_id) and st.button("予想の印に戻す", icon=":material/undo:", key=f"marks_reset_{race_id}"):
-        st.session_state["user_marks"].pop(race_id, None)
-        st.session_state["mark_ver"][race_id] = ver + 1
-        st.rerun()
-    return new
+BET_MODES = ["自分の印から", "AIにおまかせ"]
 
 
 def page_bets() -> None:
     header("Bets", "買い方",
-           "出馬表に印をつけると、その馬たちで作れる買い目から、最新のオッズで期待値の高いものと金額の配分を出します。"
-           "1レースでも、その日の全レースでも。")
+           "出馬表に自分で印を付けると、最新のオッズから、おすすめの券種・買い目と資金の配分を出します。"
+           "AI の予想だけで期待値の高い買い目を出すこともできます。")
     conn = connection()
     today = dt.date.today()
     pred = st.session_state.get("prediction")
     date = st.date_input("対象日", pred[0] if pred else gui.next_race_day(today), format="YYYY/MM/DD", key="bets_date")
+    mode = st.segmented_control("出し方", BET_MODES, default=BET_MODES[0], key="bets_mode", width="stretch",
+                                help="自分の印から: 付けた印で買い目を組み、資金の配分を出す。"
+                                     "AIにおまかせ: 予想の勝率から、全券種で期待値の高い買い目を選ぶ") or BET_MODES[0]
+    if mode == BET_MODES[0]:
+        bets_from_marks(conn, date, pred[1] if pred and pred[0] == date else None)
+    else:
+        bets_auto(conn, date, pred)
+
+
+def bets_from_marks(conn, date: dt.date, table) -> None:
+    """出馬表に付けた印から、券種ごとの買い目と配分を出す。オッズはボタンを押したときに最新のものを取る。"""
+    races = gui.day_races(conn, date.isoformat())
+    if races.empty:
+        with st.container(border=True):
+            st.markdown("#### この日の出馬表がありません")
+            st.caption("「予想」ページで、この日の出馬表を取得してから戻ってください。")
+        return
+    race, box = race_picker(races, key=f"marks_{date}")
+    rid = race["race_id"]
+    with box:
+        race_head(race)
+        marks = mark_editor(conn, rid, table)
+    if list(marks.values()).count("◎") != 1:
+        st.info("◎ を1頭付けると、買い目を出せます。○▲は2着候補、△☆は3着までの相手です(△☆は何頭でも)。",
+                icon=":material/edit:")
+        return
+
+    st.subheader("最新オッズで計算", anchor=False)
+    with st.container(border=True):
+        budget = st.number_input("このレースの予算(円)", 100, 1_000_000, 3_000, 100, key="marks_budget",
+                                 help=TIPS["mark_alloc"])
+        store = st.session_state.setdefault("mark_odds", {})
+        got = store.get(rid)
+        label = "最新オッズを取り直して計算" if got else "最新オッズを取得して計算"
+        if st.button(label, type="primary", icon=":material/refresh:"):
+            try:
+                with st.spinner("最新のオッズを取得しています(全券種。30秒ほど)"):
+                    odds = gui.fetch_bet_odds(Fetcher(cache_dir=st.session_state["cache_dir"]), rid, conn=conn)
+                if table is not None and rid in set(table["race_id"]):
+                    blends = st.session_state.setdefault("blends", {})
+                    if date not in blends:
+                        with st.spinner("モデルとオッズの混ぜ方を決めています(初回だけ数分かかります)"):
+                            blends[date] = gui.blend_for(conn, date)
+                store[rid] = got = (odds, dt.datetime.now())
+            except (ValueError, RuntimeError) as e:
+                st.error(str(e))
+        if not got:
+            st.caption(":material/info: ボタンを押すと、このレースの全券種のオッズを取ってから計算します。"
+                       "PC では JRA-VAN の速報オッズ、それ以外では netkeiba から取ります。")
+            return
+        odds, at = got
+        blend = st.session_state.get("blends", {}).get(date)
+        try:
+            if table is not None and blend is not None and rid in set(table["race_id"]):
+                probs = gui.mixed_probs(table, rid, odds, blend)
+                source = "予想の勝率(オッズ込みのモデル)と、いまのオッズの確率を混ぜた勝率"
+            else:
+                probs = gui.market_probs(odds)
+                source = "単勝オッズから出した勝率(この日を予想すると、モデルの勝率も混ぜます)"
+            sums, prob = betting.mark_summaries([int(n) for n in probs["number"]], probs["p_win"].to_numpy(), odds,
+                                                marks)
+        except ValueError as e:
+            st.warning(str(e), icon=":material/block:")
+            return
+        st.caption(f":material/schedule: オッズは {at:%H:%M} に取得しました。確率は{source}です。")
+    if not sums:
+        st.warning("印の買い目にオッズがありません(発売前の可能性があります)。", icon=":material/block:")
+        return
+
+    st.subheader("券種ごとの比較", anchor=False, help=TIPS["mark_kinds"])
+    best = betting.recommend(sums)
+    kinds = pd.DataFrame([{"おすすめ": "★" if i == best else "", "券種": s.kind, "点数": len(s.bets),
+                           "的中確率": s.hit_prob, "合成オッズ": s.synthetic, "期待回収率": s.expected_return,
+                           "外した点数": s.dropped} for i, s in enumerate(sums)])
+    st.dataframe(kinds, hide_index=True, width="stretch", column_config=KIND_COLUMNS)
+    chosen_kinds = st.multiselect("買う券種", [s.kind for s in sums], default=[sums[best].kind], key=f"marks_kinds_{rid}",
+                                  help="はじめはおすすめの券種(★)を選んでいます")
+    chosen = [s for s in sums if s.kind in chosen_kinds]
+    if not chosen:
+        return
+    plan = betting.equal_payout_plan(chosen, prob, budget)
+    st.subheader("買い目と金額", anchor=False)
+    show_mark_plan(plan)
+
+
+NO_MARK = "－"  # 印なし(空欄だと表に None と出るため)
+
+
+def mark_editor(conn, race_id: str, table) -> dict[int, str]:
+    """出馬表の印の欄を編集する。変えた印はすぐ DB に保存する。{馬番: 印} を返す。"""
+    one = gui.race_entries(conn, race_id, table)
+    saved = gui.load_user_marks(conn, race_id)
+    ai = {int(n): m for n, m in zip(one["number"], one["mark"]) if m} if "mark" in one else {}
+    df = pd.DataFrame({"mark": [saved.get(int(n), NO_MARK) for n in one["number"]]})
+    df = pd.concat([df, one[[c for c in ["number", "bracket", "horse_name", "jockey", "win_odds", "popularity"]
+                             if c in one]].reset_index(drop=True)], axis=1)
+    if ai:
+        df["ai_mark"] = [ai.get(int(n), "") for n in one["number"]]
+    key = f"mark_edit_{race_id}"
+    c1, c2, _ = st.columns([1, 1, 2])
+    if c1.button("AI の印を入れる", icon=":material/content_copy:", disabled=not ai, key=f"ai_{race_id}",
+                 help="「予想」ページで予想した印を、自分の印としてそのまま入れます" if ai else "この日を予想すると使えます"):
+        gui.save_user_marks(conn, race_id, ai)
+        st.session_state.pop(key, None)
+        st.rerun()
+    if c2.button("印を消す", icon=":material/backspace:", disabled=not saved, key=f"clear_{race_id}"):
+        gui.save_user_marks(conn, race_id, {})
+        st.session_state.pop(key, None)
+        st.rerun()
+    edited = st.data_editor(
+        df.style.map(bracket_color, subset=["bracket"]) if "bracket" in df else df, key=key, hide_index=True,
+        width="stretch", height=35 * (len(df) + 1) + 3, disabled=[c for c in df.columns if c != "mark"],
+        column_config={
+            "mark": st.column_config.SelectboxColumn("印", options=[NO_MARK, *betting.MARKS], width="small",
+                                                     required=True, help=TIPS["user_marks"]),
+            **{k: v for k, v in ENTRY_COLUMNS.items() if k in df},
+            "ai_mark": st.column_config.TextColumn("AIの印", width="small", help="「予想」ページの印(参考)")})
+    marks = {int(n): m for n, m in zip(edited["number"], edited["mark"]) if m in betting.MARKS}
+    if marks != saved:
+        gui.save_user_marks(conn, race_id, marks)
+    if marks:
+        order = sorted(marks.items(), key=lambda x: (betting.MARKS.index(x[1]), x[0]))
+        names = dict(zip(one["number"].astype(int), one["horse_name"]))
+        st.html('<div class="kb-marks">' + "".join(
+            f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(names.get(n, "")))}</span>' for n, m in order) + "</div>")
+    return marks
+
+
+def show_mark_plan(plan) -> None:
+    if not plan.bets:
+        st.warning(plan.note, icon=":material/block:")
+        if plan.top_ev:
+            st.caption("参考: 期待値の高かった印の買い目")
+            st.dataframe(gui.plan_table(plan.top_ev).drop(columns=["金額", "的中時の払戻"]), hide_index=True,
+                         width="stretch", column_config=BET_COLUMNS)
+        return
+    pays = [b.stake * b.odds for b in plan.bets]
+    pct = lambda x: f"{x:.0%}"
+    stats = [("合計金額", f"{plan.total:,}円"), ("どれか的中", pct(plan.hit_prob)),
+             ("当たったときの払戻", f"{min(pays):,.0f}〜{max(pays):,.0f}円"), ("期待回収率", pct(plan.expected_return))]
+    st.html('<div class="kb-stats">' + "".join(
+        f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
+    if plan.note:
+        st.caption(f":material/info: {plan.note}")
+    if min(pays) < plan.total:
+        st.caption(":material/warning: 払戻が合計金額に届かない買い目があります(当たってもトリガミ)。")
+    st.dataframe(gui.plan_table(plan.bets), hide_index=True, width="stretch", column_config=BET_COLUMNS)
+
+
+KIND_COLUMNS = {
+    "おすすめ": st.column_config.TextColumn("", width="small",
+                                         help="的中確率10%以上の券種のうち、期待回収率がいちばん高いもの"),
+    "券種": st.column_config.TextColumn("券種"),
+    "点数": st.column_config.NumberColumn("点数", format="%d", help="印から組んだ買い目のうち、オッズのある点数"),
+    "的中確率": st.column_config.NumberColumn("的中確率", format="percent", help="どれか1つでも当たる確率"),
+    "合成オッズ": st.column_config.NumberColumn("合成オッズ", format="%.2f",
+                                           help="どれが当たっても同じ払戻になるように買ったときの、払戻 ÷ 合計金額。1未満はトリガミ"),
+    "期待回収率": st.column_config.NumberColumn("期待回収率", format="percent",
+                                           help="合成オッズ × 的中確率。確率が正しいときの、払戻の期待値 ÷ 合計金額"),
+    "外した点数": st.column_config.NumberColumn("外した点数", format="%d", help="トリガミを避けるために外した、オッズの低い買い目の数"),
+}
+
+
+def bets_auto(conn, date: dt.date, pred) -> None:
+    """AI の予想の勝率から、全券種で期待値の高い買い目を選ぶ(これまでの買い方)。"""
     if pred is None or pred[0] != date:
         info = gui.entries_summary(conn, date.isoformat())
         with st.container(border=True):
@@ -1019,16 +1135,6 @@ def page_bets() -> None:
         race, box = race_picker(races, key=f"bets_{date}")
         with box:
             race_head(race)
-            mark_editor(conn, race["race_id"], table)
-    else:
-        st.caption(":material/info: 全レースのときは、予想の印を使います。レースごとに印を直したいときは「1レースだけ」にして直すと、"
-                   "直した印がここでも使われます。")
-    c0, c00 = st.columns(2)
-    restrict = c0.toggle("印をつけた馬だけで買い目を作る", value=True, key="bets_restrict",
-                         help="入れると、印をつけた馬だけでできる買い目から選びます。勝率は出走馬全体で出したままで、変わるのは候補だけです。"
-                              "切ると、印に関係なく全頭の買い目から選びます")
-    axis = c00.toggle("◎を軸にする", key="bets_axis", disabled=not restrict,
-                      help="◎の馬を必ず含む買い目だけにします。◎が複数あるときは、いちばん若い馬番の◎が軸です")
     c1, c2, c3 = st.columns(3)
     mode = st.segmented_control("資金配分", ALLOCATIONS, default=ALLOCATIONS[0], key="bets_alloc", width="stretch",
                                 help="ケリー基準は、期待値の高い買い目ほど多く張る配分。配分なしは、期待値の高い順に、どの買い目も同じ金額ずつ買う") or ALLOCATIONS[0]
@@ -1046,49 +1152,33 @@ def page_bets() -> None:
         kelly = KELLY_CHOICES[c3.selectbox("賭け方の強さ", list(KELLY_CHOICES),
                                            help="資金が長い目で最も増える配分(ケリー基準)を、どれだけ抑えるか")]
     n = 1 if single else len(races)
-    st.caption(f":material/info: 押した時点の最新のオッズを取り直して計算します。1レースごとに全券種のオッズを取るので、"
-               f"6回アクセスします(30秒ほど)。{'' if single else f'全{n}レースで約{n * 30 // 60 + 1}分かかります。'}"
-               "初回は、混ぜ方を決めるのに数分かかります。")
-    if st.button("最新のオッズで買い方を出す" if single else "最新のオッズで全レースの買い方を出す", type="primary",
-                 icon=":material/calculate:"):
+    st.caption(f":material/info: 1レースごとに全券種のオッズを取るので、6回アクセスします(30秒ほど)。"
+               f"{'' if single else f'全{n}レースで約{n * 30 // 60 + 1}分かかります。'}初回は、混ぜ方を決めるのに数分かかります。")
+    if st.button("買い方を出す" if single else "全レースの買い方を出す", type="primary", icon=":material/calculate:"):
         try:
             blends = st.session_state.setdefault("blends", {})
             if date not in blends:
                 with st.spinner("モデルとオッズの混ぜ方を決めています(数分かかります)"):
                     blends[date] = gui.blend_for(conn, date)
             targets = races if single is False else races[races["race_id"] == race["race_id"]]
-            used = {rid: race_marks(table, rid) for rid in targets["race_id"]} if restrict else None
-            plans = plan_races(table, targets, blends[date], bankroll, cap, kelly, stake, marks=used,
-                               axis=axis and restrict)
-            st.session_state["bet_plans"] = (date, single, plans, blends[date], dt.datetime.now(), used,
-                                             (restrict, axis and restrict))
+            plans = plan_races(table, targets, blends[date], bankroll, cap, kelly, stake)
+            st.session_state["bet_plans"] = (date, single, plans, blends[date])
         except (ValueError, RuntimeError) as e:
             st.error(str(e))
     saved = st.session_state.get("bet_plans")
     if not saved or saved[0] != date or saved[1] != single:
         return
-    _, _, plans, blend, at, used, settings = saved
-    st.caption(f":material/schedule: オッズは {at:%H:%M} に取得しました。")
+    _, _, plans, blend = saved
     if single:
         if race["race_id"] not in plans:
             return
-        counted = None if used is None else used.get(race["race_id"])
-        if used is not None:
-            st.caption(f":material/label: 計算に使った印: {marks_text(counted or {})}"
-                       f"{'(◎軸)' if settings[1] else ''}")
-        if settings != (restrict, axis and restrict) or (counted is not None and counted != race_marks(table, race["race_id"])):
-            st.warning("印か設定を変えたので、この結果は前のものです。もう一度ボタンを押してください。",
-                       icon=":material/info:")
         show_plan(plans[race["race_id"]], blend)
         return
     show_day_plans(races, plans, blend)
 
 
-def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equal_stake: int = 0,
-               marks: dict | None = None, axis: bool = False) -> dict:
+def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equal_stake: int = 0) -> dict:
     """レースごとの買い方を出す。{race_id: (買い方 または 理由の文字列, レース名)}。
-
-    marks({race_id: {馬番: 印}})を渡すと、印をつけた馬だけでできる買い目に絞る。
 
     複数レースのときは、残りの資金をレース数で割った額を1レースの上限にして、合計が資金を超えないようにする。
     """
@@ -1107,8 +1197,7 @@ def plan_races(table, targets, blend, bankroll: int, cap: int, kelly: float, equ
         try:
             odds = gui.fetch_bet_odds(fetcher, r.race_id, conn=connection())
             plan, _ = gui.bet_plan_for(table, r.race_id, odds, blend, bankroll, min(cap, share, remaining), kelly,
-                                     equal_stake, marked=None if marks is None else marks.get(r.race_id, {}),
-                                     axis=axis)
+                                     equal_stake)
         except (ValueError, RuntimeError) as e:
             out[r.race_id] = (str(e), label)
             continue
@@ -1192,39 +1281,6 @@ BET_COLUMNS = {
 
 
 # ---------------------------------------------------------------- 回顧
-MARK_SORT = {m: i for i, m in enumerate(gui.REVIEW_MARKS)}
-STAT_COLUMNS = {
-    "頭数": st.column_config.NumberColumn("頭数", format="%d", help="着順のある馬の数(取消・除外・中止は除く)"),
-    "1着率": st.column_config.NumberColumn("1着率", format="%.1f%%"),
-    "連対率": st.column_config.NumberColumn("連対率", format="%.1f%%", help="2着以内に入った割合"),
-    "馬券内率": st.column_config.NumberColumn("馬券内率", format="%.1f%%", help="3着以内に入った割合"),
-    "単勝回収率": st.column_config.NumberColumn("単勝回収率", format="%.0f%%", help="全部、単勝100円ずつ買った場合(確定オッズ)"),
-}
-RESULT_COLUMNS = {
-    "mark": st.column_config.TextColumn("印", width="small"), "number": st.column_config.NumberColumn("馬番", format="%d"),
-    "horse_name": "馬名", "p_win_ability": st.column_config.NumberColumn("勝率(能力)", format="percent",
-                                                                        help="発走前に出した、オッズを見ない勝率"),
-    "ev_ability": st.column_config.NumberColumn("期待値(能力)", format="%.2f", help="勝率(能力) × 単勝オッズ"),
-    "popularity": st.column_config.NumberColumn("人気", format="%d"),
-    "finish": st.column_config.NumberColumn("着順", format="%d"),
-}
-
-
-def finish_text(f) -> str:
-    return "—" if f != f else f"{int(f)}着"
-
-
-def marked_chips(horses: pd.DataFrame) -> str:
-    """印をつけた馬の全頭を、「◎ 7 馬名 1着」の形で印の順に並べる。3着以内は色をつける。"""
-    marked = horses[horses["mark"].isin(MARK_SORT)].copy()
-    marked["_k"] = marked["mark"].map(MARK_SORT)
-    marked = marked.sort_values(["_k", "number"])
-    return '<div class="kb-marks">' + "".join(
-        f'<span class="kb-mark{" kb-mark-hit" if r.finish <= 3 else ""}"><b>{r.mark}</b>{int(r.number)} '
-        f'{html.escape(str(r.horse_name))}<small>{finish_text(r.finish)}</small></span>'
-        for r in marked.itertuples()) + "</div>"
-
-
 def page_review() -> None:
     from keibaai import weekly
 
@@ -1248,36 +1304,63 @@ def page_review() -> None:
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
     st.caption("数字の見方", help=TIPS["review"])
+    scope = st.segmented_control("印ごとの成績の範囲", ["この日", "保存済みの全期間"], default="この日", key="review_scope") or "この日"
+    marks = r.marks
+    if scope != "この日":  # 1日だと頭数が少ないので、結果の出ている全部の日をまとめて出す
+        marks = weekly.mark_stats(pd.concat([weekly.review_day(conn, d).horses for d in days], ignore_index=True))
+    if marks is not None and not marks.empty:
+        st.subheader("印ごとの成績", anchor=False)
+        pct = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
+        st.dataframe(marks.drop(columns=["top3"]).style.map(mark_style, subset=["mark"]), hide_index=True,
+                     width="stretch", column_config={
+            "mark": st.column_config.TextColumn("印", width="small"),
+            "n": st.column_config.NumberColumn("頭数", format="%d", help="その印を付けて、走った馬の数(取消・除外は除く)"),
+            "wins": st.column_config.NumberColumn("1着", format="%d", help="勝った頭数"),
+            "win_rate": pct("勝率", "1着の割合"), "top2_rate": pct("連対率", "2着以内の割合"),
+            "top3_rate": pct("馬券内率", "3着以内の割合"),
+            "roi": pct("単勝回収率", "その印の馬の単勝を100円ずつ買った場合の、払戻 ÷ 投資(確定オッズ)")})
 
-    st.subheader("印ごとの成績", anchor=False, help=TIPS["review_marks"])
-    scope = st.segmented_control("集計の範囲", ["この日", "保存済みの全期間"], default="この日", key="review_scope") or "この日"
-    horses = r.horses if scope == "この日" else gui.review_horses(conn, days)
-    table = gui.mark_stats(horses)
-    with st.container(border=True):
-        shown = table.assign(**{c: table[c] * 100 for c in ("1着率", "連対率", "馬券内率")})  # 列の表示は % の数字で
-        st.dataframe(shown, hide_index=True, width="stretch", column_config=STAT_COLUMNS)
-        st.caption(f"{'この日' if scope == 'この日' else f'{len(days)}日分の保存済みの予想のうち、結果が出た日'}の、"
-                   f"着順のある {int(table['頭数'].iloc[-1]):,} 頭。1日だけだと頭数が少ないので、傾向は全期間で見てください。")
-
-    st.subheader("レース別", anchor=False)
-    races = r.races.sort_values(["venue", "round"])
+    st.subheader("レースごと", anchor=False)
+    races = r.races.sort_values(["venue", "round"]).reset_index(drop=True)
     race, box = race_picker(races, key=f"review_{day}")
-    info = gui.review_races_info(conn, [race["race_id"]]).get(race["race_id"], {})
-    one = r.horses[r.horses["race_id"] == race["race_id"]]
+    heads = gui.day_races(conn, day).set_index("race_id")
     with box:
-        st.html(gui.race_head_html({**info, "venue": race["venue"], "round": race["round"], "name": race["race_name"],
-                                    "runners": len(one)}))
-        st.html(marked_chips(one))
-        line = f"◎{race['honmei']}は{finish_text(race['honmei_finish'])}。"
-        if pd.notna(race["winner_rank"]):
-            line += (f"勝ち馬は{race['winner']}(予想{int(race['winner_rank'])}位・勝率{race['winner_p']:.0%}"
-                     f"・単勝{race['winner_odds']:.1f}倍)。")
-            if race["winner_rank"] >= 5:
-                line += " 予想の下位から勝ちました。"
-        st.caption(line)
-        shown = one.sort_values(["finish", "number"], na_position="last")
-        cols = [c for c in RESULT_COLUMNS if c in shown]
-        st.dataframe(shown[cols], hide_index=True, width="stretch", column_config=RESULT_COLUMNS)
+        if race["race_id"] in heads.index:
+            race_head(heads.loc[race["race_id"]])
+        else:
+            st.markdown(f"#### {race['venue']}{int(race['round'])}R {gui.text_or_blank(race['race_name'])}")
+        review_race(r.horses[r.horses["race_id"] == race["race_id"]])
+
+
+def review_race(g) -> None:
+    """1レースの回顧: 印を付けた馬すべての着順と、1〜3着の馬。"""
+    from keibaai import weekly
+
+    def place_style(v) -> str:
+        return "font-weight: 700; background-color: rgba(46, 158, 91, 0.2)" if v == v and v is not None and v <= 3 else ""
+
+    g = g.assign(finish_text=[weekly.finish_text(f, s) for f, s in zip(g["finish"], g.get("status", [None] * len(g)))])
+    cols = {"mark": PRED_COLUMNS["mark"], "number": PRED_COLUMNS["number"], "horse_name": PRED_COLUMNS["horse_name"],
+            "finish_text": st.column_config.TextColumn("着順", help="取消・除外の馬は理由を出します"),
+            "final_pop": st.column_config.NumberColumn("人気", format="%d", help="確定の単勝人気"),
+            "odds": st.column_config.NumberColumn("単勝", format="%.1f", help="確定の単勝オッズ(なければ予想時のもの)"),
+            "p_win_ability": st.column_config.NumberColumn("勝率(能力)", format="percent", help="発走前に出した、オッズを見ない勝率")}
+    marked = g[g["mark"].isin(weekly.MARK_ORDER)]
+    marked = marked.assign(_o=marked["mark"].map(weekly.MARK_ORDER.index)).sort_values(["_o", "number"])
+    st.caption("印を付けた馬の着順(3着以内に色をつけています)")
+    st.dataframe(marked[list(cols)].style.map(mark_style, subset=["mark"]).apply(
+        lambda c: [place_style(marked.at[i, "finish"]) for i in c.index], subset=["finish_text"]),
+        hide_index=True, width="stretch", column_config=cols)
+    top = g[g["finish"].between(1, 3)].sort_values("finish")
+    if not top.empty:
+        st.html('<div class="kb-marks">' + "".join(
+            f'<span class="kb-mark"><b>{int(f)}着</b>{html.escape(m or "")}{int(n)} {html.escape(str(h))}'
+            f'{"" if o != o or o is None else f"({o:.1f}倍)"}</span>'
+            for f, m, n, h, o in zip(top["finish"], top["mark"], top["number"], top["horse_name"], top["odds"])) + "</div>")
+    with st.expander("全馬の予想と結果", icon=":material/table:"):
+        allh = g.sort_values(["finish", "number"], na_position="last")
+        st.dataframe(allh[list(cols)].style.map(mark_style, subset=["mark"]), hide_index=True, width="stretch",
+                     column_config=cols)
 
 
 # ---------------------------------------------------------------- 買い方の検証
