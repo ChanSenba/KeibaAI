@@ -584,6 +584,24 @@ def _show_gate_bias(conn, race, date: dt.date) -> None:
             "内−外": st.column_config.NumberColumn("内−外(pt)", format="%+.1f", help="内枠 − 外枠(ポイント)。プラスなら内の枠のほうが 3 着以内に来ている")})
 
 
+def _show_same_day(conn, race, date: dt.date) -> None:
+    """同じ日の前のレース(同じ競馬場・芝ダ)の展開。芝の状態や内外の有利不利は、後のレースほど変わる。"""
+    today = factor_view.same_day_history(conn, race, date.isoformat())
+    if today.empty:
+        return
+    st.markdown("**同じ日の前のレース**")
+    st.markdown(factor_view.same_day_text(race.get("venue"), race.get("course_type"), today))
+    shown = today.drop(columns=["race_id", "日付"])
+    st.dataframe(shown, hide_index=True, width="stretch", column_config={
+        "R": st.column_config.NumberColumn("R", format="%d"),
+        "前半3F": st.column_config.NumberColumn(format="%.1f"), "後半3F": st.column_config.NumberColumn(format="%.1f"),
+        "ペース差": st.column_config.NumberColumn(format="%+.1f", help="前半3F − 後半3F。プラスは後傾(スロー)、マイナスはハイペース"),
+        "先行有利度": st.column_config.NumberColumn(format="percent", help="前に付けた馬の3着内率 − ほかの馬の率"),
+        "内有利度": st.column_config.NumberColumn(format="percent", help="内の馬(馬番が前の3分の1)の3着内率 − 外の馬(後ろの3分の1)の率"),
+        "勝ち馬": st.column_config.NumberColumn("勝ち馬(馬番)", format="%d"),
+        "勝ち馬の位置": st.column_config.NumberColumn(format="%.2f", help="勝ち馬の最初のコーナーの位置 ÷ 頭数。0に近いほど前")})
+
+
 def _show_race_flow(conn, race, one, date: dt.date) -> None:
     """このレースの展開の見立て(メンバーの脚質構成)と、同じコースの直近の展開。予想の展開適性の元になる。"""
     history = factor_view.course_history(conn, race, date.isoformat())
@@ -594,7 +612,7 @@ def _show_race_flow(conn, race, one, date: dt.date) -> None:
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{html.escape(k)}</b>{html.escape(v)}</span>' for k, v in names.items()) + "</div>")
         if not history.empty:
-            shown = history.drop(columns=["race_id"]).copy()
+            shown = history.drop(columns=["race_id", "内有利度", "勝ち馬"]).copy()
             shown["日付"] = pd.to_datetime(shown["日付"]).dt.strftime("%m/%d")
             h = gui_help.FLOW_COLUMNS
             st.dataframe(shown, hide_index=True, width="stretch", column_config={
@@ -604,6 +622,7 @@ def _show_race_flow(conn, race, one, date: dt.date) -> None:
                 "ペース差": st.column_config.NumberColumn(format="%+.1f", help="前半3F − 後半3F。プラスは後傾(スロー)、マイナスはハイペース"),
                 "先行有利度": st.column_config.NumberColumn(format="percent", help="前に付けた馬の3着内率 − ほかの馬の率"),
                 "勝ち馬の位置": st.column_config.NumberColumn(format="%.2f", help="勝ち馬の最初のコーナーの位置 ÷ 頭数。0に近いほど前")})
+        _show_same_day(conn, race, date)
 
 
 def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = None) -> None:

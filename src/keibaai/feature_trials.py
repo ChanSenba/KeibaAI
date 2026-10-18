@@ -451,7 +451,7 @@ def prepare(conn: sqlite3.Connection) -> pd.DataFrame:
 
     df = build_features(load_results(conn))
     extra = pd.read_sql_query("SELECT race_id, course, rail, weather FROM races", conn)
-    df = df.merge(extra, on="race_id", how="left")
+    df = df.merge(extra[[c for c in extra if c == "race_id" or c not in df]], on="race_id", how="left")  # load_results が持つ列は重ねない
     q = market_top3(df, TEST_PERIODS[0])
     df = add_bias_candidates(df, q)
     df = add_affinity_candidates(df)
