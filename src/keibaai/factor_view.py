@@ -781,7 +781,8 @@ def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame |
         if not strong and not weak and got:
             parts.append("どの要素も突出せず、全体のバランスで評価しています。")
         if r.get("mark") == "☆":
-            parts.append(f"能力の期待値が{r['ev_ability']:.2f}と1を超える穴馬です。")
+            ev, kind = (r["ev_market"], "オッズ込み") if pd.notna(r.get("ev_market")) else (r["ev_ability"], "能力")
+            parts.append(f"{kind}の期待値が{ev:.2f}と1を超える穴馬です。")
         if r.get("star") == "★":
             parts.append(f"オッズ込みの期待値が{r['ev_market']:.2f}で、オッズより高く評価されています(買えば得になる印ではありません)。")
         factors = []

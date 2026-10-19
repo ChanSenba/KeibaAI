@@ -239,12 +239,15 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
 
     レースごとに、勝率の高い順に ◎ ○ ▲、続く 2 頭に △(9 頭立て以下は 1 頭)。
     勝率はオッズ込みを使い、そのレースにオッズがなければ能力のみを使う。
-    印のない馬のうち、能力のみの期待値がいちばん高く 1 以上の馬に ☆(穴)。
+    印のない馬のうち、期待値(オッズ込み。なければ能力のみ)がいちばん高く 1 以上の馬に ☆(穴)。
+    能力のみの期待値は人気薄を高く見すぎる(100倍超の馬の勝率を実際の約4倍に見る)ので、オッズ込みを先に使う。
+    2021〜2026年の検証で、☆の単勝の勝率は 1.0% → 2.1%、回収率は 69.5% → 75.8% になった(それでも得な印ではない)。
     別の star 列に、オッズ込みのモデルが、オッズより高く評価している馬(その期待値・勝率・オッズが基準以上)へ ★。
     オッズがない馬には付けない。
     """
     out = table.copy()
     out["mark"] = ""
+    out["ev_star"] = out["ev_market"].fillna(out["ev_ability"]) if "ev_market" in out else out["ev_ability"]
     out["star"] = ((out["ev_market"] >= STAR_EV) & (out["p_win_market"] >= STAR_P)
                    & (out["win_odds"] <= STAR_ODDS)).map({True: "★", False: ""})
     for _, g in out.groupby("race_id", sort=False):
@@ -253,10 +256,10 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
         n_marked = len(MARKS) + (2 if len(g) >= 10 else 1)
         top = list(ranked[:n_marked])
         out.loc[top, "mark"] = (MARKS + ["△", "△"])[:len(top)]
-        rest = g.drop(top)["ev_ability"].dropna()
+        rest = g.drop(top)["ev_star"].dropna()
         if not rest.empty and rest.max() >= 1:
             out.loc[rest.idxmax(), "mark"] = "☆"
-    return out
+    return out.drop(columns="ev_star")
 
 
 def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
