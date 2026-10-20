@@ -191,6 +191,21 @@ def _data_status(db_path: str):
     return progress.read_data_status(db_path)
 
 
+def _odds_line() -> None:
+    """発走前オッズの記録の状態。開催中に記録が途切れたら目立つ色で出す(JV-Link が止まると、ログにしか出ず気づけなかった)。"""
+    o = progress.read_odds_status(st.session_state["db_path"])
+    if o is None:
+        return
+    last = f"最後の記録 {o.last_snapped:%m/%d %H:%M}" if o.last_snapped else "まだ記録がありません"
+    if o.state == "stalled":
+        st.error(f"発走前オッズの記録が止まっています(開催中なのに1時間以上記録がありません)。{last}。"
+                 "PC の再起動、または JV-Link の再起動で直ることがあります。", icon=":material/warning:")
+    elif o.state == "running":
+        st.caption(f":green[:material/play_circle: 発走前オッズの記録は動いています] ・ 今日 {o.recorded_today}/{o.races_today} レース ・ {last}")
+    else:
+        st.caption(f":gray[:material/hourglass_empty: 発走前オッズの記録は待機中(開催日の朝に始まります)] ・ {last}")
+
+
 def _status_badge(p) -> str:
     """取得の状態の短い表示。"""
     if p.alive:
@@ -239,6 +254,7 @@ def page_progress() -> None:
 
     @st.fragment(run_every=30)
     def body() -> None:
+        _odds_line()
         _show_data_grid()
         logs = sorted(Path("data").glob("out-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:1]
         if logs:

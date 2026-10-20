@@ -112,6 +112,64 @@ def read_data_status(db_path: str | Path) -> DataStatus | None:
         return None
 
 
+ODDS_STALE_SEC = 3600  # 開催中に、最後のオッズ記録からこの秒数を超えたら「止まっている」(発走前の記録は各レースの30分前と5分前なので、ふつうは30分も空かない)
+ODDS_WINDOW_BEFORE_MIN = 60  # 最初のレースの発走の何分前から見張るか(朝9:00の全レースの記録がある)
+
+
+@dataclass
+class OddsStatus:
+    """発走前オッズの記録の状態。state は running(開催中で記録が続いている)/ stalled(開催中なのに記録が途切れている)/ idle(開催中ではない)。"""
+    state: str
+    last_snapped: dt.datetime | None  # 最後に記録した時刻(日付を問わず)
+    races_today: int  # 今日の出馬表のレース数(0なら非開催日)
+    recorded_today: int  # 今日、1回以上記録できたレース数
+
+
+def _clock(text: str | None) -> dt.time | None:
+    try:
+        h, m = (text or "").split(":")
+        return dt.time(int(h), int(m))
+    except ValueError:
+        return None
+
+
+def odds_status_from(rows_today: list[str | None], recorded_today: int, last_snapped: dt.datetime | None,
+                     now: dt.datetime) -> OddsStatus:
+    """今日の発走時刻の一覧と最後の記録時刻から、状態を決める。発走時刻が分からないときは 9:00〜16:45 とみなす。"""
+    n = len(rows_today)
+    times = [t for t in map(_clock, rows_today) if t]
+    first = dt.datetime.combine(now.date(), min(times)) if times else dt.datetime.combine(now.date(), dt.time(9, 0))
+    last = dt.datetime.combine(now.date(), max(times)) if times else dt.datetime.combine(now.date(), dt.time(16, 45))
+    first -= dt.timedelta(minutes=ODDS_WINDOW_BEFORE_MIN)
+    if not n or not first <= now <= last:
+        return OddsStatus("idle", last_snapped, n, recorded_today)
+    # 開催中。見張りを始めた時刻より前の記録は数えない(始まる前に前日の記録が残っていても「動いている」にしない)
+    since = max(last_snapped, first) if last_snapped else first
+    stalled = (now - since).total_seconds() > ODDS_STALE_SEC
+    return OddsStatus("stalled" if stalled else "running", last_snapped, n, recorded_today)
+
+
+def read_odds_status(db_path: str | Path, now: dt.datetime | None = None) -> OddsStatus | None:
+    """オッズの記録(odds_snapshots)の状態を読み取り専用で1回だけ読む。DB が使えなければ None。"""
+    now = now or dt.datetime.now()
+    today = now.date().isoformat()
+    try:
+        conn = sqlite3.connect(f"file:{Path(db_path).resolve().as_posix()}?mode=ro", uri=True, timeout=1)
+        try:
+            starts = [r[0] for r in conn.execute("SELECT start_time FROM entry_races WHERE date = ?", (today,))]
+            try:
+                last = conn.execute("SELECT MAX(snapped_at) FROM odds_snapshots").fetchone()[0]
+                rec = conn.execute("SELECT COUNT(DISTINCT race_id) FROM odds_snapshots WHERE snapped_at >= ?",
+                                   (today,)).fetchone()[0]
+            except sqlite3.Error:  # 記録の表がない古い DB
+                last, rec = None, 0
+            return odds_status_from(starts, rec, dt.datetime.fromisoformat(last) if last else None, now)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
 def progress_of(kind: str, cache_dir: str | Path, total: int | None, now: float | None = None) -> Progress:
     name, sub, _ = KINDS[kind]
     now = now if now is not None else dt.datetime.now().timestamp()
