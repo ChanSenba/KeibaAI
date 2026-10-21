@@ -180,3 +180,49 @@ def test_results_and_entries_are_jv_only(monkeypatch, tmp_path):
     monkeypatch.setattr(jvlink, "available", lambda *a: False)
     with pytest.raises(SystemExit, match="JV-Link"):
         cli.main(["entries", "--date", "2026-10-17", "--db", str(tmp_path / "k.db")])
+
+
+def test_odds_history_stores_each_announcement_and_skips_done_races(tmp_path, monkeypatch):
+    """時系列オッズは1行が1回の発表。発売前(オッズ0)と別レースは入れず、取り込み済みのレースは取り直さない。"""
+    conn = db.connect(":memory:")
+    conn.execute("INSERT INTO races (race_id, date) VALUES ('202605040611', '2026-10-17')")  # 終わったレースは成績の日付でキーを作る
+    _entry_race(conn, "202605040612")
+    calls = []
+
+    def export(out, from_ymd, specs, option=1, rt=(), python32=None):
+        calls.append(list(rt))
+        _write_rt(out, "0B41", [
+            _odds_rec("O1", 960, {43: "01000000", 51: "02000000"}, announced="10161837"),  # 発売前: オッズ0
+            _odds_rec("O1", 960, {43: "01013306", 51: "02048312"}, announced="10170509"),
+            _odds_rec("O1", 960, {43: "01011206", 51: "02061005"}, announced="10171400"),
+            _odds_rec("O1", 960, {43: "01099999"}, key="2026101705040699"),  # 頼んでいないレース
+        ])
+
+    monkeypatch.setattr(jvlink, "export", export)
+    assert jvlink.import_odds_history(conn, ["202605040611"], raw_root=tmp_path) == 1
+    assert calls == [["0B41:2026101705040611"]]
+    rows = conn.execute("SELECT race_id, number, snapped_at, official_at, win_odds, popularity, source FROM odds_snapshots "
+                        "ORDER BY snapped_at, number").fetchall()
+    assert rows == [("202605040611", 1, "2026-10-17T05:09:00", "2026-10-17T05:09:00", 13.3, 6, "ts"),
+                    ("202605040611", 2, "2026-10-17T05:09:00", "2026-10-17T05:09:00", 48.3, 12, "ts"),
+                    ("202605040611", 1, "2026-10-17T14:00:00", "2026-10-17T14:00:00", 11.2, 6, "ts"),
+                    ("202605040611", 2, "2026-10-17T14:00:00", "2026-10-17T14:00:00", 61.0, 5, "ts")]
+    # もう一度やっても、取り込み済みのレースは JV-Link を開かない
+    assert jvlink.import_odds_history(conn, ["202605040611"], raw_root=tmp_path) == 0
+    assert len(calls) == 1
+
+
+def test_odds_history_runs_in_batches(tmp_path, monkeypatch):
+    conn = db.connect(":memory:")
+    ids = [f"2026050406{r:02d}" for r in range(1, 6)]
+    for rid in ids:
+        _entry_race(conn, rid)
+    calls = []
+
+    def export(out, from_ymd, specs, option=1, rt=(), python32=None):
+        calls.append(len(rt))
+        _write_rt(out, "0B41", [])
+
+    monkeypatch.setattr(jvlink, "export", export)
+    jvlink.import_odds_history(conn, ids, raw_root=tmp_path, batch=2)
+    assert calls == [2, 2, 1]
