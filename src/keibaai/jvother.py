@@ -138,7 +138,9 @@ def add_other_features(df: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
     out["prev_is_other"] = is_other.astype(float).where(any_last.notna())
     if not o.empty:
         out["prev_other_finish"] = last["finish"].where(is_other)
-        out["prev_other_finish_rel"] = (last["finish"] / last["field_size"]).where(is_other)
+        # 出走馬の一部しか入っていないレースは、頭数が着順より少なくなる。そのときは比を出さない
+        out["prev_other_finish_rel"] = (last["finish"] / last["field_size"]).where(
+            is_other & (last["finish"] <= last["field_size"]))
         out["prev_other_abroad"] = (last["region"] == "海外").astype(float).where(is_other)
         # 前の中央のレースの日より後の地方・海外の走りの数
         before = pd.merge_asof(pd.DataFrame({"row": df.index, "horse_id": df["horse_id"], "day": jra_last})

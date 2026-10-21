@@ -456,7 +456,7 @@ def bootstrap_ci(diff: pd.Series, n_horses: int, reps: int = 1000, seed: int = 0
 
 
 def variant_features(base: list[str], add: list[str], drop: list[str]) -> list[str]:
-    return [c for c in base if c not in drop] + [c for c in add if c not in base]
+    return list(dict.fromkeys([c for c in base if c not in drop] + [c for c in add if c not in base]))
 
 
 def run(df: pd.DataFrame, variants: dict[str, tuple[list[str], list[str]]], seeds: int, rounds: int,
