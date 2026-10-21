@@ -188,3 +188,9 @@ def test_gaikyu_without_training_data(raw):
     out = ft.add_gaikyu_candidates(db.connect(":memory:"), df)
     assert out[["gk_in_days", "gk_short", "owner_short_top3_shr"]].isna().all().all()
     assert set(ft.GAIKYU_COLUMNS) <= set(out.columns)
+
+
+def test_variant_features_have_no_duplicates():
+    for add, drop in ft.other_variants().values():
+        feats = ft.variant_features(["a", "days_since_last"], add, drop)
+        assert len(feats) == len(set(feats))
