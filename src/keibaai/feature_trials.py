@@ -8,6 +8,8 @@
   差し引いた偏り、コース(内回り・外回り、A〜E、距離帯)ごとの偏り(件数が少ないときは競馬場・芝ダ全体に寄せる)。
 - 相性: 厩舎×騎手の率にサンプルの少なさの割り引き((該当数 + k×全体の率) ÷ (回数 + k))、勝率・連対率の版、
   騎手×種牡馬、調教師×種牡馬。
+- 外厩(--only gaikyu): 坂路・ウッドの記録の空白から推定した帰厩からの日数と、前走からの変化。馬主(ノーザン・社台系)と、
+  馬主×外厩帰りの成績。外厩の名前はデータにないので、施設ごとの差は見られない。
 
 どの候補も、そのレースより前に分かっている結果だけから作る(同じ日のものは、先に終わったレースだけ)。
 """
@@ -301,6 +303,106 @@ def more_variants() -> dict[str, tuple[list[str], list[str]]]:
     }
 
 
+# ---------------------------------------------------------------- 外厩(調教の記録の空白からの推定)
+
+# 外厩の名前はデータにない。トレセンを離れている間は坂路・ウッドの記録が途切れるので、
+# 記録が GAIKYU_GAP 日以上空いたあとの再開日を「帰厩した日」とみなす。出走には10日ほど前までの帰厩が要る。
+GAIKYU_GAP = 21
+GAIKYU_SHORT = 20  # 帰厩から出走までがこの日数以内なら「外厩帰りの短期在厩」
+GAIKYU_STALE = 30  # 最後の記録が出走のこれより前なら、推定しない(坂路・ウッド以外で調整している馬など)
+# ノーザンファーム・社台系の外厩(天栄・しがらき・山元など)を使う馬主。施設名の代わりの目安
+NORTHERN_OWNERS = ("サンデーレーシング", "シルクレーシング", "キャロットファーム", "社台レースホース",
+                   "ノーザンファーム", "社台ファーム", "吉田勝己", "吉田和美", "吉田照哉")
+
+
+def _gaikyu_from_training(days: pd.DataFrame, runs: pd.DataFrame, coverage: pd.Timestamp) -> pd.DataFrame:
+    """調教の日(horse_id, date)から、出走(horse_id, day)ごとに帰厩の推定を出す。
+
+    days は coverage(ウッドの記録が始まった日)以降だけを渡す。それより前は途切れて見えるので使わない。
+    in_days: 帰厩した日から出走までの日数。gap_days: その前の空白の日数(初めての記録なら NaN)。
+    n_since_in: 帰厩してからの調教の日数。出走の日の記録は使わない。
+    """
+    d = days.drop_duplicates().sort_values(["horse_id", "date"]).reset_index(drop=True)
+    first = d["horse_id"].ne(d["horse_id"].shift())
+    gap = (d["date"] - d["date"].shift()).dt.days.where(~first)
+    d["gap"] = gap
+    start = first | (gap >= GAIKYU_GAP)
+    d["pos"] = np.arange(len(d))
+    d["in_pos"] = pd.Series(np.where(start, d["pos"], np.nan)).ffill().to_numpy()
+    d["in_date"] = d["date"].to_numpy()[d["in_pos"].astype(int)]
+    d["in_gap"] = d["gap"].to_numpy()[d["in_pos"].astype(int)]
+
+    q = runs[["horse_id", "day"]].drop_duplicates().sort_values("day")
+    m = pd.merge_asof(q, d.sort_values("date").rename(columns={"date": "last_date"}),
+                      left_on="day", right_on="last_date", by="horse_id", allow_exact_matches=False)
+    ok = (m["day"] - m["last_date"]).dt.days <= GAIKYU_STALE
+    # 記録の始まりの直後に初めて出てきた馬は、その前に空白があったか分からない
+    unknown = m["in_gap"].isna() & ((m["in_date"] - coverage).dt.days < GAIKYU_GAP)
+    ok &= ~unknown
+    out = pd.DataFrame({"horse_id": m["horse_id"], "day": m["day"]})
+    out["gk_in_days"] = (m["day"] - m["in_date"]).dt.days.where(ok)
+    out["gk_gap_days"] = m["in_gap"].where(ok)
+    out["gk_n_since_in"] = (m["pos"] - m["in_pos"] + 1).where(ok)
+    return out
+
+
+def add_gaikyu_candidates(conn: sqlite3.Connection, df: pd.DataFrame, k: float = 20.0) -> pd.DataFrame:
+    """外厩の推定の列を足す。調教の記録(jv_training)がなければ、どれも欠損。"""
+    cols = ["gk_in_days", "gk_gap_days", "gk_n_since_in"]
+    tr = pd.read_sql_query("SELECT DISTINCT horse_id, date, kind FROM jv_training", conn)
+    if tr.empty:
+        est = pd.DataFrame(np.nan, index=df.index, columns=cols)
+    else:
+        tr["date"] = pd.to_datetime(tr["date"])
+        wood = tr.loc[tr["kind"] == "wood", "date"]
+        since = wood.min() if len(wood) else tr["date"].min()  # ウッドの記録はあとから始まった
+        tr = tr[(tr["date"] >= since) & tr["horse_id"].isin(set(df["horse_id"].dropna()))]
+        runs = df[["horse_id"]].assign(day=pd.to_datetime(df["date"]))
+        est = runs.merge(_gaikyu_from_training(tr[["horse_id", "date"]], runs, since), on=["horse_id", "day"],
+                         how="left")[cols].set_axis(df.index)
+    out = {c: est[c] for c in cols}
+    short = (est["gk_in_days"] <= GAIKYU_SHORT).astype(float).where(est["gk_in_days"].notna())
+    out["gk_short"] = short
+    g = df.groupby("horse_id", sort=False)
+    prev_in = est.groupby(df["horse_id"], sort=False)["gk_in_days"].shift(1)
+    prev_short = short.groupby(df["horse_id"], sort=False).shift(1)
+    # 前走の後に帰厩していなければ、レースの間ずっとトレセンにいた(在厩で調整)
+    out["gk_stayed"] = (est["gk_in_days"] > (df["date"] - g["date"].shift(1)).dt.days).astype(float).where(
+        est["gk_in_days"].notna() & g["date"].shift(1).notna())
+    out["gk_prev_short"] = prev_short
+    out["gk_short_change"] = short - prev_short  # +1: 前走は在厩・今回は外厩帰り、−1: その逆
+    out["gk_prev_in_days"] = prev_in
+
+    owner = df["owner"].astype("string") if "owner" in df else pd.Series(pd.NA, index=df.index, dtype="string")
+    out["owner_northern"] = owner.str.contains("|".join(NORTHERN_OWNERS), regex=True).astype(float).where(owner.notna())
+    work = df.assign(_owner=owner.fillna(""), _short=short.fillna(-1.0), _all=0)
+    prior = _expanding_rate(work, "_all", "top3")[1]
+    out["owner_top3_shr"] = shrunk_rate(work, ["_owner"], "top3", k, prior).where(owner.notna())
+    out["owner_short_top3_shr"] = shrunk_rate(work, ["_owner", "_short"], "top3", k, prior).where(
+        owner.notna() & short.notna())
+    out["owner_short_n"] = _expanding_rate(work, ["_owner", "_short"], "top3")[0].where(owner.notna() & short.notna())
+    return pd.concat([df, pd.DataFrame(out, index=df.index)], axis=1)
+
+
+GAIKYU_COLUMNS = ["gk_in_days", "gk_gap_days", "gk_n_since_in", "gk_short", "gk_stayed", "gk_prev_short",
+                  "gk_short_change", "gk_prev_in_days", "owner_northern", "owner_top3_shr", "owner_short_top3_shr",
+                  "owner_short_n"]
+
+
+def gaikyu_variants() -> dict[str, tuple[list[str], list[str]]]:
+    stay = ["gk_in_days", "gk_gap_days", "gk_n_since_in"]
+    change = ["gk_short", "gk_stayed", "gk_prev_short", "gk_short_change", "gk_prev_in_days"]
+    return {
+        "base": ([], []),
+        "帰厩からの日数・空白の長さ": (stay, []),
+        "外厩帰りの印と前走からの変化": (stay + change, []),
+        "馬主(ノーザン・社台系)": (["owner_northern"], []),
+        "馬主の成績(比べるための対照)": (["owner_top3_shr"], []),
+        "馬主×外厩帰りの成績": (["owner_top3_shr", "owner_short_top3_shr", "owner_short_n", "gk_short"], []),
+        "外厩の候補すべて": (GAIKYU_COLUMNS, []),
+    }
+
+
 # ---------------------------------------------------------------- 比べ方
 
 def _fit_predict(train: pd.DataFrame, test: pd.DataFrame, features: list[str], seed: int, rounds: int) -> np.ndarray:
@@ -455,7 +557,7 @@ def prepare(conn: sqlite3.Connection) -> pd.DataFrame:
     q = market_top3(df, TEST_PERIODS[0])
     df = add_bias_candidates(df, q)
     df = add_affinity_candidates(df)
-    return add_more_candidates(df)
+    return add_gaikyu_candidates(conn, add_more_candidates(df))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -464,7 +566,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="data/feature_trials")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--rounds", type=int, default=300)
-    ap.add_argument("--only", choices=["bias", "affinity", "more"], default=None)
+    ap.add_argument("--only", choices=["bias", "affinity", "more", "gaikyu"], default=None)
     args = ap.parse_args(argv)
 
     out = Path(args.out)
@@ -474,7 +576,7 @@ def main(argv: list[str] | None = None) -> None:
     df = prepare(conn)
     print(f"特徴量を作りました: {len(df):,} 行, {time.time() - t0:.0f}s", flush=True)
     cand = [c for c in BIAS_COLUMNS + ["tj_top3_shr10", "js_top3_shr10", "ts_top3_shr10", "js_n"] + MORE_COLUMNS
-            if c in df]
+            + GAIKYU_COLUMNS if c in df]
     print(df.loc[df["date"] >= TEST_PERIODS[0], cand].describe().T[["count", "mean", "std"]].to_string(), flush=True)
 
     parts = []
@@ -488,6 +590,9 @@ def main(argv: list[str] | None = None) -> None:
         parts.append((f"相性: k={k} での版と、騎手×種牡馬・調教師×種牡馬", r2))
     if args.only in (None, "more"):
         parts.append(("設計スレッドの足せるもの", run(df, more_variants(), args.seeds, args.rounds, out, TEST_PERIODS)))
+    if args.only in (None, "gaikyu"):
+        parts.append(("外厩(調教の記録の空白からの推定)", run(df, gaikyu_variants(), args.seeds, args.rounds, out,
+                                                     TEST_PERIODS)))
     text = "\n\n".join(f"## {title}\n{to_markdown(r)}" for title, r in parts)
     (out / "results.md").write_text(text, encoding="utf-8")
     pd.concat([r.assign(part=t) for t, r in parts]).to_csv(out / "results.csv", index=False, encoding="utf-8-sig")

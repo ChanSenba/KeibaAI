@@ -134,3 +134,57 @@ def test_ability_model_uses_the_shrunk_trainer_jockey_rate(raw):
     assert "tj_top3_rate" in MARKET_MODEL_FEATURES and "tj_top3_shr" not in MARKET_MODEL_FEATURES
     df = candidates(raw)  # 検証用の計算(k ごと)と、予想に使う列が一致する
     assert np.allclose(df["tj_top3_shr"], df[f"tj_top3_shr{TJ_SHRINK_K}"], equal_nan=True)
+
+
+def _training_db(rows):
+    from keibaai import db
+    conn = db.connect(":memory:")
+    conn.executemany("INSERT INTO jv_training (horse_id, date, time, kind) VALUES (?,?,'0600',?)", rows)
+    return conn
+
+
+def _runs(rows):
+    df = pd.DataFrame(rows, columns=["race_id", "horse_id", "date", "owner", "finish"])
+    df["date"] = pd.to_datetime(df["date"])
+    df["number"] = 1
+    df["top3"] = (df["finish"] <= 3).astype(int)
+    return df
+
+
+def test_gaikyu_estimates_return_after_a_gap():
+    days = pd.date_range("2024-01-01", "2024-03-01", freq="7D")  # 在厩で毎週
+    back = pd.date_range("2024-05-01", "2024-05-12", freq="3D")  # 2か月空いて帰厩
+    rows = [("h1", d.date().isoformat(), "wood") for d in days.append(back)]
+    conn = _training_db(rows + [("h9", "2023-10-01", "wood")])  # 記録はこの日から
+    df = _runs([("r1", "h1", "2024-02-25", "サンデーレーシング", 2),
+                ("r2", "h1", "2024-05-15", "サンデーレーシング", 1),
+                ("r3", "h1", "2024-05-10", "サンデーレーシング", 1)])  # 当日の記録は使わない
+    out = ft.add_gaikyu_candidates(conn, df.iloc[:2].copy())
+    r2 = out.iloc[1]
+    assert r2["gk_in_days"] == 14 and r2["gk_short"] == 1.0
+    assert r2["gk_gap_days"] == (pd.Timestamp("2024-05-01") - days[-1]).days
+    assert r2["gk_n_since_in"] == len(back)
+    assert r2["gk_stayed"] == 0.0 and r2["gk_short_change"] == 1.0  # 前走は在厩、今回は外厩帰り
+    assert out.iloc[0]["gk_short"] == 0.0 and out.iloc[0]["owner_northern"] == 1.0
+    one = ft.add_gaikyu_candidates(conn, df.iloc[[2]].copy()).iloc[0]
+    assert one["gk_in_days"] == 9 and one["gk_n_since_in"] == len(back) - 1
+
+
+def test_gaikyu_is_unknown_without_recent_or_early_records():
+    rows = [("h1", "2024-01-01", "wood"), ("h1", "2024-01-08", "slope"), ("h2", "2024-03-01", "slope")]
+    conn = _training_db(rows)
+    df = _runs([("r1", "h1", "2024-01-10", "個人", 3),  # 記録の始まりの直後: 前に空白があったか分からない
+                ("r2", "h1", "2024-03-01", "個人", 3),  # 最後の記録が30日より前
+                ("r3", "h2", "2024-03-10", "個人", 3)])  # 初めての記録から(新しく入った馬)
+    out = ft.add_gaikyu_candidates(conn, df)
+    assert out["gk_in_days"].iloc[:2].isna().all()
+    assert out["gk_in_days"].iloc[2] == 9 and np.isnan(out["gk_gap_days"].iloc[2])
+    assert out["owner_northern"].eq(0.0).all()
+
+
+def test_gaikyu_without_training_data(raw):
+    from keibaai import db
+    df = build_features(raw.copy())
+    out = ft.add_gaikyu_candidates(db.connect(":memory:"), df)
+    assert out[["gk_in_days", "gk_short", "owner_short_top3_shr"]].isna().all().all()
+    assert set(ft.GAIKYU_COLUMNS) <= set(out.columns)
