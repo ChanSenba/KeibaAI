@@ -41,10 +41,11 @@ CREATE TABLE IF NOT EXISTS entries (
     body_weight INTEGER, body_weight_diff INTEGER, win_odds REAL, popularity INTEGER,
     PRIMARY KEY (race_id, number)
 );
--- 発走前のオッズを時刻つきで溜める(確定オッズしかないと、オッズの動きは後から取れない)。snapped_at は取得した時刻、official_at は netkeiba が示すオッズの時刻
+-- 発走前のオッズを時刻つきで溜める(確定オッズしかないと、オッズの動きは後から取れない)。snapped_at は取得した時刻、official_at はオッズの発表時刻。
+-- source は、空ならその場で取った記録、'ts' なら JRA-VAN の時系列オッズ(レース後にまとめて取ったもので、snapped_at も発表時刻)
 CREATE TABLE IF NOT EXISTS odds_snapshots (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, snapped_at TEXT NOT NULL, official_at TEXT,
-    win_odds REAL, popularity INTEGER,
+    win_odds REAL, popularity INTEGER, source TEXT,
     PRIMARY KEY (race_id, number, snapped_at)
 );
 -- 発走前に出した予想をそのまま残す(あとから結果と照合する)。レースが終わってからは書き換えない
@@ -149,7 +150,8 @@ def model_revision(conn: sqlite3.Connection) -> tuple | None:
 
 # 後から増えた列。作成済みの DB にも足す
 _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("pace_last3f", "REAL"), ("course", "TEXT"), ("rail", "TEXT")],
-                  "entry_races": [("course", "TEXT"), ("rail", "TEXT")]}
+                  "entry_races": [("course", "TEXT"), ("rail", "TEXT")],
+                  "odds_snapshots": [("source", "TEXT")]}
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:

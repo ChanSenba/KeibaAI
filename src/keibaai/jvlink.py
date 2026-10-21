@@ -117,7 +117,8 @@ BET_KINDS = {"win": "単勝", "place": "複勝", "quinella": "馬連", "wide": "
 
 def race_key(conn: sqlite3.Connection, race_id: str) -> str:
     """race_id(12桁)を JV-Link のレースのキー(年+月日+場+回+日+R の16桁)にする。月日は出馬表(entry_races)から。"""
-    row = conn.execute("SELECT date FROM entry_races WHERE race_id = ?", (race_id,)).fetchone()
+    row = (conn.execute("SELECT date FROM entry_races WHERE race_id = ?", (race_id,)).fetchone()
+           or conn.execute("SELECT date FROM races WHERE race_id = ?", (race_id,)).fetchone())  # 終わったレースは成績のほう
     if not row or not row[0]:
         raise ValueError(f"{race_id} の出馬表がありません。先に entries で取得してください")
     return race_id[:4] + row[0][5:7] + row[0][8:10] + race_id[4:]
@@ -212,4 +213,56 @@ def snapshot_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | Non
                              "popularity) VALUES (?,?,?,?,?,?)", rows)
         seen.add(rid)
         n += 1
+    return n
+
+
+def store_odds_history(conn: sqlite3.Connection, path: Path, wanted: set[str]) -> int:
+    """書き出した時系列オッズ(RT_0B41.txt)の単勝を、発表時刻つきで odds_snapshots に入れる。入れたレース数を返す。
+
+    1行が1回の発表(レコードは確定オッズ O1 と同じ形)。発売前でオッズが 0 の行と、wanted にないレースは入れない。
+    JV-Link は、渡したキーの「日」が違っても同じ日付・場・R の別のレースを返すことがあるので、レコードのレース欄で照合する。
+    """
+    from .jventries import parse_o1
+    from .jvrace import to_bytes
+
+    seen = set()
+    for rec in _rt_records(path):
+        o = parse_o1(to_bytes(rec))
+        at = announced_at(rec)
+        if not o or o[0] not in wanted or not at:
+            continue
+        rows = [(o[0], num, at, at, win, pop, "ts") for num, (win, pop) in o[1].items() if win is not None]
+        if not rows:
+            continue
+        with conn:
+            conn.executemany("INSERT OR REPLACE INTO odds_snapshots (race_id, number, snapped_at, official_at, win_odds, "
+                             "popularity, source) VALUES (?,?,?,?,?,?,?)", rows)
+        seen.add(o[0])
+    return len(seen)
+
+
+def import_odds_history(conn: sqlite3.Connection, race_ids: list[str], raw_root: str | Path = RAW_DIR,
+                        python32: str = PYTHON32, batch: int = 50) -> int:
+    """race_ids の時系列オッズ(JV-Link 0B41。発売開始から締め切りまでの単勝オッズの推移)を取って odds_snapshots に入れる。
+
+    レースが終わったあとでも取れる(1年前でも確認済み)。すでに取り込んだレース(source='ts')は飛ばすので、途中で止めても続きから。
+    batch レースごとに書き出して入れる(JV-Link は1レース5秒ほどかかる)。入れたレース数を返す。
+    """
+    done = {r[0] for r in conn.execute("SELECT DISTINCT race_id FROM odds_snapshots WHERE source = 'ts'")}
+    keys = {}
+    for rid in race_ids:
+        if rid in done:
+            continue
+        try:
+            keys[race_key(conn, rid)] = rid
+        except ValueError as e:
+            print(e)
+    raw = Path(raw_root) / "odds_history"
+    items = list(keys.items())
+    n = 0
+    for i in range(0, len(items), batch):
+        chunk = dict(items[i:i + batch])
+        export(raw, next(iter(chunk))[:8], [], rt=[f"0B41:{k}" for k in chunk], python32=python32)
+        n += store_odds_history(conn, raw / "RT_0B41.txt", set(chunk.values()))
+        print(f"{min(i + batch, len(items))}/{len(items)} レース", flush=True)
     return n

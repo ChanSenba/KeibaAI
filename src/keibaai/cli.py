@@ -122,6 +122,14 @@ def main(argv=None) -> None:
     sn.add_argument("--cache", default="data/cache")
     sn.add_argument("--race-id", nargs="*", default=[], help="このレース(race_id 12桁)だけ記録する。省くとその日の全レース")
     _add_source(sn, "オッズ", netkeiba=True)
+    oh = sub.add_parser("odds-history", help="JRA-VAN の時系列オッズ(発売開始から締め切りまでの単勝オッズの推移)を、レース後でも取って odds_snapshots に入れる。途中で止めても続きから")
+    oh.add_argument("--from", dest="start", help="この日以後のレース YYYY-MM-DD(--race-id を使わないとき必須)")
+    oh.add_argument("--to", dest="end", help="この日まで YYYY-MM-DD(省くと今日)")
+    oh.add_argument("--race-id", nargs="*", default=[], help="このレース(race_id 12桁)だけ")
+    oh.add_argument("--limit", type=int, default=0, help="このレース数で止める(0なら全部)。まず試すとき用")
+    oh.add_argument("--db", default="data/keiba.db")
+    oh.add_argument("--raw", default="data/jv_raw", help="書き出し先(生データ)")
+    oh.add_argument("--python32", default=r"C:\Python311-32\jvenv\Scripts\python.exe", help="pywin32 を入れた32bit Python")
     pd_ =sub.add_parser("pedigree", help="(廃止)netkeiba からの血統の取得。代わりに jv --what pedigree blood を使う")
     pd_.add_argument("--db", default="data/keiba.db")
     pd_.add_argument("--cache", default="data/cache")
@@ -202,6 +210,27 @@ def main(argv=None) -> None:
             raise SystemExit(str(e))
         if not n:
             print(f"{args.date} の出馬表は、馬番がまだ確定していないか、まだ出ていません(馬番は枠順の発表後に入ります)")
+        print(f"done: {n} races")
+        return
+    if args.cmd == "odds-history":
+        from . import jvlink
+
+        conn = db.connect(args.db)
+        if args.race_id:
+            ids = args.race_id
+        elif args.start:
+            end = args.end or dt.date.today().isoformat()
+            ids = [r[0] for r in conn.execute(
+                "SELECT race_id FROM races WHERE date BETWEEN ? AND ? UNION SELECT race_id FROM entry_races WHERE date BETWEEN ? AND ? "
+                "ORDER BY race_id", (args.start, end, args.start, end))]
+        else:
+            raise SystemExit("--from か --race-id を指定してください")
+        if args.limit:
+            ids = ids[:args.limit]
+        try:
+            n = jvlink.import_odds_history(conn, ids, raw_root=args.raw, python32=args.python32)
+        except jvlink.JVError as e:
+            raise SystemExit(str(e))
         print(f"done: {n} races")
         return
     if args.cmd == "snapshot" and source == "jv":
