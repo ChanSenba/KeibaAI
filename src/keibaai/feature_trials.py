@@ -8,6 +8,8 @@
   差し引いた偏り、コース(内回り・外回り、A〜E、距離帯)ごとの偏り(件数が少ないときは競馬場・芝ダ全体に寄せる)。
 - 相性: 厩舎×騎手の率にサンプルの少なさの割り引き((該当数 + k×全体の率) ÷ (回数 + k))、勝率・連対率の版、
   騎手×種牡馬、調教師×種牡馬。
+- 地方・海外の前走(--only other。先に jvother で data/jv_other.db を作る): 地方・海外を含めた前走からの間隔、
+  前走が地方・海外のときの着順、地方・海外の経歴。
 - 外厩(--only gaikyu): 坂路・ウッドの記録の空白から推定した帰厩からの日数と、前走からの変化。馬主(ノーザン・社台系)と、
   馬主×外厩帰りの成績。外厩の名前はデータにないので、施設ごとの差は見られない。
 
@@ -26,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, _expanding_rate, result_mask
+from .jvother import OTHER_COLUMNS, add_other_features, load_other
 from .model import PARAMS, auc, logloss, normalize_within_race, train_rows
 
 TEST_PERIODS = ["2025-01-01", "2026-01-01"]
@@ -403,6 +406,20 @@ def gaikyu_variants() -> dict[str, tuple[list[str], list[str]]]:
     }
 
 
+def other_variants() -> dict[str, tuple[list[str], list[str]]]:
+    gap = ["days_since_any", "weeks_since_any", "is_layoff_any", "prev_is_other"]
+    old_gap = ["days_since_last", "weeks_since_last", "is_layoff"]
+    prev = ["prev_is_other", "prev_other_finish", "prev_other_finish_rel", "prev_other_abroad", "runs_since_jra"]
+    career = ["n_other_prev", "other_win_rate", "other_top3_rate", "n_any_prev"]
+    return {
+        "base": ([], []),
+        "前走からの間隔を地方・海外込みに置き換え": (gap, old_gap),
+        "前走が地方・海外のときの着順": (prev, []),
+        "地方・海外の経歴": (career, []),
+        "地方・海外すべて(間隔は置き換え)": (gap + prev + career, old_gap),
+    }
+
+
 # ---------------------------------------------------------------- 比べ方
 
 def _fit_predict(train: pd.DataFrame, test: pd.DataFrame, features: list[str], seed: int, rounds: int) -> np.ndarray:
@@ -548,7 +565,7 @@ def to_markdown(res: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def prepare(conn: sqlite3.Connection) -> pd.DataFrame:
+def prepare(conn: sqlite3.Connection, other_db: str | Path | None = None) -> pd.DataFrame:
     from .features import build_features, load_results
 
     df = build_features(load_results(conn))
@@ -557,7 +574,10 @@ def prepare(conn: sqlite3.Connection) -> pd.DataFrame:
     q = market_top3(df, TEST_PERIODS[0])
     df = add_bias_candidates(df, q)
     df = add_affinity_candidates(df)
-    return add_gaikyu_candidates(conn, add_more_candidates(df))
+    df = add_gaikyu_candidates(conn, add_more_candidates(df))
+    if other_db is not None and Path(other_db).exists():
+        df = add_other_features(df, load_other(other_db))
+    return df
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -566,17 +586,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="data/feature_trials")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--rounds", type=int, default=300)
-    ap.add_argument("--only", choices=["bias", "affinity", "more", "gaikyu"], default=None)
+    ap.add_argument("--only", choices=["bias", "affinity", "more", "gaikyu", "other"], default=None)
+    ap.add_argument("--other-db", default="data/jv_other.db", help="jvother で作った地方・海外の成績")
     args = ap.parse_args(argv)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     conn = sqlite3.connect(f"file:{Path(args.db).as_posix()}?mode=ro", uri=True)  # 読み取り専用で開く
-    df = prepare(conn)
+    df = prepare(conn, args.other_db)
     print(f"特徴量を作りました: {len(df):,} 行, {time.time() - t0:.0f}s", flush=True)
     cand = [c for c in BIAS_COLUMNS + ["tj_top3_shr10", "js_top3_shr10", "ts_top3_shr10", "js_n"] + MORE_COLUMNS
-            + GAIKYU_COLUMNS if c in df]
+            + GAIKYU_COLUMNS + OTHER_COLUMNS if c in df]
     print(df.loc[df["date"] >= TEST_PERIODS[0], cand].describe().T[["count", "mean", "std"]].to_string(), flush=True)
 
     parts = []
@@ -593,6 +614,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.only in (None, "gaikyu"):
         parts.append(("外厩(調教の記録の空白からの推定)", run(df, gaikyu_variants(), args.seeds, args.rounds, out,
                                                      TEST_PERIODS)))
+    if args.only == "other" or (args.only is None and "days_since_any" in df):
+        if "days_since_any" not in df:
+            raise SystemExit(f"地方・海外の成績がありません: {args.other_db}(先に python -m keibaai.jvother を流す)")
+        parts.append(("地方・海外の前走", run(df, other_variants(), args.seeds, args.rounds, out, TEST_PERIODS)))
     text = "\n\n".join(f"## {title}\n{to_markdown(r)}" for title, r in parts)
     (out / "results.md").write_text(text, encoding="utf-8")
     pd.concat([r.assign(part=t) for t, r in parts]).to_csv(out / "results.csv", index=False, encoding="utf-8-sig")
