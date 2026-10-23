@@ -944,6 +944,107 @@ def page_past_races() -> None:
                 st.markdown(f"- **{r['日付']} {r['レース']}**({r['kind']}) {r['見解']}")
 
 
+# ---------------------------------------------------------------- 相関図
+@st.cache_data(show_spinner=False, max_entries=4)
+def _kankei_runs(db_path: str, end: str, years: int, stamp: int):
+    """stamp(結果の行数)が変われば読み直す。"""
+    from keibaai import kankei
+    with contextlib.closing(db.connect(db_path)) as conn:
+        return kankei.load_runs(conn, end, years)
+
+
+def _share(v) -> str:
+    return "—" if v != v else f"{v:.1%}"
+
+
+def page_kankei() -> None:
+    from keibaai import kankei
+
+    header("Relations", "相関図",
+           "騎手・厩舎・馬主のつながりを、期間中の騎乗数から図にします。シェアは騎手側と厩舎側の両方から数えます。")
+    conn = connection()
+    first, last = gui.date_bounds(conn)
+    if first is None:
+        with st.container(border=True):
+            st.markdown("#### まだデータがありません")
+            st.page_link(PAGES["collect"], label="取得へ", icon=":material/arrow_forward:")
+        return
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1, 1, 1], vertical_alignment="bottom")
+        kind_label = c1.segmented_control("中心", ["騎手", "調教師"], default="騎手", key="kk_kind") or "騎手"
+        end = c2.date_input("集計の最終日", last, min_value=first, max_value=last, format="YYYY/MM/DD", key="kk_end")
+        years = c3.selectbox("期間", [1, 2, 3], index=2, format_func=lambda y: f"過去{y}年", key="kk_years")
+    kind = "jockey" if kind_label == "騎手" else "trainer"
+    other_label = "調教師" if kind == "jockey" else "騎手"
+    stamp = conn.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+    runs = _kankei_runs(st.session_state["db_path"], end.isoformat(), years, stamp)
+    plist = kankei.people(runs, kind, end.isoformat())
+    if plist.empty:
+        st.info("この期間に該当する人がいません。", icon=":material/info:")
+        return
+    labels = dict(zip(plist["id"], [f"{n}({c:,})" for n, c in zip(plist["name"], plist["n"])]))
+    pid = st.selectbox(f"{kind_label}を選ぶ(名前を打つと絞り込めます)", list(labels), format_func=labels.get,
+                       key=f"kk_pick_{kind}")
+    rel = kankei.relations(runs, kind, pid)
+    note = f"期間中 {kankei.MIN_RIDES} 騎乗以上で、直近1年にも騎乗がある騎手" if kind == "jockey" else "直近1年に出走がある調教師"
+    st.caption(f"{(end.replace(year=end.year - years) + dt.timedelta(days=1)):%Y/%m/%d}〜{end:%Y/%m/%d}"
+               f"・取消と除外は除く・一覧は{note}({len(plist)}人)")
+    stats = [("騎乗数" if kind == "jockey" else "出走数", f"{rel['n']:,}"), ("1着", f"{rel['wins']:,}"),
+             ("3着内率", _share(rel["top3_rate"])), (f"組んだ{other_label}", f"{len(rel['inner'])}")]
+    st.html('<div class="kb-stats">' + "".join(
+        f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
+
+    inner, outer = rel["inner"], rel["outer"]
+    choices = [None] + [("inner", p) for p in inner.index] + [("outer", o) for o in outer.index]
+    names = {("inner", p): f"{other_label}: {n}" for p, n in zip(inner.index, inner["name"])}
+    names.update({("outer", o): f"馬主: {o}" for o in outer.index})
+    left, right = st.columns([3, 2], gap="large")
+    with right:
+        pick = st.selectbox("強調するつながり", choices, format_func=lambda k: "(すべて表示)" if k is None else names[k],
+                            key=f"kk_hl_{kind}_{pid}")
+        if pick is not None:
+            ring, key = pick
+            r = (inner if ring == "inner" else outer).loc[key]
+            side = other_label if ring == "inner" else "馬主"
+            with st.container(border=True):
+                st.markdown(f"**{html.escape(rel['name'])} × {html.escape(str(r['name']))}** {int(r['n']):,}回")
+                st.html('<div class="kb-stats">' + "".join(
+                    f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in [
+                        (f"{kind_label}から見て・{int(r['rank_center'])}位", _share(r["share_center"])),
+                        (f"{side}から見て・{int(r['rank_partner'])}位", _share(r["share_partner"])),
+                        ("1着", f"{int(r['wins'])}"), ("3着内率", _share(r["top3_rate"]))]) + "</div>")
+                st.caption(f"{rel['name']}の{'騎乗' if kind == 'jockey' else '出走'}のうち {_share(r['share_center'])} が"
+                           f"この相手、{r['name']}の出走のうち {_share(r['share_partner'])} が{rel['name']}です。")
+                parts = kankei.breakdown(runs, rel, pick)
+                if not parts.empty:
+                    st.caption("内訳(" + ("馬主別" if ring == "inner" else f"{other_label}別") + ")")
+                    st.dataframe(parts, hide_index=True, width="stretch", column_config={
+                        "name": st.column_config.TextColumn("相手"), "n": st.column_config.NumberColumn("回数", format="%d")})
+        else:
+            st.caption("上で選ぶと、そのつながりだけを図で濃く出し、両方向のシェアと内訳をここに出します。")
+        st.html(kankei.legend_html())
+    with left:
+        st.html(kankei.diagram_img(rel, pick, "dark" if st.context.theme.type == "dark" else "light"))
+
+    share_cfg = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
+    rank_cfg = lambda label, t: st.column_config.NumberColumn(label, format="%d位", help=t)
+    for title, table, side in [(f"{other_label}とのつながり", inner, other_label), ("馬主とのつながり", outer, "馬主")]:
+        st.subheader(title, anchor=False)
+        cols = ["name", "n", "share_center", "rank_center", "share_partner", "rank_partner", "wins", "top3_rate"]
+        if side == "馬主":
+            cols.insert(1, "group")
+        st.dataframe(table[cols], hide_index=True, width="stretch", column_config={
+            "name": st.column_config.TextColumn(side),
+            "group": st.column_config.TextColumn("系統", help="馬主名から分けた目安"),
+            "n": st.column_config.NumberColumn("回数", format="%d", help="期間中に組んだ回数"),
+            "share_center": share_cfg(f"{kind_label}から見たシェア", f"{rel['name']}の全体のうち、この相手の割合"),
+            "rank_center": rank_cfg("順位", f"{rel['name']}から見て、何番目に多い相手か"),
+            "share_partner": share_cfg(f"{side}から見たシェア", f"この{side}の全出走のうち、{rel['name']}の割合"),
+            "rank_partner": rank_cfg("順位 ", f"この{side}から見て、{rel['name']}が何番目に多いか(1位なら図に金の輪)"),
+            "wins": st.column_config.NumberColumn("1着", format="%d"),
+            "top3_rate": share_cfg("3着内率", "この組での3着以内の割合")})
+
+
 # ---------------------------------------------------------------- 買い方(1レース)
 ALLOCATIONS = ["ケリー基準で配分", "配分なし(同額)"]
 KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全部(攻めすぎ注意)": 1.0}
@@ -1518,6 +1619,7 @@ PAGES = {
     "bets": st.Page(page_bets, title="買い方", icon=":material/calculate:", url_path="bets"),
     "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),
     "past": st.Page(page_past_races, title="過去レース", icon=":material/manage_search:", url_path="past"),
+    "kankei": st.Page(page_kankei, title="相関図", icon=":material/hub:", url_path="kankei"),
     "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
     "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),
     "backtest": st.Page(page_backtest, title="シミュレーション", icon=":material/payments:", url_path="backtest"),

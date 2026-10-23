@@ -224,3 +224,17 @@ button, a, [role="button"] { touch-action: manipulation; }
   .kb-rv-row { grid-template-columns: 5rem minmax(0, 1fr); }
   .kb-rv-text { grid-column: 1 / -1; }
 }
+
+/* ---- 相関図(騎手・厩舎・馬主のつながり) ---- */
+.kb-kk { inline-size: 100%; max-inline-size: 46rem; block-size: auto; display: block; margin-inline: auto; }
+/* 凡例の色。図の中の色は kankei.py の GROUP_COLORS と同じにする */
+.kb-kk-g0 { background: #2f6fd6; }
+.kb-kk-g1 { background: #d0453a; }
+.kb-kk-g2 { background: #d89a1e; }
+.kb-kk-g3 { background: #9aa1ab; }
+.kb-kk-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.8rem; color: var(--kb-muted); }
+.kb-kk-legend > span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.kb-kk-sw { display: inline-block; inline-size: 1.4rem; block-size: 0; border-top: 4px solid var(--kb-accent); }
+.kb-kk-sw-sub { border-top: 1px solid currentColor; }
+.kb-kk-sw-gold { inline-size: 0.8rem; block-size: 0.8rem; border: 3px solid #d4a72c; border-radius: 50%; }
+.kb-kk-dot { display: inline-block; inline-size: 0.7rem; block-size: 0.7rem; border-radius: 50%; }
