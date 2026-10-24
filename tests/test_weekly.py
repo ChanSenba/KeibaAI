@@ -225,6 +225,23 @@ def test_review_compares_forecast_with_actual_flow():
     assert "有利不利(的中)" in md and "展開の予想: 前後の有利不利が1/1レース的中、ペースが1/1レース的中" in md
 
 
+def test_review_with_forecast_of_no_advantage_does_not_crash():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    flow_review.save_forecast(conn, forecast_table(0.3, 0.0), {"202505010101"}, dt.datetime(2025, 2, 28, 20))  # 有利不利なし(NULL で保存)
+    add_flow_result(conn, [1, 2, 3, 4, 5], {n: f"{n}-{n}" for n in range(1, 6)})
+    r = weekly.review_day(conn, "2025-03-01")
+    assert r.races.iloc[0]["forecast"].startswith("有利不利なし")
+    assert "展開の予想: 有利不利なし" in weekly.render_markdown(r)
+
+
+def test_forecast_row_turns_missing_advantage_back_to_none():
+    # pandas の版によっては、NULL の列が NaN で返ってくる。それでも「有利不利なし」として扱う
+    f = weekly._forecast_row(pd.Series({"advantage": float("nan"), "pace": "平均", "basis": "x"}))
+    assert f["advantage"] is None and flow_review.forecast_text(f) == "有利不利なし(x)・ペース平均"
+    assert weekly._forecast_row(pd.Series({"advantage": "前"}))["advantage"] == "前"
+
+
 def test_review_without_forecast_still_shows_actual_flow():
     conn = db.connect(":memory:")
     weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))

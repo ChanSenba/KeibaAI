@@ -145,9 +145,17 @@ def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
     for rid, g in runners.groupby("race_id"):
         r = races.loc[rid] if rid in races.index else None
         a, b, ground = (None, None, None) if r is None else (r["pace_first3f"], r["pace_last3f"], r["ground"])
-        out[rid] = (fc.loc[rid].to_dict() if rid in fc.index else None, flow_review.race_flow(g, a, b, ground),
+        out[rid] = (_forecast_row(fc.loc[rid]) if rid in fc.index else None, flow_review.race_flow(g, a, b, ground),
                     g.set_index("number")["l3f_rank"])
     return out
+
+
+def _forecast_row(row: pd.Series) -> dict:
+    """保存した展開予想の1行。DB の NULL は pandas で NaN になるので、「有利不利なし」(None) に戻す。"""
+    f = row.to_dict()
+    if f.get("advantage") not in flow_review.ADVANTAGE:
+        f["advantage"] = None
+    return f
 
 
 def _past_runs(conn: sqlite3.Connection, h: pd.DataFrame, date: str) -> pd.DataFrame:
