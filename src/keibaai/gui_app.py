@@ -1448,7 +1448,8 @@ def page_review() -> None:
             "roi": pct("単勝回収率", "その印の馬の単勝を100円ずつ買った場合の、払戻 ÷ 投資(確定オッズ)")})
 
     st.subheader("レースごと", anchor=False)
-    races = r.races.sort_values(["venue", "round"]).reset_index(drop=True)
+    races = (r.races.assign(_code=r.races["race_id"].str[4:6]).sort_values(["_code", "round"])  # 場コード順(ほかのページと同じ)
+             .drop(columns="_code").reset_index(drop=True))
     race, box = race_picker(races, key=f"review_{day}")
     heads = gui.day_races(conn, day).set_index("race_id")
     with box:
