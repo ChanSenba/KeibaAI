@@ -29,6 +29,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
+予想の能力のみの勝率はニューラルネット(PyTorch)で出します。`pip install` で PyTorch の CPU 版(約200MB)も入ります。
+
 画面で操作するには、フォルダ内の `KeibaAI.bat` をダブルクリックするか、`keibaai-gui` を実行します
 （ブラウザで http://localhost:8501 が開く。この PC からだけ見られる）。終了は黒い画面（コンソール）を閉じます。
 bat ファイルごとの説明（何をするか・いつ使うか・前提・失敗したときの見方）は [docs/bat.md](docs/bat.md)、画面の見方は画面上のメニュー「ヘルプ」にあります。

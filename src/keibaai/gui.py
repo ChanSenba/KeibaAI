@@ -238,7 +238,9 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     """予想印(mark 列)を付ける。予想の中身には手を入れず、出た勝率と期待値から決める。
 
     レースごとに、勝率の高い順に ◎ ○ ▲、続く 2 頭に △(9 頭立て以下は 1 頭)。
-    勝率はオッズ込みを使い、そのレースにオッズがなければ能力のみを使う。
+    勝率は印用の勝率(p_win_mix。ニューラルネットの能力のみの勝率と、予想を出した時点のオッズを混ぜたもの)を使い、
+    そのレースにオッズがなければ能力のみを使う。印用の勝率のない古い予想では、オッズ込みのモデルの勝率を使う。
+    当日9時のオッズでの検証(2026年)で、◎の的中は オッズ込みのモデル 31.5% → 32.4%(predict.mix_with_odds)。
     印のない馬のうち、期待値(オッズ込み。なければ能力のみ)がいちばん高く 1 以上の馬に ☆(穴)。
     能力のみの期待値は人気薄を高く見すぎる(100倍超の馬の勝率を実際の約4倍に見る)ので、オッズ込みを先に使う。
     2021〜2026年の検証で、☆の単勝の勝率は 1.0% → 2.1%、回収率は 69.5% → 75.8% になった(それでも得な印ではない)。
@@ -251,7 +253,7 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     out["star"] = ((out["ev_market"] >= STAR_EV) & (out["p_win_market"] >= STAR_P)
                    & (out["win_odds"] <= STAR_ODDS)).map({True: "★", False: ""})
     for _, g in out.groupby("race_id", sort=False):
-        p = "p_win_market" if g["p_win_market"].notna().all() else "p_win_ability"
+        p = next((c for c in ("p_win_mix", "p_win_market") if c in g and g[c].notna().all()), "p_win_ability")
         ranked = g[p].dropna().sort_values(ascending=False, kind="stable").index
         n_marked = len(MARKS) + (2 if len(g) >= 10 else 1)
         top = list(ranked[:n_marked])
