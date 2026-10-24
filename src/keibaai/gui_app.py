@@ -443,7 +443,7 @@ def page_predict() -> None:
     if predict:
         try:
             with st.spinner("学習して予想しています(数分かかります)"):
-                st.session_state["prediction"] = (date, gui.add_marks(gui.predict_table(conn, date)))
+                st.session_state["prediction"] = (date, gui.predict_and_save(conn, date))
             with st.spinner("予想の見解に使う、各要素の値を計算しています(初めてのときは1〜2分かかります)"):
                 _race_factor_values(conn, date, None)
         except ValueError as e:
@@ -1244,7 +1244,7 @@ def bets_auto(conn, date: dt.date, pred) -> None:
             if st.button("この日を予想する", type="primary", icon=":material/insights:"):
                 try:
                     with st.spinner("学習して予想しています(数分かかります)"):
-                        st.session_state["prediction"] = (date, gui.add_marks(gui.predict_table(conn, date)))
+                        st.session_state["prediction"] = (date, gui.predict_and_save(conn, date))
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))

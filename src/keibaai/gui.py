@@ -272,6 +272,28 @@ def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
     return table
 
 
+def predict_and_save(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
+    """予想して、回顧用に保存し、印を付けた表を返す。"""
+    raw = predict_table(conn, date)
+    save_prediction(conn, raw)
+    return add_marks(raw)
+
+
+def save_prediction(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.datetime | None = None) -> int:
+    """出した予想を、回顧のために保存する(keibaai weekly と同じ。結果が出たレースと、当日朝以降の予想は書き換えない)。"""
+    from . import flow_review
+    from .weekly import save_predictions
+
+    now = now or dt.datetime.now()
+    n = save_predictions(conn, table, now)
+    flow = table.attrs.get("flow")
+    if n and flow is not None:
+        saved = {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE saved_at = ?",
+                                            (now.isoformat(timespec="seconds"),))}
+        flow_review.save_forecast(conn, flow, saved, now)
+    return n
+
+
 def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection | None = None) -> dict:
     """1レースの全券種のオッズを取得して {券種: {馬番の組: オッズ}} にする。
 
