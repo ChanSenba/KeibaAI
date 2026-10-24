@@ -181,3 +181,16 @@ def test_course_text_names_turn_inner_outer_and_rail():
     assert gui.course_text(s(direction="右", course="内2周", rail="C")) == "芝・右回り・内回り2周・Cコース 1600m"
     out = gui.race_head_html(s(round=11, direction="右", course="外", rail="B", ground="良"))
     assert "京都11R" in out and "芝・右回り・外回り・Bコース 1600m ・ 良" in out
+
+def test_predict_table_drops_attrs(monkeypatch):
+    import pandas as pd
+
+    from keibaai import gui, predict
+
+    table = pd.DataFrame({"venue": ["東京"], "round": [1.0]})
+    table.attrs["flow"] = pd.DataFrame({"a": [1]})
+    monkeypatch.setattr(predict, "predict_day", lambda conn, date, rounds=300: table)
+    out = gui.predict_table(None, dt.date(2026, 10, 24))
+    assert out.attrs == {}
+    out.astype({"round": int})  # attrs に表が残っていると ValueError
+    pd.concat([out, out.astype({"round": int})], axis=1)

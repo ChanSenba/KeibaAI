@@ -267,7 +267,9 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
 def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
     from .predict import predict_day
 
-    return predict_day(conn, date.isoformat())
+    table = predict_day(conn, date.isoformat())
+    table.attrs = {}  # 展開予想(表)が attrs に入っていると、concat や astype が attrs を比べて落ちる。画面では使わない
+    return table
 
 
 def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection | None = None) -> dict:
