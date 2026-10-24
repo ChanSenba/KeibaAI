@@ -18,7 +18,7 @@ bat は黒い画面(コンソール)で動くので、文字化けしないよ�
 1. このフォルダに移動する(どこから起動しても、bat のあるフォルダで動く)
 2. `.venv\Scripts\python.exe` があるか確かめる。なければメッセージを出して終了する
 3. `PYTHONPATH` をこのフォルダの `src` にする(取得中で `pip install -e .` ができないときも、いまのソースで起動できる)
-4. 画面用のライブラリ(streamlit)が入っていなければ、`pip install` で入れる。`keibaai.exe` は置き換えないので、取得の実行中でも失敗しない
+4. 画面用のライブラリ(streamlit)と、予想のニューラルネット用の PyTorch(CPU 版、約200MB)が入っていなければ、`pip install` で入れる。`keibaai.exe` は置き換えないので、取得の実行中でも失敗しない
 5. `python -m keibaai.gui` で画面を起動する。ブラウザで <http://localhost:8501> が開く(この PC からだけ見られる)
 
 ### いつ使うか

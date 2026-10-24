@@ -27,7 +27,7 @@ def test_predict_day_is_reused_until_the_card_changes(tmp_path, monkeypatch):
     fits = count_fits(monkeypatch)
     first = predict.predict_day(conn, DAY)
     n = len(fits)
-    assert n >= 2  # 能力のみとオッズ込みの2つは必ず学習する
+    assert n >= 1  # オッズ込みは必ず学習する(能力のみはニューラルネット)
     again = predict.predict_day(conn, DAY)
     assert len(fits) == n  # 2回目は保存した結果を返すので、学習し直さない
     pd.testing.assert_frame_equal(first, again)

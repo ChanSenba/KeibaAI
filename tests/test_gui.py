@@ -135,6 +135,11 @@ def test_add_marks_by_win_probability():
     assert m["A", 9] == "☆" and m["A", 1] == ""
     # オッズのないレースは能力の勝率で。9 頭以下は △ が 1 頭、期待値 1 以上がいなければ ☆ なし
     assert [m["B", i] for i in (2, 3, 4, 1)] == ["◎", "○", "▲", "△"] and m["B", 5] == ""
+    # 印用の勝率(p_win_mix)があればそれで並べる。★はオッズ込みのまま
+    t["p_win_mix"] = [0.3, 0.05, 0.2, 0.1, 0.08, 0.07, 0.06, 0.06, 0.04, 0.04] + [None] * 5
+    out = gui.add_marks(t).set_index(["race_id", "number"])
+    assert [out["mark"]["A", i] for i in (1, 3, 4)] == ["◎", "○", "▲"] and out["star"]["A", 9] == "★"
+    assert out["mark"]["B", 2] == "◎"  # オッズのないレースは能力の勝率のまま
 
 
 def test_backtest_run_returns_table_and_curves():

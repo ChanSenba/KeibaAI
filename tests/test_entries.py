@@ -175,3 +175,20 @@ def test_snapshot_odds_appends_with_time_and_skips_empty(capsys):
 
     assert snapshot_odds(conn, Empty([]), "2024-11-24", now=dt.datetime(2024, 11, 24, 16, 0)) == 0
     assert "オッズがまだ" in capsys.readouterr().out
+
+
+def test_mix_with_odds_uses_the_evening_weights_for_odds_from_the_day_before():
+    from keibaai.predict import MIX_EVENING, MIX_MORNING, mix_with_odds
+
+    t = pd.DataFrame({"race_id": ["a"] * 3 + ["b"] * 3, "number": [1, 2, 3] * 2, "win_odds": [2.0, 4.0, 8.0] * 2,
+                      "date": ["2030-01-05"] * 6,
+                      "fetched_at": ["2030-01-05T08:00:00"] * 3 + ["2030-01-04T21:00:00"] * 3})
+    p = pd.Series([0.2, 0.3, 0.5] * 2)
+    out = mix_with_odds(t, p)
+    assert np.isclose(out[:3].sum(), 1) and np.isclose(out[3:].sum(), 1)
+    mkt = np.array([1 / 2, 1 / 4, 1 / 8]); mkt /= mkt.sum()
+    for (a, b), got in ((MIX_MORNING, out[:3]), (MIX_EVENING, out[3:])):
+        z = a * np.log(p[:3].to_numpy()) + b * np.log(mkt)
+        assert np.allclose(got.to_numpy(), np.exp(z) / np.exp(z).sum())
+    t.loc[0, "win_odds"] = np.nan  # オッズが欠けたレースは混ぜない
+    assert mix_with_odds(t, p)[:3].isna().all()

@@ -16,7 +16,7 @@ from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
 from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results, result_mask
 from .flow_review import forecast_flow
-from .factors import COLUMN, FACTORS, predict_factors
+from .factors import COLUMN, FACTORS
 from .jvtraining import add_jv_features
 from .model import PARAMS, TRAIN_FROM, normalize_within_race, train_rows
 
@@ -87,6 +87,7 @@ def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
         SELECT e.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.course, c.rail, c.distance, c.ground,
+               c.fetched_at,
                p.sire_id, p.damsire_id, t.rank AS train_rank, t.critic AS train_critic
         FROM entries e JOIN entry_races c USING (race_id) LEFT JOIN pedigree p USING (horse_id)
         LEFT JOIN training t ON t.race_id = e.race_id AND t.number = e.number AND t.seq = 0
@@ -125,7 +126,7 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
     return build_features(pd.concat([hist, entries], ignore_index=True)), hist
 
 
-CACHE_VERSION = 5  # 予測に展開予想(attrs["flow"])を付けた。旧予測は使わない。
+CACHE_VERSION = 6  # 能力のみの勝率と要素ごとの勝率をニューラルネットにし、印用の勝率(p_win_mix)を足した。旧予測は使わない。
 CACHE_DIR = "model_cache"  # DB と同じフォルダの中に作る
 
 
@@ -218,24 +219,58 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
     return _cached(conn, "predict", date, True, (rounds,), lambda: _predict_day(conn, date, rounds)).copy()
 
 
+def mix_with_odds(target: pd.DataFrame, p_ability: pd.Series) -> pd.Series:
+    """印に使う勝率。能力のみの勝率(ニューラルネット)と、その時点の単勝オッズの確率を、レース単位の対数で混ぜる。
+
+    重みは JRA-VAN の時系列オッズ(2025-09〜2026-10 の約3,900レース)で、予想を保存する時点のオッズを使って決めた。
+    当日9時のオッズなら a=0.42・b=0.78、前日21時なら a=0.74・b=0.36(前日はオッズが当てにならないぶんモデルが重い。
+    どちらも全期間で決めた値)。混ぜ方を2025年9〜12月だけで決めて2026年で測ると、当日9時で勝ち馬の対数尤度は オッズだけ −2.0254、
+    いまのオッズ込みモデル(確定オッズで学習)−2.0285 に対して −1.9878、◎の的中は 31.5% → 32.4%。
+    ただし確定オッズで払い戻すと回収率は上がらなかったので、★と期待値はいままでどおりオッズ込みモデルで出す。
+    オッズが前日に取られたもの(fetched_at の日付がレースより前)なら前日の重みを使う。オッズのないレースは空。
+    """
+    from .blend import Blend, apply_blend
+
+    t = target[["race_id", "number", "win_odds", "date"]].copy()
+    t["p_win"] = p_ability
+    fetched = pd.to_datetime(target["fetched_at"] if "fetched_at" in target else pd.NaT, errors="coerce")
+    eve = pd.Series(fetched, index=target.index).dt.normalize() < pd.to_datetime(t["date"])
+    out = pd.Series(np.nan, index=target.index)
+    ok = t["win_odds"].notna() & (t["win_odds"] > 0)
+    full = ok.groupby(t["race_id"]).transform("all")
+    for is_eve, (a, b) in ((False, MIX_MORNING), (True, MIX_EVENING)):
+        part = t[full & (eve == is_eve)]
+        if part.empty:
+            continue
+        mixed = apply_blend(part.reset_index(), Blend(a, b, float("nan"), float("nan")))
+        out.loc[mixed["index"].to_numpy()] = mixed["p_win"].to_numpy()
+    return out
+
+
+MIX_MORNING = (0.42, 0.78)  # 能力のみの勝率の重み a・オッズの確率の重み b(当日のオッズ)
+MIX_EVENING = (0.74, 0.36)  # 前日のオッズ
+
+
 def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFrame:
+    from .nn_model import fit_predict
+
     df, hist = day_frame(conn, date)
     train, target = df[result_mask(df)], df[df["is_entry"]].copy()
 
-    ability = _fit(train, ABILITY_MODEL_FEATURES, rounds)
+    p_ability, parts = fit_predict(train, target)  # 能力のみの勝率と、要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場…)
     market = _fit(train, MARKET_MODEL_FEATURES, rounds)
-    target["p_win_ability"] = normalize_within_race(target, ability.predict(target[ABILITY_MODEL_FEATURES]))
+    target["p_win_ability"] = p_ability
     pm = market.predict(target[MARKET_MODEL_FEATURES])
     target["p_win_market"] = np.where(target["win_odds"].notna(), pm, np.nan)
     ok = target["p_win_market"].notna()
     target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())
+    target["p_win_mix"] = mix_with_odds(target, target["p_win_ability"])
     target["ev_ability"] = target["p_win_ability"] * target["win_odds"]
     target["ev_market"] = target["p_win_market"] * target["win_odds"]
-    fp = predict_factors(train, target, rounds=rounds)  # 要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場)
     for name, col in COLUMN.items():
-        target[col] = fp[name]
+        target[col] = parts[name]
     cols = ["race_id", "date", "venue", "round", "race_name", "number", "horse_name", "jockey", "win_odds",
-            "popularity", "p_win_ability", "p_win_market", "ev_ability", "ev_market", *COLUMN.values()]
+            "popularity", "p_win_ability", "p_win_market", "p_win_mix", "ev_ability", "ev_market", *COLUMN.values()]
     out = target[cols].copy()
     out["venue"] = out["venue"].astype(str)  # 特徴量用の category のままだと画面側で文字連結ができない
     out.attrs["flow"] = forecast_flow(target)  # 発走前の展開予想。weekly が予想と一緒に保存する

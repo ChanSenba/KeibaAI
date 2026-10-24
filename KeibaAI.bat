@@ -11,5 +11,7 @@ rem このフォルダの src を直接使う(取得中で pip install -e . が�
 set "PYTHONPATH=%~dp0src"
 rem 画面用のライブラリだけ入れる。keibaai.exe は置き換えないので、取得の実行中でも失敗しない
 .venv\Scripts\python.exe -c "import streamlit" 2>nul || .venv\Scripts\python.exe -m pip install "streamlit>=1.50"
+rem 予想のニューラルネット用(PyTorch、CPU 版。初回だけ入れる)
+.venv\Scripts\python.exe -c "import torch" 2>nul || .venv\Scripts\python.exe -m pip install "torch>=2.2"
 .venv\Scripts\python.exe -m keibaai.gui
 if errorlevel 1 pause
