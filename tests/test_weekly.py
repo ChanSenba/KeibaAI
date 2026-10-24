@@ -188,11 +188,11 @@ def test_review_lists_every_marked_horse_and_top3_rate_per_mark():
     assert line.startswith("  - 印の着順: ◎馬1 2着 / ○馬2 3着 / ▲馬3 1着") and "△馬4 5着" in line
 
 
-def add_flow_result(conn, order, passing, first3f=34.0, last3f=36.0):
+def add_flow_result(conn, order, passing, first3f=34.0, last3f=36.0, race_id="202505010101"):
     """着順 order(馬番の並び)。passing は馬番ごとの通過順。"""
-    race = Race(race_id="202505010101", date="2025-03-01", venue="東京", round=1, course_type="芝", distance=1600,
+    race = Race(race_id=race_id, date="2025-03-01", venue="東京", round=1, course_type="芝", distance=1600,
                 ground="良", pace_first3f=first3f, pace_last3f=last3f)
-    results = [Result(race_id="202505010101", number=n, finish=f, win_odds=2.0 * n, popularity=n, horse_id=f"h{n}",
+    results = [Result(race_id=race_id, number=n, finish=f, win_odds=2.0 * n, popularity=n, horse_id=f"h{n}",
                       passing=passing[n]) for f, n in enumerate(order, start=1)]
     db.save_race(conn, ParsedRace(race=race, results=results))
 
@@ -223,6 +223,26 @@ def test_review_compares_forecast_with_actual_flow():
     md = weekly.render_markdown(r)
     assert "展開の予想: 前有利(ペーススロー" in md and "実際の展開: 前有利(前に付けた馬の3着内率が他より" in md
     assert "有利不利(的中)" in md and "展開の予想: 前後の有利不利が1/1レース的中、ペースが1/1レース的中" in md
+
+
+def test_review_with_forecast_of_no_advantage_does_not_crash():
+    conn = db.connect(":memory:")
+    # 有利不利なし(NULL)のレースと、前有利のレースが同じ日にあると、列が文字列になって NULL が NaN で返る
+    for rid in ("202505010101", "202505010102"):
+        weekly.save_predictions(conn, pred_table(rid), dt.datetime(2025, 2, 28, 20))
+        add_flow_result(conn, [1, 2, 3, 4, 5], {n: f"{n}-{n}" for n in range(1, 6)}, race_id=rid)
+    both = pd.concat([forecast_table(0.3, 0.0), forecast_table(0.1, 0.0, "202505010102")], ignore_index=True)
+    flow_review.save_forecast(conn, both, {"202505010101", "202505010102"}, dt.datetime(2025, 2, 28, 20))
+    r = weekly.review_day(conn, "2025-03-01")
+    assert r.races.sort_values("race_id")["forecast"].iloc[0].startswith("有利不利なし")
+    assert "展開の予想: 有利不利なし" in weekly.render_markdown(r)
+
+
+def test_forecast_row_turns_missing_advantage_back_to_none():
+    # pandas の版によっては、NULL の列が NaN で返ってくる。それでも「有利不利なし」として扱う
+    f = weekly._forecast_row(pd.Series({"advantage": float("nan"), "pace": "平均", "basis": "x"}))
+    assert f["advantage"] is None and flow_review.forecast_text(f) == "有利不利なし(x)・ペース平均"
+    assert weekly._forecast_row(pd.Series({"advantage": "前"}))["advantage"] == "前"
 
 
 def test_review_without_forecast_still_shows_actual_flow():
