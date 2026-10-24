@@ -30,13 +30,26 @@ def test_predict_and_save_makes_the_day_reviewable(monkeypatch):
     from keibaai import gui
 
     conn = db.connect(":memory:")
-    monkeypatch.setattr(gui, "predict_table", lambda conn, date: pred_table(date="2030-01-05"))
+    monkeypatch.setattr(gui, "predict_with_flow", lambda conn, date: (pred_table(date="2030-01-05"), None))
     assert gui.review_dates(conn) == []
     table = gui.predict_and_save(conn, dt.date(2030, 1, 5))
     assert "mark" in table and len(table) == 5
     assert gui.review_dates(conn) == ["2030-01-05"]
     gui.predict_and_save(conn, dt.date(2030, 1, 5))  # 取り直しても、同じ馬が重ならない
     assert conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 5
+
+
+def test_predict_and_save_keeps_flow_forecast(monkeypatch):
+    from keibaai import gui, predict
+
+    conn = db.connect(":memory:")
+    table = pred_table(date="2030-01-05")
+    table.attrs["flow"] = pd.DataFrame([{"race_id": "202505010101", "n_front": 3, "front_share": 0.2, "course_edge": 0.1,
+                                         "course_pace_diff": -0.5, "pace": "H", "advantage": "差", "basis": "テスト"}])
+    monkeypatch.setattr(predict, "predict_day", lambda conn, date, rounds=300: table)
+    out = gui.predict_and_save(conn, dt.date(2030, 1, 5))
+    assert out.attrs == {}  # 画面に渡す表は attrs を持たない
+    assert conn.execute("SELECT race_id, pace FROM flow_forecast").fetchall() == [("202505010101", "H")]
 
 
 def test_save_is_idempotent_and_frozen_after_race_day_morning():

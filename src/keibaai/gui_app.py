@@ -469,7 +469,8 @@ def page_predict() -> None:
     if table is not None:
         st.subheader("期待値の高い馬", anchor=False, help=TIPS["top_ev"])
         key = "ev_market" if table["ev_market"].notna().any() else "ev_ability"
-        top = table.dropna(subset=[key]).nlargest(8, key)
+        table = table.loc[:, ~table.columns.duplicated()]  # 同名の列があると table[key] が表になり、並べ替えで落ちる
+        top = table.dropna(subset=[key]).sort_values(key, ascending=False, kind="stable").head(8)
         courses = gui.day_courses(conn, date.isoformat())  # 予想の表にはコースの列がないので出馬表から引く
         with st.container(border=True):
             st.dataframe(top.assign(race=top["venue"] + top["round"].astype(int).astype(str) + "R",
