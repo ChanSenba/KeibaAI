@@ -184,5 +184,5 @@ def horse_review(f: dict, h: dict, records: dict, race: dict | None = None) -> d
     if h.get("l3f_rank") == h.get("l3f_rank") and h.get("l3f_rank") is not None:
         summary += f"上がり3Fは{int(h['l3f_rank'])}位でした。"
     return {"mark": h.get("mark") or "", "number": int(h["number"]), "name": h["horse_name"], "sub": sub,
-            "summary": summary, "fit": overall,
+            "summary": summary, "fit": overall, "place": place,
             "rows": [{"name": n, "pt": FIT_PT[g], "grade": g, "text": t} for n, g, t in checks]}
