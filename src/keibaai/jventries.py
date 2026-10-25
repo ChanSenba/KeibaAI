@@ -5,8 +5,11 @@
   RT_0B15.txt: その日のレース(RA)と出走馬(SE)の速報。当日の出馬表や成績。過去の日は確定成績が出ると取れなくなる
   どちらも同じ形で読める。同じレースが両方にあれば、区分の進んだほう(数字の大きいほう)を使う
   RT_0B31.txt: 単勝・複勝・枠連のオッズ(O1)。レースごとに1件
+  RT_0B14.txt: その日の開催情報の速報。天候・馬場の発表と変更(WE)が競馬場ごとに入る。あれば出馬表の天候・馬場をいちばん新しい発表に置き換える
 O1(962バイト、位置は 0 始まり): 0-1 種別, 2 区分, 11-26 レース, 43- 単勝(馬番2桁 + オッズ4桁(0.1倍単位) + 人気2桁)が28頭ぶん。
 取消などでオッズのない馬は、数字の代わりに記号が入っている。
+WE(42バイト): 11-18 年月日, 19-20 場, 21-22 回, 23-24 日, 25-32 発表月日時分, 33 変更識別, 34 天候, 35 芝の馬場, 36 ダートの馬場
+(37-39 は変更前)。コードは RA と同じ。0 は未設定。
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from pathlib import Path
 
 from . import db
 from .entries import Entry, EntryRace, ParsedEntries
-from .jvrace import VENUES, _num, _records, parse_ra, parse_se, race_id_of
+from .jvrace import GROUND, VENUES, WEATHER, _num, _records, parse_ra, parse_se, race_id_of
 
 ENTRY_KUBUNS = tuple(str(i).encode() for i in range(1, 8))  # 出走馬名表・出馬表・速報成績・確定成績のどれでも読む
 WIN_START, WIN_WIDTH, WIN_COUNT = 43, 8, 28
@@ -32,6 +35,36 @@ def parse_o1(b: bytes) -> tuple[str, dict[int, tuple[float | None, int | None]]]
         if number:
             out[number] = (_num(e[2:6], 10), _num(e[6:8]))
     return race_id_of(b), out
+
+
+def parse_we(b: bytes) -> tuple[str, str, str, str | None, str | None, str | None] | None:
+    """WE の1件を (日付 YYYY-MM-DD, 競馬場, 発表月日時分, 天候, 芝の馬場, ダートの馬場) にする。対象外は None。"""
+    if b[:2] != b"WE" or len(b) < 37 or b[19:21].decode("ascii", "replace") not in VENUES:
+        return None
+    ymd = b[11:19].decode("ascii", "replace")
+    return (f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}", VENUES[b[19:21].decode()], b[25:33].decode("ascii", "replace"),
+            WEATHER.get(chr(b[34])), GROUND.get(chr(b[35])), GROUND.get(chr(b[36])))
+
+
+def latest_conditions(raw_dir: str | Path, date: str) -> dict[str, tuple[str | None, str | None, str | None]]:
+    """その日(YYYY-MM-DD)の競馬場ごとの、いちばん新しい発表の (天候, 芝の馬場, ダートの馬場)。速報がなければ空。"""
+    path = Path(raw_dir) / "RT_0B14.txt"
+    best: dict[str, tuple] = {}
+    if path.exists():
+        for b in _records(path):
+            w = parse_we(b)
+            if w and w[0] == date and w[2] >= best.get(w[1], ("",))[0]:
+                best[w[1]] = w[2:]
+    return {venue: w[1:] for venue, w in best.items()}
+
+
+def apply_conditions(race: EntryRace, cond: dict[str, tuple[str | None, str | None, str | None]]) -> None:
+    """天候・馬場の速報があれば、出馬表の天候と馬場(ダートはダート、それ以外は芝)を置き換える。"""
+    if race.venue not in cond:
+        return
+    weather, turf, dirt = cond[race.venue]
+    race.weather = weather or race.weather
+    race.ground = (dirt if race.course_type == "ダ" else turf) or race.ground
 
 
 CARD_FILES = ("RACE.txt", "RT_0B15.txt")  # 今週のデータ、速報
@@ -93,6 +126,9 @@ def read_entries(raw_dir: str | Path, date: str) -> list[ParsedEntries]:
                 e = horses[o[0]].get(number)
                 if e and win is not None:
                     e.win_odds, e.popularity = win, pop if pop is not None else e.popularity
+    cond = latest_conditions(raw_dir, date)
+    for race in races.values():
+        apply_conditions(race, cond)
     return [ParsedEntries(races[i], [h[n] for n in sorted(h)]) for i, h in sorted(horses.items()) if i in races and h]
 
 

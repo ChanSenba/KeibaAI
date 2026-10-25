@@ -67,6 +67,7 @@ def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_ro
     出馬表はその日の全レースぶんをまとめて取る。race_ids を渡すと、オッズはそのレースだけ取る(1レースだけ取得するとき)。
 
     木曜〜金曜の出走馬名表・出馬表は「今週のデータ」(RACE, option 2)に、当日の出馬表は速報(0B15)に出る。両方取る。
+    当日の天候・馬場の発表と変更は速報(0B14)に出る。あれば出馬表の天候・馬場をそれで置き換える(取り直すたびに新しくなる)。
     馬番は枠順の発表(金曜)のあとに入るので、それより前は 0 を返す。
     """
     from .jventries import import_entries, race_keys, read_entries
@@ -74,7 +75,7 @@ def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_ro
     raw = Path(raw_root) / "entries"  # 成績の取り込みが使う RACE.txt と混ぜない
     ymd = date.replace("-", "")
     week = (dt.date.fromisoformat(date) - dt.timedelta(days=7)).strftime("%Y%m%d")
-    export(raw, week, ["RACE"], option=2, rt=[f"0B15:{ymd}"], python32=python32)
+    export(raw, week, ["RACE"], option=2, rt=[f"0B15:{ymd}", f"0B14:{ymd}"], python32=python32)
     (raw / "RT_0B31.txt").unlink(missing_ok=True)  # 前に取った別の日のオッズを混ぜない
     numbered = {p.race.race_id for p in read_entries(raw, date)}  # 馬番の入ったレースだけ(枠順の発表前はオッズもない)
     keys = [k for k in race_keys(raw, date) if k[:4] + k[8:] in numbered and (race_ids is None or k[:4] + k[8:] in race_ids)]
