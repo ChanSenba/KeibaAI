@@ -1462,7 +1462,7 @@ def page_review() -> None:
 
 
 def review_race(g, race=None, reviews=None) -> None:
-    """1レースの回顧: 印を付けた馬すべての着順と、1〜3着の馬。"""
+    """1レースの回顧: 全馬の着順表(印の列つき)と、馬ごとの見解。"""
     from keibaai import weekly
 
     if race is not None and race.get("flow"):  # 発走前の展開予想と、結果から出した実際の展開
@@ -1476,27 +1476,16 @@ def review_race(g, race=None, reviews=None) -> None:
         return "font-weight: 700; background-color: rgba(46, 158, 91, 0.2)" if v == v and v is not None and v <= 3 else ""
 
     g = g.assign(finish_text=[weekly.finish_text(f, s) for f, s in zip(g["finish"], g.get("status", [None] * len(g)))])
-    cols = {"mark": PRED_COLUMNS["mark"], "number": PRED_COLUMNS["number"], "horse_name": PRED_COLUMNS["horse_name"],
-            "finish_text": st.column_config.TextColumn("着順", help="取消・除外の馬は理由を出します"),
+    cols = {"finish_text": st.column_config.TextColumn("着順", help="取消・除外の馬は理由を出します"),
+            "mark": PRED_COLUMNS["mark"], "number": PRED_COLUMNS["number"], "horse_name": PRED_COLUMNS["horse_name"],
             "final_pop": st.column_config.NumberColumn("人気", format="%d", help="確定の単勝人気"),
             "odds": st.column_config.NumberColumn("単勝", format="%.1f", help="確定の単勝オッズ(なければ予想時のもの)"),
             "p_win_ability": st.column_config.NumberColumn("勝率(能力)", format="percent", help="発走前に出した、オッズを見ない勝率")}
-    marked = g[g["mark"].isin(weekly.MARK_ORDER)]
-    marked = marked.assign(_o=marked["mark"].map(weekly.MARK_ORDER.index)).sort_values(["_o", "number"])
-    st.caption("印を付けた馬の着順(3着以内に色をつけています)")
-    st.dataframe(marked[list(cols)].style.map(mark_style, subset=["mark"]).apply(
-        lambda c: [place_style(marked.at[i, "finish"]) for i in c.index], subset=["finish_text"]),
+    allh = g.sort_values(["finish", "number"], na_position="last")  # 着順どおり。取消・除外は最後
+    st.caption("着順(3着以内に色をつけています。印は発走前に付けたもの)")
+    st.dataframe(allh[list(cols)].style.map(mark_style, subset=["mark"]).apply(
+        lambda c: [place_style(allh.at[i, "finish"]) for i in c.index], subset=["finish_text"]),
         hide_index=True, width="stretch", column_config=cols)
-    top = g[g["finish"].between(1, 3)].sort_values("finish")
-    if not top.empty:
-        st.html('<div class="kb-marks">' + "".join(
-            f'<span class="kb-mark"><b>{int(f)}着</b>{html.escape(m or "")}{int(n)} {html.escape(str(h))}'
-            f'{"" if o != o or o is None else f"({o:.1f}倍)"}</span>'
-            for f, m, n, h, o in zip(top["finish"], top["mark"], top["number"], top["horse_name"], top["odds"])) + "</div>")
-    with st.expander("全馬の予想と結果", icon=":material/table:"):
-        allh = g.sort_values(["finish", "number"], na_position="last")
-        st.dataframe(allh[list(cols)].style.map(mark_style, subset=["mark"]), hide_index=True, width="stretch",
-                     column_config=cols)
     if reviews and reviews["horses"]:
         st.subheader("回顧の見解", anchor=False)
         st.caption("そのレースの展開・枠・馬場状態・コース・距離に、各馬が向いていたかを、結果と過去の成績から機械的に判定しています。"
