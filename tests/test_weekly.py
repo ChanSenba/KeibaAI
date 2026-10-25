@@ -287,7 +287,8 @@ def test_review_gives_fit_for_each_horse_from_flow_gate_and_ground():
     rv = r.reviews["202505010101"]
     assert "稍重" in rv["track"] and "内枠有利" in rv["track"]
     by = {t["number"]: t for t in rv["horses"]}
-    assert [t["number"] for t in rv["horses"][:4]] == [1, 2, 3, 4]  # 印のある馬が先
+    assert [t["number"] for t in rv["horses"]] == [1, 2, 3, 4, 5]  # 馬番順
+    assert by[1]["place"] == "1着"
     one = {x["name"]: x for x in by[1]["rows"]}
     assert one["展開"]["grade"] == "向いた" and one["枠"]["grade"] == "向いた" and by[1]["fit"] == "向いた条件"
     assert "序盤1番手(前)" in one["展開"]["text"] and "1番(内枠)" in one["枠"]["text"]

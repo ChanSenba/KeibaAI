@@ -190,22 +190,21 @@ def horse_records(past: pd.DataFrame, horse_id, race: dict) -> dict:
 
 
 def horse_reviews(conn: sqlite3.Connection, h: pd.DataFrame, flows: dict, date: str) -> dict:
-    """レースごとの見解。{race_id: {"track": 馬場と枠の傾き, "horses": [馬ごとの向き・不向き(印のある馬が先)]}}"""
+    """レースごとの見解。{race_id: {"track": 馬場と枠の傾き, "horses": [馬ごとの向き・不向き(馬番順)]}}"""
     past = _past_runs(conn, h, date)
     ids = list(h["race_id"].unique())
     q = ",".join("?" * len(ids))
     info = pd.read_sql_query(f"SELECT race_id, venue, course_type, distance, ground FROM races WHERE race_id IN ({q})",
                              conn, params=ids).set_index("race_id").to_dict("index")
-    order = {m: i for i, m in enumerate(MARK_ORDER)}
     out = {}
     for rid, g in h.groupby("race_id", sort=False):
         if rid not in flows or g["finish"].isna().all():
             continue
         _, act, l3 = flows[rid]
         race = info.get(rid, {})
-        g = g[g["finish"].notna() | g["status"].notna()].assign(_o=lambda d: d["mark"].map(order).fillna(len(order)))
+        g = g[g["finish"].notna() | g["status"].notna()]
         horses = []
-        for _, x in g.sort_values(["_o", "finish", "number"], na_position="last").iterrows():
+        for _, x in g.sort_values("number").iterrows():  # 馬番順
             d = x.to_dict()
             d["l3f_rank"] = l3.get(int(x["number"]), float("nan"))
             horses.append(flow_review.horse_review(act, d, horse_records(past, x["horse_id"], race), race))
