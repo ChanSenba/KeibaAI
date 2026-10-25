@@ -9,7 +9,8 @@
 O1(962バイト、位置は 0 始まり): 0-1 種別, 2 区分, 11-26 レース, 43- 単勝(馬番2桁 + オッズ4桁(0.1倍単位) + 人気2桁)が28頭ぶん。
 取消などでオッズのない馬は、数字の代わりに記号が入っている。
 WE(42バイト): 11-18 年月日, 19-20 場, 21-22 回, 23-24 日, 25-32 発表月日時分, 33 変更識別, 34 天候, 35 芝の馬場, 36 ダートの馬場
-(37-39 は変更前)。コードは RA と同じ。0 は未設定。
+(37-39 は変更前)。コードは RA と同じ。変更識別は 1 が朝の発表(全部入る)、2 が天候の変更(馬場は 0)、3 が馬場の変更(天候は 0)。
+0 は「この発表では変わらない」なので、欄ごとに、0 でないいちばん新しい値を使う(2026-10-25 の実データ 15件で確かめた)。
 """
 from __future__ import annotations
 
@@ -47,15 +48,19 @@ def parse_we(b: bytes) -> tuple[str, str, str, str | None, str | None, str | Non
 
 
 def latest_conditions(raw_dir: str | Path, date: str) -> dict[str, tuple[str | None, str | None, str | None]]:
-    """その日(YYYY-MM-DD)の競馬場ごとの、いちばん新しい発表の (天候, 芝の馬場, ダートの馬場)。速報がなければ空。"""
+    """その日(YYYY-MM-DD)の競馬場ごとの、いまの (天候, 芝の馬場, ダートの馬場)。速報がなければ空。
+
+    天候の変更の発表には馬場が、馬場の変更の発表には天候が入らないので、欄ごとにいちばん新しい値を使う。
+    """
     path = Path(raw_dir) / "RT_0B14.txt"
-    best: dict[str, tuple] = {}
-    if path.exists():
-        for b in _records(path):
-            w = parse_we(b)
-            if w and w[0] == date and w[2] >= best.get(w[1], ("",))[0]:
-                best[w[1]] = w[2:]
-    return {venue: w[1:] for venue, w in best.items()}
+    if not path.exists():
+        return {}
+    out: dict[str, list] = {}
+    for w in sorted((w for w in map(parse_we, _records(path)) if w and w[0] == date), key=lambda w: w[2]):
+        cur = out.setdefault(w[1], [None, None, None])
+        for i, v in enumerate(w[3:]):
+            cur[i] = v or cur[i]
+    return {venue: tuple(c) for venue, c in out.items()}
 
 
 def apply_conditions(race: EntryRace, cond: dict[str, tuple[str | None, str | None, str | None]]) -> None:

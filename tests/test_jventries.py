@@ -1,7 +1,7 @@
 from test_jvrace import ra, record, se, write
 
 from keibaai import db
-from keibaai.jventries import import_entries, parse_o1, parse_we, race_keys, read_entries
+from keibaai.jventries import import_entries, latest_conditions, parse_o1, parse_we, race_keys, read_entries
 
 RACE = "2026101708040511"  # 10/17 京都 4回5日 11R → race_id 202608040511
 
@@ -106,3 +106,18 @@ def test_latest_weather_and_ground_replace_the_card(tmp_path):
                                     we("10181300", "1", "1", "1", ymd="20261018")])  # 別の日
     assert {p.race.race_id: (p.race.weather, p.race.ground) for p in read_entries(tmp_path, "2026-10-17")} == {
         "202608040511": ("雨", "重"), "202608040501": ("雨", "不良")}  # 芝は芝、ダートはダートの馬場
+
+
+# 2026-10-25 京都の実データ(RT_0B14.txt。末尾の CRLF は落としてある)。朝の発表のあと、天候の変更と馬場の変更が別々に来る
+KYOTO_1025 = ["WE12026102420261025080409000000001224000", "WE12026102520261025080409102506553023024",
+              "WE12026102520261025080409102508272300200", "WE12026102520261025080409102509063024023",
+              "WE12026102520261025080409102509223034024", "WE12026102520261025080409102509542400300",
+              "WE12026102520261025080409102510262200400", "WE12026102520261025080409102511403024034"]
+
+
+def test_weather_and_ground_are_taken_field_by_field(tmp_path):
+    """天候の変更(2)には馬場が、馬場の変更(3)には天候が入らない(0)。欄ごとにいちばん新しい値を使う。"""
+    recs = [r.encode() + b"\r\n" for r in reversed(KYOTO_1025)]  # 並びに頼らない
+    assert parse_we(recs[0]) == ("2026-10-25", "京都", "10251140", None, "稍重", "不良")  # 11:40 の馬場の変更
+    write(tmp_path, "RT_0B14.txt", recs)
+    assert latest_conditions(tmp_path, "2026-10-25") == {"京都": ("曇", "稍重", "不良")}  # 天候は 10:26 の発表
