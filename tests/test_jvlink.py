@@ -67,7 +67,7 @@ def test_fetch_entries_skips_odds_when_no_numbers_yet(tmp_path, fake, monkeypatc
     monkeypatch.setattr("keibaai.jventries.import_entries", lambda conn, raw, date, at: 0)
     assert jvlink.fetch_entries(db.connect(":memory:"), "2026-10-17", raw_root=tmp_path) == 0
     assert len(fake.cmds) == 1  # 出馬表だけ。馬番がないのでオッズは開かない
-    assert _args(fake.cmds[0], "--rt") == ["0B15:20261017"] and _args(fake.cmds[0], "--from")[0] == "20261010"
+    assert _args(fake.cmds[0], "--rt") == ["0B15:20261017", "0B14:20261017"] and _args(fake.cmds[0], "--from")[0] == "20261010"
 
 
 def test_fetch_entries_takes_odds_per_race(tmp_path, fake, monkeypatch):

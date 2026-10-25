@@ -1,7 +1,7 @@
 from test_jvrace import ra, record, se, write
 
 from keibaai import db
-from keibaai.jventries import import_entries, parse_o1, race_keys, read_entries
+from keibaai.jventries import import_entries, parse_o1, parse_we, race_keys, read_entries
 
 RACE = "2026101708040511"  # 10/17 京都 4回5日 11R → race_id 202608040511
 
@@ -81,3 +81,28 @@ def test_import_entries_replaces_the_race(tmp_path):
     assert conn.execute("SELECT number, win_odds, popularity FROM entries ORDER BY number").fetchall() == [
         (1, 6.1, 2), (2, 22.8, 10)]
     assert import_entries(conn, tmp_path, "2026-10-18", "x") == 0
+
+
+def we(announced, weather, turf, dirt, venue="08", ymd="20261017"):
+    """天候・馬場の速報(WE)。京都 4回5日。"""
+    return record(42, {0: "WE", 2: "1", 3: ymd, 11: ymd, 19: venue, 21: "04", 23: "05", 25: announced, 33: "3",
+                       34: weather, 35: turf, 36: dirt, 37: "111"})
+
+
+def test_parse_weather_and_ground():
+    assert parse_we(we("10170930", "3", "2", "3")) == ("2026-10-17", "京都", "10170930", "雨", "稍重", "重")
+    assert parse_we(we("10170930", "0", "0", "0"))[3:] == (None, None, None)  # 未設定
+    assert parse_we(card()[0]) is None
+
+
+def test_latest_weather_and_ground_replace_the_card(tmp_path):
+    """当日の天候・馬場の変更(0B14)があれば、いちばん新しい発表で出馬表の天候・馬場を置き換える。"""
+    dirt = ra(race="2026101708040501", kubun="2", title="", track="23")
+    write(tmp_path, "RT_0B15.txt", card() + [dirt, se(race="2026101708040501", number="01", over={2: "2"})])
+    assert {p.race.race_id: (p.race.weather, p.race.ground) for p in read_entries(tmp_path, "2026-10-17")} == {
+        "202608040511": ("晴", "稍重"), "202608040501": ("晴", "稍重")}  # 速報がなければ RA のまま
+    write(tmp_path, "RT_0B14.txt", [we("10171215", "3", "3", "4"), we("10170900", "2", "2", "2"),
+                                    we("10171300", "1", "1", "1", venue="05"),  # 別の競馬場
+                                    we("10181300", "1", "1", "1", ymd="20261018")])  # 別の日
+    assert {p.race.race_id: (p.race.weather, p.race.ground) for p in read_entries(tmp_path, "2026-10-17")} == {
+        "202608040511": ("雨", "重"), "202608040501": ("雨", "不良")}  # 芝は芝、ダートはダートの馬場
