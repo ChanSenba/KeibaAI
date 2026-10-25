@@ -14,6 +14,7 @@ import pandas as pd
 
 from . import db
 from .cli import collect_day, daterange
+from .marks import top_marks
 from .parse import VENUES
 
 def summary(conn: sqlite3.Connection) -> dict:
@@ -228,7 +229,6 @@ def race_head_html(race) -> str:
             f'<div class="kb-race-meta">{html.escape(" ・ ".join(m for m in meta if m))}</div>')
 
 
-MARKS = ["◎", "○", "▲"]
 # ★の基準: オッズ込みモデルの期待値、勝率、オッズ。過去8年(2019年以降)の検証では、この基準の馬を単勝で買った回収率は
 # 90〜97%(能力のみのモデルの期待値で選ぶと79.5%で、無作為に買うのと変わらなかった)。100%には届かない
 STAR_EV, STAR_P, STAR_ODDS = 1.1, 0.03, 30.0
@@ -255,9 +255,9 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     for _, g in out.groupby("race_id", sort=False):
         p = next((c for c in ("p_win_mix", "p_win_market") if c in g and g[c].notna().all()), "p_win_ability")
         ranked = g[p].dropna().sort_values(ascending=False, kind="stable").index
-        n_marked = len(MARKS) + (2 if len(g) >= 10 else 1)
-        top = list(ranked[:n_marked])
-        out.loc[top, "mark"] = (MARKS + ["△", "△"])[:len(top)]
+        marks = top_marks(len(g))
+        top = list(ranked[:len(marks)])
+        out.loc[top, "mark"] = marks[:len(top)]
         rest = g.drop(top)["ev_star"].dropna()
         if not rest.empty and rest.max() >= 1:
             out.loc[rest.idxmax(), "mark"] = "☆"

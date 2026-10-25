@@ -15,6 +15,7 @@ from keibaai import gui_help
 from keibaai.gui_help import TIPS
 from keibaai.cli import reparse_cache
 from keibaai.fetch import Fetcher
+from keibaai.marks import MARK_ORDER, MARK_RANK
 
 st.set_page_config(page_title="KeibaAI", page_icon=":material/insights:", layout="wide")
 st.logo(str(Path(__file__).with_name("logo.svg")), size="large")
@@ -647,7 +648,7 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
     race_head(race)
     one = gui.race_entries(conn, race_id, prediction)
     if "mark" in one:
-        marked = one[one["mark"] != ""].sort_values("mark", key=lambda m: m.map(MARK_ORDER.get))
+        marked = one[one["mark"] != ""].sort_values("mark", key=lambda m: m.map(MARK_RANK.get))
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(h))}</span>'
             for m, n, h in zip(marked["mark"], marked["number"], marked["horse_name"])) + "</div>")
@@ -732,9 +733,6 @@ def point_style(v) -> str:
 
 def total_style(v) -> str:
     return "font-weight: 700; background-color: rgba(46, 158, 91, 0.12)"
-
-
-MARK_ORDER = {"◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4}
 
 
 # ---------------------------------------------------------------- ファクター
@@ -1180,15 +1178,15 @@ def mark_editor(conn, race_id: str, table) -> dict[int, str]:
         df.style.map(bracket_color, subset=["bracket"]) if "bracket" in df else df, key=key, hide_index=True,
         width="stretch", height=35 * (len(df) + 1) + 3, disabled=[c for c in df.columns if c != "mark"],
         column_config={
-            "mark": st.column_config.SelectboxColumn("印", options=[NO_MARK, *betting.MARKS], width="small",
+            "mark": st.column_config.SelectboxColumn("印", options=[NO_MARK, *MARK_ORDER], width="small",
                                                      required=True, help=TIPS["user_marks"]),
             **{k: v for k, v in ENTRY_COLUMNS.items() if k in df},
             "ai_mark": st.column_config.TextColumn("AIの印", width="small", help="「予想」ページの印(参考)")})
-    marks = {int(n): m for n, m in zip(edited["number"], edited["mark"]) if m in betting.MARKS}
+    marks = {int(n): m for n, m in zip(edited["number"], edited["mark"]) if m in MARK_ORDER}
     if marks != saved:
         gui.save_user_marks(conn, race_id, marks)
     if marks:
-        order = sorted(marks.items(), key=lambda x: (betting.MARKS.index(x[1]), x[0]))
+        order = sorted(marks.items(), key=lambda x: (MARK_RANK[x[1]], x[0]))
         names = dict(zip(one["number"].astype(int), one["horse_name"]))
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(names.get(n, "")))}</span>' for n, m in order) + "</div>")

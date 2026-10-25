@@ -12,6 +12,7 @@ import pandas as pd
 
 from .features import inner_outer, same_course
 from .jvtraining import FAST_F4
+from .marks import top_marks
 from .predict import _cached, day_frame
 
 # 画面に出す区分。cols は (列名, 画面での見出し)。
@@ -526,7 +527,6 @@ def gate_bias(conn: sqlite3.Connection, race, before: str) -> pd.DataFrame:
 # ---------------------------------------------------------------- 総合点(各ファクターを点数にして足す)
 SCORE_EXCLUDE = {"popularity", "win_odds"}  # 市場の値は、ファクターの点数には入れない
 SCORE_WEIGHTS: dict[str, float] = {}  # 列ごとの重み。書いていない列は 1
-SCORE_MARKS = ["◎", "○", "▲"]
 
 
 def score_columns() -> list[tuple[str, str]]:
@@ -567,9 +567,9 @@ def score_race(one: pd.DataFrame) -> pd.DataFrame:
     out["score"] = total / (10 * wsum) * 100 if wsum else np.nan
     out["score_rank"] = out["score"].rank(method="min", ascending=False)
     out["score_mark"] = ""
-    n_marked = len(SCORE_MARKS) + (2 if len(one) >= 10 else 1)
-    top = out["score"].sort_values(ascending=False, kind="stable").index[:n_marked]
-    out.loc[top, "score_mark"] = (SCORE_MARKS + ["△", "△"])[:len(top)]
+    marks = top_marks(len(one))
+    top = out["score"].sort_values(ascending=False, kind="stable").index[:len(marks)]
+    out.loc[top, "score_mark"] = marks[:len(top)]
     return out
 
 
