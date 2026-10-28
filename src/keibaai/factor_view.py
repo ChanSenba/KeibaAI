@@ -888,7 +888,7 @@ def same_day_text(venue: str, course_type: str, today: pd.DataFrame) -> str:
     return "".join(parts)
 
 
-def race_flow(one: pd.DataFrame, history: pd.DataFrame) -> dict:
+def forecast_race_flow(one: pd.DataFrame, history: pd.DataFrame) -> dict:
     """1レースの展開の見立て。one は factor_values の1レース分、history は course_history の結果。
 
     lineup: 脚質ごとの馬番(逃げ・先行・差し・追込・マクリ・不明)。forecast: メンバーの脚質構成からのペース予想。

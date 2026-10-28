@@ -623,7 +623,7 @@ def _show_same_day(conn, race, date: dt.date) -> None:
 def _show_race_flow(conn, race, one, date: dt.date) -> None:
     """このレースの展開の見立て(メンバーの脚質構成)と、同じコースの直近の展開。予想の展開適性の元になる。"""
     history = factor_view.course_history(conn, race, date.isoformat())
-    flow = factor_view.race_flow(one, history)
+    flow = factor_view.forecast_race_flow(one, history)
     with st.expander("レース展開(脚質構成と同コースの直近)", icon=":material/timeline:", expanded=True):
         st.markdown(flow["text"], help=TIPS["race_flow"])
         names = {k: " ".join(str(n) for n in v) for k, v in flow["lineup"].items() if v}
