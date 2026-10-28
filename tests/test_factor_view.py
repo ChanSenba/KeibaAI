@@ -237,13 +237,13 @@ def test_front_edge_and_pace_fit_direction():
     assert fv.STYLE_FRONT["逃げ"] > fv.STYLE_FRONT["先行"] > fv.STYLE_FRONT["差し"] > fv.STYLE_FRONT["追込"]
 
 
-def test_race_flow_text_and_favored_style(conn):
+def test_forecast_race_flow_text_and_favored_style(conn):
     one = fv.factor_values(conn, DAY)
     hist = pd.DataFrame({"ペース差": [-2.0, -1.5], "先行有利度": [-0.2, -0.1]})
-    flow = fv.race_flow(one, hist)
+    flow = fv.forecast_race_flow(one, hist)
     assert flow["favored"] == "差し・追込が有利" and "同コース直近2レース" in flow["text"]
     assert sum(len(v) for v in flow["lineup"].values()) == len(one)
-    assert fv.race_flow(one, pd.DataFrame())["favored"]  # 履歴がなくても文章は出る
+    assert fv.forecast_race_flow(one, pd.DataFrame())["favored"]  # 履歴がなくても文章は出る
 
 
 def test_course_history_lists_recent_days_before_the_date(conn):
