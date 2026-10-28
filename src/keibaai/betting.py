@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .marks import MARK_ORDER
+
 KINDS = ["単勝", "複勝", "馬連", "ワイド", "馬単", "三連複", "三連単"]
 UNIT = 100  # 馬券の最小単位(円)
 
@@ -220,7 +222,6 @@ def make_plan(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int,
 
 
 # ---------------------------------------------------------------- 印からの買い方
-MARKS = ["◎", "○", "▲", "△", "☆"]
 
 
 def mark_combos(marks: dict[int, str]) -> dict[str, list[tuple[int, ...]]]:
@@ -233,7 +234,7 @@ def mark_combos(marks: dict[int, str]) -> dict[str, list[tuple[int, ...]]]:
     if len(honmei) != 1:
         raise ValueError("◎ を1頭だけ付けてください")
     a = honmei[0]
-    others = sorted((n for n, m in marks.items() if m in MARKS[1:]), key=lambda n: (MARKS.index(marks[n]), n))
+    others = sorted((n for n, m in marks.items() if m in MARK_ORDER[1:]), key=lambda n: (MARK_ORDER.index(marks[n]), n))
     second = [n for n in others if marks[n] in ("○", "▲")] or others
     out: dict[str, list[tuple[int, ...]]] = {"単勝": [(a,)], "複勝": [(a,)]}
     if others:

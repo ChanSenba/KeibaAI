@@ -13,9 +13,9 @@ from pathlib import Path
 import pandas as pd
 
 from . import flow_review
-from .gui import MARKS, add_marks
+from .gui import add_marks
+from .marks import MARK_ORDER
 
-MARK_ORDER = MARKS + ["△", "☆"]  # 印の並び。表示と集計はこの順
 
 PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_name", "horse_name", "jockey",
              "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
