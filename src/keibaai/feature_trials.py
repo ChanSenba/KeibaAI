@@ -580,13 +580,37 @@ def prepare(conn: sqlite3.Connection, other_db: str | Path | None = None) -> pd.
     return df
 
 
+ODDSMOVE_FROM = "2025-09-06"  # 時系列オッズを取り込んだ範囲の始め
+ODDSMOVE_PERIODS = ["2026-03-01"]  # これ以後を評価。時系列オッズのある期間だけで、足す前後を同じ学習データで比べる
+
+
+def run_oddsmove(conn: sqlite3.Connection, args, out: Path, t0: float) -> None:
+    """オッズの動き(時系列オッズ)の特徴量を足す前後を比べる。学習も評価も、時系列オッズのある期間(2025-09 以後)だけ。"""
+    from .oddsmove import MOVE_COLUMNS, add_odds_move, load_series, move_variants
+
+    df = prepare(conn, args.other_db)
+    df = df[df["date"] >= pd.Timestamp(ODDSMOVE_FROM)].reset_index(drop=True)
+    starts = pd.read_sql_query("SELECT race_id, start_time FROM races", conn).set_index("race_id")["start_time"]
+    df = add_odds_move(df, load_series(args.ts_db, "2025-09-01"), starts)
+    print(f"特徴量を作りました: {len(df):,} 行, {time.time() - t0:.0f}s", flush=True)
+    test = df[df["date"] >= pd.Timestamp(ODDSMOVE_PERIODS[0])]
+    print(test[MOVE_COLUMNS].describe().T[["count", "mean", "std"]].to_string(), flush=True)
+    res = run(df, move_variants(), args.seeds, args.rounds, out, ODDSMOVE_PERIODS)
+    text = f"## オッズの動き(時系列オッズ。学習は {ODDSMOVE_FROM} 〜、評価は {ODDSMOVE_PERIODS[0]} 以後)\n{to_markdown(res)}"
+    (out / "results.md").write_text(text, encoding="utf-8")
+    res.to_csv(out / "results.csv", index=False, encoding="utf-8-sig")
+    print(text)
+    print(f"\n保存しました: {out / 'results.md'}  (全体 {time.time() - t0:.0f}s)")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="特徴量の候補を、足す前後で比べる(DB は読むだけ)")
     ap.add_argument("--db", default="data/keiba.db")
     ap.add_argument("--out", default="data/feature_trials")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--rounds", type=int, default=300)
-    ap.add_argument("--only", choices=["bias", "affinity", "more", "gaikyu", "other"], default=None)
+    ap.add_argument("--only", choices=["bias", "affinity", "more", "gaikyu", "other", "oddsmove"], default=None)
+    ap.add_argument("--ts-db", default="data/keiba-ts.db", help="odds-history で作った時系列オッズ(oddsmove のとき)")
     ap.add_argument("--other-db", default="data/jv_other.db", help="jvother で作った地方・海外の成績")
     args = ap.parse_args(argv)
 
@@ -594,6 +618,9 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     conn = sqlite3.connect(f"file:{Path(args.db).as_posix()}?mode=ro", uri=True)  # 読み取り専用で開く
+    if args.only == "oddsmove":
+        run_oddsmove(conn, args, out, t0)
+        return
     df = prepare(conn, args.other_db)
     print(f"特徴量を作りました: {len(df):,} 行, {time.time() - t0:.0f}s", flush=True)
     cand = [c for c in BIAS_COLUMNS + ["tj_top3_shr10", "js_top3_shr10", "ts_top3_shr10", "js_n"] + MORE_COLUMNS
