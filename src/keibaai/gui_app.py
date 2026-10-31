@@ -133,6 +133,9 @@ def require_jv() -> bool:
     return False
 
 
+FUTURE_DAYS = 14  # 取得の終了日に選べる、今日より先の日数(来週末の出馬表まで)
+
+
 def page_collect() -> None:
     header("Collect", "データ取得",
            "選んだ期間の JRA レース結果を JRA-VAN(JV-Link)から取得します。"
@@ -145,8 +148,9 @@ def page_collect() -> None:
         ok = require_jv()
         st.segmented_control("よく使う期間", gui.PRESETS, key="preset", on_change=_apply_preset)
         c1, c2 = st.columns(2)
-        start = c1.date_input("開始日", key="start", format="YYYY/MM/DD", max_value=today)
-        end = c2.date_input("終了日", key="end", format="YYYY/MM/DD", max_value=today)
+        start = c1.date_input("開始日", key="start", format="YYYY/MM/DD", max_value=today + dt.timedelta(days=FUTURE_DAYS))
+        end = c2.date_input("終了日", key="end", format="YYYY/MM/DD", max_value=today + dt.timedelta(days=FUTURE_DAYS),
+                            help="今日より後の日を選ぶと、その日の出馬表とオッズを取ります(馬番は枠順の発表後)")
         days = gui.race_days(start, end) if start <= end else []
         if start > end:
             st.error("終了日が開始日より前になっています。")
@@ -172,7 +176,11 @@ def page_collect() -> None:
                     from keibaai import jvlink
 
                     bar.progress(0.1, "JV-Link から書き出しています")
-                    total, _ = jvlink.fetch_results(conn, start, end)
+                    total = 0
+                    if start <= today:  # 今日までは成績、今日より後は出馬表とオッズ
+                        total, _ = jvlink.fetch_results(conn, start, min(end, today))
+                    for d in (d for d in days if d > today):
+                        jvlink.fetch_entries(conn, d.isoformat())
                     bar.progress(1.0, "完了")
             except Exception as e:  # 連続失敗(アクセス制限の可能性)や通信エラー。途中までの分は保存済み
                 status.update(label="取得が止まりました", state="error")
