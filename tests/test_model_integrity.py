@@ -28,11 +28,11 @@ def test_nonfinishers_count_but_never_become_entries(monkeypatch):
         assert h.iloc[1].n_prev == 1
     _entries_for_future(conn, '2030-01-05')
     seen = []
-    real = predict._fit
+    real = predict.fit_residual
     def fit(train, *args):
         seen.append(train)
         return real(train, *args)
-    monkeypatch.setattr(predict, '_fit', fit)
+    monkeypatch.setattr(predict, 'fit_residual', fit)
     out = predict.predict_day(conn, '2030-01-05', rounds=5)
     assert len(out)==10 and out.race_id.nunique()==1
     assert all(len(t)==120 for t in seen)

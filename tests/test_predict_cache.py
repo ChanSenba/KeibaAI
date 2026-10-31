@@ -17,8 +17,8 @@ def disk_db(tmp_path):
 
 def count_fits(monkeypatch):
     calls = []
-    real = predict._fit
-    monkeypatch.setattr(predict, "_fit", lambda *a, **k: calls.append(1) or real(*a, **k))
+    real = predict.fit_residual
+    monkeypatch.setattr(predict, "fit_residual", lambda *a, **k: calls.append(1) or real(*a, **k))
     return calls
 
 

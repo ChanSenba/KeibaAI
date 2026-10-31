@@ -3,7 +3,7 @@
 使い方(DB は読むだけ):
     python -m keibaai.bettypes --db data/keiba.db --odds-db data/jravan_odds.db --test-from 2025-01-01
 
-各馬の勝率(モデル)から、ハーヴィルの式(betting.harville_outcomes)で1〜3着の並びの確率を作り、券種ごとの買い目の的中確率を出す。
+各馬の勝率(モデル)から、ハーヴィルの式(betting.harville_outcomes。2・3着は買い方の画面と同じ GAMMA_2ND・GAMMA_3RD で補正)で1〜3着の並びの確率を作り、券種ごとの買い目の的中確率を出す。
 期待値 = 的中確率 × 確定オッズ(複勝・ワイドは最低のほう)。期待値が基準以上の買い目を1点100円ずつ買ったことにして、
 実際の払戻(jravan_odds.db の payouts。同着もそのまま)で回収率を数える。基準が「全買い目」の回収率(控除後の平均)より高いか、
 その差が偶然の範囲を超えるかを、レースを引き直した95%区間で見る。
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .betting import harville_outcomes, hits, place_slots
+from .betting import GAMMA_2ND, GAMMA_3RD, harville_outcomes, hits, place_slots
 
 # 券種 → (betting の券種名, オッズの表, 組の列, オッズの列)
 KINDS = {
@@ -52,7 +52,7 @@ def load_payouts(conn: sqlite3.Connection, race_ids: list[str], kind: str) -> di
 
 
 def race_bets(numbers: list[int], p: np.ndarray, odds: dict[tuple[int, ...], float], kind: str,
-              g2: float = 1.0, g3: float = 1.0) -> list[tuple[tuple[int, ...], float, float]]:
+              g2: float = GAMMA_2ND, g3: float = GAMMA_3RD) -> list[tuple[tuple[int, ...], float, float]]:
     """1レースの (馬番の組, 的中確率, オッズ)。オッズのない組、複勝の発売がない頭数は除く。"""
     n = len(numbers)
     name = KINDS[kind][0]
@@ -69,8 +69,8 @@ def race_bets(numbers: list[int], p: np.ndarray, odds: dict[tuple[int, ...], flo
     return out
 
 
-def evaluate_kind(test: pd.DataFrame, odds_conn: sqlite3.Connection, kind: str, g2: float = 1.0,
-                  g3: float = 1.0) -> pd.DataFrame:
+def evaluate_kind(test: pd.DataFrame, odds_conn: sqlite3.Connection, kind: str, g2: float = GAMMA_2ND,
+                  g3: float = GAMMA_3RD) -> pd.DataFrame:
     """評価期間の全レース・全買い目について、的中確率・オッズ・期待値・実際の払戻を並べる。
 
     test は race_id, number, p_win(レース内で合計1)を持つ。オッズか払戻のないレースは入れない。

@@ -94,6 +94,17 @@ _ALL_FEATURES = list(dict.fromkeys(BASE_FEATURES + BIAS_FEATURES + ARTICLE_FEATU
 TJ_SHRINK_K = 50
 ABILITY_MODEL_FEATURES = [("tj_top3_shr" if c == "tj_top3_rate" else c) for c in _ALL_FEATURES] + CONDITION_FEATURES
 MARKET_MODEL_FEATURES = _ALL_FEATURES + MARKET_FEATURES
+# 走破タイムの指数(add_speed_figures)。前走・直近3走の最大と平均、最大のレース内の平均との差
+FIGURE_FEATURES = ["prev_fig", "best_fig_3", "avg_fig_3", "best_fig_vs_field"]
+# レース内の相対値(add_relative)。木のモデルは行どうしを比べられないので、同じレースの他馬との比較を列にする
+RELATIVE_BASE = ["avg_finish_3", "top3_rate", "win_rate", "jockey_top3_rate", "trainer_top3_rate", "avg_last3f_3",
+                 "l3f_rank_3", "time_diff_5", "train_rank_score", "horse_course_top3_rate", "prev_finish",
+                 "weight_carried", "early_pos_rel_3", "prev_time_diff", "sire_ctdist_top3_rate", "best_fig_3", "avg_fig_3"]
+RELATIVE_FEATURES = [f"{c}_{k}" for c in RELATIVE_BASE for k in ("z", "rk")]
+# オッズ込みのモデル(model.fit_residual)。オッズは列ではなく、市場の勝率を出発点(init_score)にして、
+# モデルは市場の見立てからのずれだけを学ぶ。2025-01〜2026-10 の 6,153 レース(2024年までで学習)で、
+# 勝ち馬の対数尤度は市場だけより 1レースあたり +0.0060(95%区間 +0.0034〜+0.0085)、いままでのオッズ込みモデルより +0.0030(+0.0009〜+0.0050)
+RESIDUAL_MODEL_FEATURES = ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES
 BIAS_WINDOW = "10D"
 
 
@@ -444,6 +455,59 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     _, df["jockey_top3_rate"] = _expanding_rate(df, "jockey_id", "top3")
     df["trainer_n"], df["trainer_top3_rate"] = _expanding_rate(df, "trainer_id", "top3")
 
+    df = add_speed_figures(df)
+    df = add_relative(df)
     for c in CATEGORICAL:
         df[c] = df[c].astype("category")
     return df
+
+
+FIGURE_MIN_RACES = 5  # 基準タイムに使う過去の勝ちタイムがこれ未満のコースは、指数を出さない
+
+
+def add_speed_figures(df: pd.DataFrame) -> pd.DataFrame:
+    """走破タイムの指数: 1000mあたり、基準タイムより何秒速かったか(大きいほど速い)。当日の馬場差を引く。
+
+    基準タイム = 同じ競馬場・芝ダ・距離・馬場(良とそれ以外)の、その日より前の勝ちタイムの平均。
+    当日の馬場差 = 同じ日・競馬場・芝ダの勝ち馬の、基準からのずれの平均(2レース以上あるとき)。
+    指数はその日の結果から出すので、特徴量には前走以前の指数だけを使う。
+    """
+    t = pd.to_numeric(df["time_sec"], errors="coerce") if "time_sec" in df else pd.Series(np.nan, index=df.index)
+    ok = df["finish"].notna() & (t > 0)
+    good = df["ground"].astype("string").fillna("").str.startswith("良")
+    key = (df["venue"].astype(str) + "|" + df["course_type"].astype(str) + "|" + df["distance"].astype(str) + "|"
+           + good.map({True: "良", False: "道悪"}))
+    win = ok & (df["finish"] == 1) & ~df["race_id"].duplicated()
+    daily = (pd.DataFrame({"key": key[win], "date": df.loc[win, "date"], "t": t[win]})
+             .groupby(["key", "date"])["t"].agg(["sum", "count"]).reset_index().sort_values(["key", "date"]))
+    g = daily.groupby("key")
+    n_before = g["count"].cumsum() - daily["count"]
+    daily["std"] = ((g["sum"].cumsum() - daily["sum"]) / n_before).where(n_before >= FIGURE_MIN_RACES)
+    std = pd.DataFrame({"key": key, "date": df["date"]}).merge(
+        daily[["key", "date", "std"]], on=["key", "date"], how="left")["std"].to_numpy()
+    dev = pd.Series(np.where(ok, (t.to_numpy() - std) / df["distance"].astype(float).to_numpy() * 1000, np.nan),
+                    index=df.index)
+    day = pd.DataFrame({"date": df["date"], "venue": df["venue"].astype(str), "course_type": df["course_type"].astype(str)})
+    var = (day[df["finish"] == 1].assign(dev=dev).groupby(["date", "venue", "course_type"])["dev"]
+           .agg(["mean", "count"]).reset_index())
+    var["var"] = var["mean"].where(var["count"] >= 2)
+    day_var = day.merge(var[["date", "venue", "course_type", "var"]], on=["date", "venue", "course_type"],
+                        how="left")["var"].fillna(0).to_numpy()
+    prev = (-(dev - day_var)).groupby(df["horse_id"], sort=False).shift(1)
+    pg = prev.groupby(df["horse_id"], sort=False)
+    out = pd.DataFrame({"prev_fig": prev,
+                        "best_fig_3": pg.rolling(3, min_periods=1).max().reset_index(level=0, drop=True),
+                        "avg_fig_3": pg.rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)}, index=df.index)
+    out["best_fig_vs_field"] = out["best_fig_3"] - out["best_fig_3"].groupby(df["race_id"]).transform("mean")
+    return pd.concat([df.drop(columns=[c for c in out if c in df]), out], axis=1)
+
+
+def add_relative(df: pd.DataFrame) -> pd.DataFrame:
+    """RELATIVE_BASE の列の、同じレースの中での標準化(_z)と順位の割合(_rk。値が大きいほど 1 に近い)。"""
+    cols = {}
+    for c in RELATIVE_BASE:
+        x = pd.to_numeric(df[c], errors="coerce") if c in df else pd.Series(np.nan, index=df.index)
+        by = x.groupby(df["race_id"])
+        cols[f"{c}_z"] = (x - by.transform("mean")) / by.transform("std").replace(0, np.nan)
+        cols[f"{c}_rk"] = by.rank(pct=True)
+    return pd.concat([df.drop(columns=[c for c in cols if c in df]), pd.DataFrame(cols, index=df.index)], axis=1)
