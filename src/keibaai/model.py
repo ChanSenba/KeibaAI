@@ -8,7 +8,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES
+from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, RESIDUAL_MODEL_FEATURES
 
 PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in_leaf=50,
               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, verbose=-1, seed=0)
@@ -33,6 +33,43 @@ def train_rows(train: pd.DataFrame) -> pd.DataFrame:
     train = train.copy()
     train.loc[hide, cols] = np.nan
     return train
+
+
+# オッズ込みの勝率のモデル。市場の勝率(単勝オッズの逆数をレース内で合計1にしたもの)の対数オッズを出発点にして、
+# そこからのずれだけを学ぶ。木を小さく、学習率を下げて、市場から離れすぎないようにする
+# (300回・葉31のままだと、モデル単独では市場より悪く、混ぜて初めて少し足せる程度だった)
+RESIDUAL_PARAMS = dict(PARAMS, learning_rate=0.02, num_leaves=15, min_data_in_leaf=200)
+RESIDUAL_ROUNDS = 1000
+
+
+def market_logit(df: pd.DataFrame) -> np.ndarray:
+    """市場の勝率の対数オッズ。オッズのない馬は NaN。"""
+    odds = pd.to_numeric(df["win_odds"], errors="coerce")
+    inv = (1.0 / odds).where(odds > 0)
+    p = (inv / inv.groupby(df["race_id"]).transform("sum")).clip(1e-6, 1 - 1e-6).to_numpy()
+    return np.log(p / (1 - p))
+
+
+def has_market(df: pd.DataFrame) -> pd.Series:
+    """レースの全馬に単勝オッズがある行。"""
+    odds = pd.to_numeric(df["win_odds"], errors="coerce")
+    return (odds > 0).groupby(df["race_id"]).transform("all")
+
+
+def fit_residual(train: pd.DataFrame, rounds: int = RESIDUAL_ROUNDS) -> lgb.Booster:
+    """オッズ込みの勝率のモデル(市場の見立てからのずれを学ぶ)。オッズのそろったレースだけで学習する。"""
+    train = train_rows(train[has_market(train)])
+    feats = RESIDUAL_MODEL_FEATURES
+    cats = [c for c in CATEGORICAL if c in feats]
+    ds = lgb.Dataset(train[feats], train["win"], categorical_feature=cats, init_score=market_logit(train),
+                     free_raw_data=False)
+    return lgb.train(RESIDUAL_PARAMS, ds, num_boost_round=rounds)
+
+
+def predict_residual(model: lgb.Booster, df: pd.DataFrame) -> np.ndarray:
+    """fit_residual のモデルの勝率(レース内で合計1にする前)。オッズのない馬は NaN。"""
+    z = model.predict(df[RESIDUAL_MODEL_FEATURES], raw_score=True) + market_logit(df)
+    return 1.0 / (1.0 + np.exp(-z))
 
 
 def auc(y: np.ndarray, p: np.ndarray) -> float:
@@ -78,9 +115,12 @@ def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 3
     train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
     if train.empty or test.empty:
         raise ValueError("学習期間または評価期間にデータがありません")
-    win_m = _fit(train, features, "win", rounds)
     top3_m = _fit(train, features, "top3", rounds)
-    test["p_win_raw"] = win_m.predict(test[features])
+    if use_market:  # 勝率は市場の見立てからのずれを学ぶモデル。オッズのそろわないレースは評価から外す
+        test = test[has_market(test)].copy()
+        test["p_win_raw"] = predict_residual(fit_residual(train), test)
+    else:
+        test["p_win_raw"] = _fit(train, features, "win", rounds).predict(test[features])
     test["p_win"] = normalize_within_race(test, test["p_win_raw"].to_numpy())
     test["p_top3"] = top3_m.predict(test[features])
 

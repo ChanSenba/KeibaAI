@@ -14,11 +14,12 @@ import pandas as pd
 
 from . import db
 from .entries import apply_odds, parse_odds_json, parse_shutuba
-from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, build_features, load_results, result_mask
+from .features import (ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, RESIDUAL_MODEL_FEATURES, build_features,
+                       load_results, result_mask)
 from .flow_review import forecast_flow
 from .factors import COLUMN, FACTORS
 from .jvtraining import add_jv_features
-from .model import PARAMS, TRAIN_FROM, normalize_within_race, train_rows
+from .model import PARAMS, TRAIN_FROM, fit_residual, has_market, normalize_within_race, predict_residual, train_rows
 
 
 def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,
@@ -98,12 +99,6 @@ def load_entries(conn: sqlite3.Connection, date: str) -> pd.DataFrame:
     return add_jv_features(conn, df)
 
 
-def _fit(train: pd.DataFrame, features: list[str], rounds: int):
-    train = train_rows(train)
-    cats = [c for c in CATEGORICAL if c in features]
-    return lgb.train(PARAMS, lgb.Dataset(train[features], train["win"], categorical_feature=cats), rounds)
-
-
 def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """その日より前の結果と、その日の出馬表をつないで特徴量を作る。(特徴量の表, 過去の結果) を返す。
 
@@ -149,7 +144,8 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
         source.update(file.name.encode())
         source.update(file.read_bytes())
     parts: list = [
-        CACHE_VERSION, TRAIN_FROM, date, extra, ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, sorted(PARAMS.items()),
+        CACHE_VERSION, TRAIN_FROM, date, extra, ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES, RESIDUAL_MODEL_FEATURES,
+        sorted(PARAMS.items()),
         db.model_revision(conn), source.hexdigest(), CATEGORICAL, FACTORS,
         lgb.__version__, np.__version__, pd.__version__,
     ]
@@ -258,10 +254,8 @@ def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFra
     train, target = df[result_mask(df)], df[df["is_entry"]].copy()
 
     p_ability, parts = fit_predict(train, target)  # 能力のみの勝率と、要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場…)
-    market = _fit(train, MARKET_MODEL_FEATURES, rounds)
     target["p_win_ability"] = p_ability
-    pm = market.predict(target[MARKET_MODEL_FEATURES])
-    target["p_win_market"] = np.where(target["win_odds"].notna(), pm, np.nan)
+    target["p_win_market"] = np.where(has_market(target), predict_residual(fit_residual(train), target), np.nan)
     ok = target["p_win_market"].notna()
     target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())
     target["p_win_mix"] = mix_with_odds(target, target["p_win_ability"])
