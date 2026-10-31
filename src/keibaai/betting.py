@@ -105,6 +105,44 @@ def _combos(kind: str, n: int):
     return list(itertools.permutations(range(n), 3))
 
 
+# 複勝・ワイド・馬連の的中確率は、ハーヴィルの確率と、その券種のオッズから出した確率(1/オッズ をレース内で
+# 当たりの数に合わせたもの)を p ∝ ハーヴィル^a × 券種オッズ^b で混ぜる。重みは 2024年の結果で決めた(勝率は
+# オッズ込みのモデルを市場と混ぜたもの)。2025-01〜で1レースあたりの対数尤度は、ハーヴィルだけ・オッズだけのどちらより良い
+# (馬連 −4.250 / −4.232 → −4.226、ワイド −10.229 / −10.184 → −10.161、複勝 −5.537 / −5.606 → −5.527)。
+# ハーヴィルだけだと券種オッズとのずれが期待値に見えて、期待値≧1 の買い目が何万点も出ていたが、回収率は 81〜87% だった
+POOL_MIX = {"複勝": (0.76, 0.28), "ワイド": (0.34, 0.70), "馬連": (0.26, 0.80)}
+
+
+def winners(kind: str, n: int) -> int:
+    """その券種で当たりになる組の数(複勝は払う着の数、ワイドは7頭以下なら1組、馬連は1組)。"""
+    return place_slots(n) if kind == "複勝" else (3 if n >= 8 else 1) if kind == "ワイド" else 1
+
+
+def kind_probs(kind: str, table: dict[tuple[int, ...], float], order: np.ndarray, prob: np.ndarray,
+               idx: dict[int, int], n: int) -> dict[tuple[int, ...], tuple[float, np.ndarray]]:
+    """券種のオッズのある組ごとの (的中確率, 並びの的中表)。POOL_MIX の券種は、券種のオッズと混ぜた確率にする。
+
+    券種のオッズの確率は全組の合計で決まるので、オッズが全組そろっていないときは混ぜない(ハーヴィルのまま)。
+    """
+    out = {}
+    for key, o in table.items():
+        if not o or o <= 0 or any(k not in idx for k in key):
+            continue
+        h = hits(order, kind, tuple(idx[k] for k in key), n)
+        out[key] = (float(prob[h].sum()), h)
+    if kind in POOL_MIX and len(out) == (n if kind == "複勝" else n * (n - 1) // 2):
+        a, b = POOL_MIX[kind]
+        keys = list(out)
+        harv = np.clip([out[k][0] for k in keys], 1e-12, 1)
+        inv = np.array([1 / table[k] for k in keys])
+        k_win = winners(kind, n)
+        z = a * np.log(harv) + b * np.log(inv / inv.sum() * k_win)
+        e = np.exp(z - z.max())
+        mixed = np.clip(e / e.sum() * k_win, 0, 1)
+        out = {k: (float(m), out[k][1]) for k, m in zip(keys, mixed)}
+    return out
+
+
 # 的中確率がこれ未満の買い目は候補にしない。確率が小さいほど推定の誤差が大きく、大穴の期待値は過大に出やすい
 MIN_HIT = 0.03
 # 資金が少なくて100円ずつにするときの歯止め: 1レースに使う資金の割合と、買い目の期待値の下限
@@ -118,20 +156,18 @@ def candidates(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple[int
 
     戻り値: (候補, 並び(m,3), 並びの確率(m,), 候補×並びの的中表(候補数, m))。
     numbers は馬番、p はその勝率(合計1)。odds[券種][馬番の組] = 倍率。
+    複勝・ワイド・馬連の的中確率は券種のオッズと混ぜたもの(kind_probs)。並びの確率(ケリーの配分に使う)はハーヴィルのまま。
     """
     n = len(numbers)
     order, prob = harville_outcomes(p, g2, g3)
     idx = {num: i for i, num in enumerate(numbers)}
     out, rows = [], []
     for kind in KINDS:
-        for key, o in odds.get(kind, {}).items():
-            if not o or o <= 0 or any(k not in idx for k in key):
-                continue
-            combo = tuple(idx[k] for k in key)
-            h = hits(order, kind, combo, n)
-            pr = float(prob[h].sum())
-            if kind == "複勝" and place_slots(n) == 0:
-                continue
+        if kind == "複勝" and place_slots(n) == 0:
+            continue
+        table = odds.get(kind, {})
+        for key, (pr, h) in kind_probs(kind, table, order, prob, idx, n).items():
+            o = table[key]
             if pr * o >= ev_min and pr >= min_hit:
                 out.append(Bet(kind, tuple(key), float(o), pr, pr * o))
                 rows.append(h)
@@ -278,13 +314,13 @@ def mark_summaries(numbers: list[int], p: np.ndarray, odds: dict[str, dict[tuple
         if kind == "複勝" and place_slots(n) == 0:
             continue
         table = odds.get(kind, {})
+        probs = kind_probs(kind, table, order, prob, idx, n)
         bets, rows = [], []
         for key in combos:
-            o = table.get(key)
-            if not o or o <= 0 or any(k not in idx for k in key):
+            if key not in probs:
                 continue
-            h = hits(order, kind, tuple(idx[k] for k in key), n)
-            pr = float(prob[h].sum())
+            pr, h = probs[key]
+            o = table[key]
             bets.append(Bet(kind, key, float(o), pr, pr * o))
             rows.append(h)
         if not bets:
