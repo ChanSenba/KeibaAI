@@ -46,6 +46,20 @@ def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.date
     return len(t)
 
 
+def _fetch_training(conn: sqlite3.Connection, fetcher, date: dt.date, jv: tuple[str, str] | None) -> None:
+    """出走馬の調教を取る(JRA-VAN の調教タイム、netkeiba の追い切り評価)。取れなくても予想は作る。"""
+    from . import jvlink
+    from .training import fetch_entry_training
+
+    steps = [("調教タイム(JRA-VAN)", lambda: jvlink.fetch_training(conn, jv[0], jv[1]))] if jv else []
+    steps.append(("追い切り評価(netkeiba)", lambda: fetch_entry_training(conn, fetcher, date.isoformat())))
+    for name, run in steps:
+        try:
+            print(f"{name}: {run()} 件")
+        except Exception as e:
+            print(f"{name}を取れませんでした: {e}")
+
+
 def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datetime | None = None,
                  jv: tuple[str, str] | None = None) -> int:
     """出馬表を取り直して予想を作り、保存する。出馬表がまだなら 0 を返す。jv=(書き出し先, 32bit Python) なら JRA-VAN から取る。"""
@@ -57,6 +71,7 @@ def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datet
          else fetch_entries(conn, fetcher, date.isoformat(), now=now))
     if n == 0:
         return 0
+    _fetch_training(conn, fetcher, date, jv)
     pred = predict_day(conn, date.isoformat())
     n = save_predictions(conn, pred, now)
     flow = pred.attrs.get("flow")
