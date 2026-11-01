@@ -129,10 +129,10 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     from .blend import predict_test_blend
-    from .features import build_features, load_results
+    from .features import features_from_db
 
     conn = sqlite3.connect(f"file:{Path(args.db).as_posix()}?mode=ro", uri=True)
-    feats = build_features(load_results(conn))
+    feats = features_from_db(conn)
     odds_conn = sqlite3.connect(f"file:{Path(args.odds_db).as_posix()}?mode=ro", uri=True)
     parts = []
     for use_market, label in ((False, "能力のみ(オッズなし)の勝率を市場と混ぜたもの"), (True, "オッズありの勝率を市場と混ぜたもの")):

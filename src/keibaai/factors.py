@@ -12,19 +12,20 @@ import numpy as np
 import pandas as pd
 
 from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL,
-                       COURSE_FLOW_FEATURES, FORM_FEATURES,
-                       HUMAN_EXTRA, LAP_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, ROTATION_FEATURES,
-                       TRAINING_FEATURES)
+                       COURSE_FLOW_FEATURES, FIGURE_FEATURES, FORM_FEATURES, HUMAN_EXTRA, JOCKEY_DELTA_FEATURES,
+                       LAP_FEATURES, OTHER_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, RELATIVE_FEATURES,
+                       ROTATION_FEATURES, TRAINING_FEATURES)
 from .model import PARAMS, auc, logloss, normalize_within_race, train_rows
 
 FACTORS: dict[str, list[str]] = {
     "馬の質": ["age", "weight_carried", "body_weight", "body_weight_diff", "n_prev", "prev_finish",
               "avg_finish_3", "avg_finish_5", "win_rate", "top3_rate", "avg_last3f_3",
-              "race_class", "class_change", "distance", "course_type", "ground", *FORM_FEATURES],
+              "race_class", "class_change", "distance", "course_type", "ground", *FORM_FEATURES,
+              *FIGURE_FEATURES, *RELATIVE_FEATURES],
     "適性": ["distance", "course_type", "venue", "ground", "distance_change", "same_dist_top3_rate", *APTITUDE_FEATURES],
-    "ローテーション": ["age", "n_prev", "days_since_last", *ROTATION_FEATURES],
+    "ローテーション": ["age", "n_prev", "days_since_last", *ROTATION_FEATURES, *OTHER_FEATURES],
     "騎手・厩舎": ["jockey_changed", "jockey_n", "jockey_win_rate", "jockey_top3_rate", "trainer_n", "trainer_top3_rate",
-               *HUMAN_EXTRA],
+               *HUMAN_EXTRA, *JOCKEY_DELTA_FEATURES],
     "展開・馬場": ["number", "bracket", "field_size", "distance", "course_type", "venue", "ground", "early_pos_rel_3",
                  *BIAS_FEATURES, *PACE_FEATURES, *LAP_FEATURES, *COURSE_FLOW_FEATURES],
     "血統": ["distance", "course_type", "venue", "ground", *PEDIGREE_FEATURES],

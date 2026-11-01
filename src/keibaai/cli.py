@@ -376,16 +376,16 @@ def main(argv=None) -> None:
         return
     if args.cmd == "factors":
         from .factors import evaluate_factors, format_factor_report
-        from .features import build_features, load_results
+        from .features import features_from_db
 
-        reports, uniform = evaluate_factors(build_features(load_results(db.connect(args.db))), args.test_from)
+        reports, uniform = evaluate_factors(features_from_db(db.connect(args.db)), args.test_from)
         print(format_factor_report(reports, uniform))
         return
     if args.cmd == "backtest":
         from .backtest import DEFAULT_RULES, format_summary, predict_test, run_rules
-        from .features import build_features, load_results
+        from .features import features_from_db
 
-        feats = build_features(load_results(db.connect(args.db)))
+        feats = features_from_db(db.connect(args.db))
         if args.blend:
             from .backtest import blend_summary
             from .blend import predict_test_blend
@@ -419,10 +419,10 @@ def main(argv=None) -> None:
         return
 
     if args.cmd == "train":
-        from .features import build_features, load_results
+        from .features import features_from_db
         from .model import baseline_market, evaluate, format_report
 
-        df = build_features(load_results(db.connect(args.db)))
+        df = features_from_db(db.connect(args.db))
         r_abil, test = evaluate(df, args.test_from, use_market=False)
         r_mkt, _ = evaluate(df, args.test_from, use_market=True)
         print(format_report([baseline_market(test), r_abil, r_mkt]))

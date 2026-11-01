@@ -1,7 +1,8 @@
 """毎週の流れ: 出走前に予想を残し、結果が出たら照合して回顧をまとめる。
 
 予想は発走前の内容のまま predictions に保存し、結果が出たあとは書き換えない。
-回顧は事実(予想と結果の差)だけをまとめる。理由の推測や講評は付けない。
+回顧は、予想と結果の差に加えて、レースごとの見解(race_review: 流れ・人気馬の敗因の候補と過去の傾向・予想の振り返り)を書く。
+敗因は断定せず、データで確かめられる条件の変化と、同じ条件の人気馬の過去の成績を並べる。
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import flow_review
+from . import flow_review, race_review
 from .gui import add_marks
 from .marks import MARK_ORDER
 
@@ -98,10 +99,12 @@ class Review:
     races: pd.DataFrame  # レースごとのまとめ
     summary: dict
     marks: pd.DataFrame | None = None  # 印ごとの成績(mark_stats)
-    reviews: dict | None = None  # レースごとの見解(horse_reviews)
+    reviews: dict | None = None  # レースごとの、馬ごとの向き・不向き(horse_reviews)
+    views: dict | None = None  # レースごとの見解(race_review.race_view)
 
 
-def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
+def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: bool = True) -> Review:
+    """date の予想と結果の照合。views=False ならレースごとの見解(少し時間がかかる)を作らない。"""
     pred = pd.read_sql_query("SELECT * FROM predictions WHERE date = ?", conn, params=(date,))
     res = pd.read_sql_query(
         "SELECT race_id, number, finish, status, passing, last3f, horse_id, time_sec, popularity AS final_pop, win_odds AS final_odds "
@@ -144,7 +147,8 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100) -> Review:
         "flow_pace_races": int(races["pace_hit"].notna().sum()) if "pace_hit" in races else 0,
         "flow_pace_hits": int((races["pace_hit"] == True).sum()) if "pace_hit" in races else 0,  # noqa: E712
     }
-    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date))
+    out = {rid: race_review.race_view(conn, rid, g) for rid, g in h.groupby("race_id", sort=False)} if views else None
+    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out)
 
 
 def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
@@ -301,6 +305,9 @@ def render_markdown(r: Review) -> str:
         out.append(line)
         if x.get("marked"):
             out.append(f"  - 印の着順: {x['marked']}")
+        view = (r.views or {}).get(x["race_id"])
+        if view:
+            out += race_review.view_markdown(view)
         if x.get("flow"):
             mark = lambda h: "" if h is None or h != h else "(的中)" if h else "(外れ)"
             if x["forecast"]:
@@ -358,7 +365,7 @@ def live_trend(conn: sqlite3.Connection) -> pd.DataFrame:
     """回顧した日ごとの、実運用の成績(発走前に保存した予想と確定結果の照合)。"""
     rows = []
     for (d,) in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date").fetchall():
-        s = review_day(conn, d).summary
+        s = review_day(conn, d, views=False).summary
         if s["races"]:
             rows.append({"日付": d, "レース数": s["races"], "◎1着": s["honmei_wins"],
                          "◎単勝回収率(%)": s["honmei_roi"], "期待値≧1の頭数": s["ev_bets"],
@@ -368,13 +375,13 @@ def live_trend(conn: sqlite3.Connection) -> pd.DataFrame:
 
 def write_evaluation(conn: sqlite3.Connection, today: dt.date, evals_dir: str | Path) -> Path:
     """学習・評価(直近 EVAL_YEARS 年を評価期間にした keibaai train と同じ3行)と、実運用の推移を書く。"""
-    from .features import build_features, load_results
+    from .features import features_from_db
     from .model import baseline_market, evaluate, format_report
 
     evals_dir = Path(evals_dir)
     evals_dir.mkdir(parents=True, exist_ok=True)
     test_from = (today - dt.timedelta(days=365 * EVAL_YEARS)).isoformat()
-    df = build_features(load_results(conn))
+    df = features_from_db(conn)
     r_abil, test = evaluate(df, test_from, use_market=False)
     r_mkt, _ = evaluate(df, test_from, use_market=True)
     trend = live_trend(conn)

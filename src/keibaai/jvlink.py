@@ -127,7 +127,13 @@ def fetch_results(conn: sqlite3.Connection, start: dt.date, end: dt.date, raw_ro
     export(raw, f"{start - dt.timedelta(days=1):%Y%m%d}", ["RACE"], option=1,
            rt=[f"0B15:{d:%Y%m%d}" for d in recent], python32=python32)
     refresh = max(start, today - dt.timedelta(days=RECENT_DAYS)).isoformat()
-    return import_races(conn, raw, start.isoformat(), refresh_since=refresh)
+    out = import_races(conn, raw, start.isoformat(), refresh_since=refresh)
+    try:  # 地方・海外の成績(海外帰り・地方帰りの判定に使う)。取れなくても中央の成績は使える
+        from .jvother import import_other
+        print(f"地方・海外の成績: {import_other(conn, [raw])} 件")
+    except Exception as e:
+        print(f"地方・海外の成績を入れられませんでした: {e}")
+    return out
 
 
 # 速報オッズの種別(JVRTOpen のデータ種別)→ 入っているレコード。2026-10-16 に実機で、10/17 の前日発売のオッズが

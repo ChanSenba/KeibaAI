@@ -88,10 +88,10 @@ def collect(conn, fetcher, start: dt.date, end: dt.date, on_day=None) -> int:
 
 def train_reports(conn: sqlite3.Connection, test_from: str) -> pd.DataFrame:
     """CLI の train と同じ3行(基準・オッズなし・オッズあり)を表にして返す。"""
-    from .features import build_features, load_results
+    from .features import features_from_db
     from .model import baseline_market, evaluate
 
-    df = build_features(load_results(conn))
+    df = features_from_db(conn)
     r_abil, test = evaluate(df, test_from, use_market=False)
     r_mkt, _ = evaluate(df, test_from, use_market=True)
     rows = [asdict(r) for r in (baseline_market(test), r_abil, r_mkt)]
@@ -178,9 +178,9 @@ def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_
                  max_odds: float | None, stake: int, blend: bool = False):
     """(レース数, まとめの表, ルールごとの精算済み買い目)。学習は test_from より前だけを使う。"""
     from . import backtest as bt
-    from .features import build_features, load_results
+    from .features import features_from_db
 
-    feats = build_features(load_results(conn))
+    feats = features_from_db(conn)
     if blend:
         from .blend import predict_test_blend
 
@@ -237,10 +237,10 @@ STAR_EV, STAR_P, STAR_ODDS = 1.1, 0.03, 30.0
 def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     """予想印(mark 列)を付ける。予想の中身には手を入れず、出た勝率と期待値から決める。
 
-    レースごとに、勝率の高い順に ◎ ○ ▲、続く 2 頭に △(9 頭立て以下は 1 頭)。
-    勝率は印用の勝率(p_win_mix。ニューラルネットの能力のみの勝率と、予想を出した時点のオッズを混ぜたもの)を使い、
-    そのレースにオッズがなければ能力のみを使う。印用の勝率のない古い予想では、オッズ込みのモデルの勝率を使う。
-    当日9時のオッズでの検証(2026年)で、◎の的中は オッズ込みのモデル 31.5% → 32.4%(predict.mix_with_odds)。
+    ◎ ○ ▲ △ は、能力のみの勝率(p_win_ability。オッズを見ない)の高い順。続く 2 頭に △(9 頭立て以下は 1 頭)。
+    印は「AI が能力をどう見たか」を示すもので、人気(オッズ)は混ぜない。2026-11 まではオッズを混ぜた勝率で付けていて、
+    保存した139レースで◎が確定の1番人気だった割合が76%(オッズを取ったあとは79%)と、ほぼ人気順になっていた。
+    オッズは、買うかどうかの判断(☆・★・期待値)にだけ使う。
     印のない馬のうち、期待値(オッズ込み。なければ能力のみ)がいちばん高く 1 以上の馬に ☆(穴)。
     能力のみの期待値は人気薄を高く見すぎる(100倍超の馬の勝率を実際の約4倍に見る)ので、オッズ込みを先に使う。
     2021〜2026年の検証で、☆の単勝の勝率は 1.0% → 2.1%、回収率は 69.5% → 75.8% になった(それでも得な印ではない)。
@@ -253,8 +253,7 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     out["star"] = ((out["ev_market"] >= STAR_EV) & (out["p_win_market"] >= STAR_P)
                    & (out["win_odds"] <= STAR_ODDS)).map({True: "★", False: ""})
     for _, g in out.groupby("race_id", sort=False):
-        p = next((c for c in ("p_win_mix", "p_win_market") if c in g and g[c].notna().all()), "p_win_ability")
-        ranked = g[p].dropna().sort_values(ascending=False, kind="stable").index
+        ranked = g["p_win_ability"].dropna().sort_values(ascending=False, kind="stable").index
         marks = top_marks(len(g))
         top = list(ranked[:len(marks)])
         out.loc[top, "mark"] = marks[:len(top)]

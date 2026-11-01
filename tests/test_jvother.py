@@ -16,7 +16,7 @@ def other_se(race, number, horse, finish="02", kubun="A", time="1272", abnormal=
 
 
 def test_parse_other_records():
-    assert parse_other_ra(other_ra("2024050644010301")) == ("202444010301", "ダ", 1400)
+    assert parse_other_ra(other_ra("2024050644010301")) == ("202444010301", "ダ", 1400, "富士ステークス")
     r = parse_other_se(other_se("2024050644010301", "03", "2020101234"))
     assert r[:6] == ("202444010301", 3, "2020101234", "2024-05-06", "地方", "44")
     assert r[8:] == (2, None, 87.2)
@@ -73,3 +73,27 @@ def test_transfer_from_local_has_history_on_first_jra_run():
     r = add_other_features(df, o).iloc[0]
     assert r["prev_is_other"] == 1.0 and r["days_since_any"] == 30 and r["n_any_prev"] == 2
     assert r["runs_since_jra"] == 2 and r["other_top3_rate"] == 1.0 and r["is_layoff_any"] == 0.0
+
+
+def test_features_from_db_know_the_overseas_run_and_the_jockey_gap():
+    from keibaai import db
+    from keibaai.features import features_from_db
+    from keibaai.parse import ParsedRace, Race, Result
+
+    conn = db.connect(":memory:")
+    for i, (date, j1, j2) in enumerate([("2026-01-01", "J1", "J2"), ("2026-05-01", "J1", "J2"), ("2026-11-01", "J2", "J1")]):
+        rid = f"20260501010{i + 1}"
+        db.save_race(conn, ParsedRace(race=Race(race_id=rid, date=date, venue="東京", round=1, course_type="芝",
+                                                distance=2000, name="テスト"), results=[
+            Result(race_id=rid, number=1, finish=1, horse_id="h1", jockey_id=j1, sex_age="牡4"),
+            Result(race_id=rid, number=2, finish=2, horse_id="h2", jockey_id=j2, sex_age="牡4"),
+            Result(race_id=rid, number=3, finish=3, horse_id=f"x{i}", jockey_id="J3", sex_age="牡4"),
+            Result(race_id=rid, number=4, finish=4, horse_id=f"y{i}", jockey_id="J2", sex_age="牡4")]))
+    conn.execute("INSERT INTO other_runs (race_id, number, horse_id, date, region, venue_code, finish) "
+                 "VALUES ('2026A6000005', 4, 'h1', '2026-07-25', '海外', 'A6', 7)")
+    df = features_from_db(conn).set_index(["race_id", "number"])
+    last = df.loc[("202605010103", 1)]
+    assert last["prev_other_abroad"] == 1 and last["days_since_any"] == 99 and last["days_since_last"] == 184
+    # 今回の騎手(J2: 4騎乗で3着内2回)と、前走の騎手(J1: 前走の時点で1騎乗1勝)の3着内率の差
+    assert np.isclose(last["jockey_delta"], 0.5 - 1.0)
+    assert np.isnan(df.loc[("202605010103", 2), "prev_other_abroad"])  # 前走が中央なら空

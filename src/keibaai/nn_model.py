@@ -14,15 +14,16 @@ import numpy as np
 import pandas as pd
 
 from .factors import FACTORS
-from .features import ABILITY_MODEL_FEATURES, CATEGORICAL
+from .features import CATEGORICAL, NN_FEATURES
 from .model import BODY_WEIGHT_FEATURES, BODY_WEIGHT_MASK_RATE, TRAIN_FROM
 
 MAX_HORSES = 18
-CATS = [c for c in CATEGORICAL if c in ABILITY_MODEL_FEATURES]
-NUMS = [c for c in ABILITY_MODEL_FEATURES if c not in CATS]
+CATS = [c for c in CATEGORICAL if c in NN_FEATURES]
+NUMS = [c for c in NN_FEATURES if c not in CATS]
 OTHER = "その他"  # どの要素にも入らない列(性別など)の網。表示には出さない
 PLACE_WEIGHTS = (1.0, 0.5, 0.25)  # 1着・2着・3着を当てる項の重み
 EPOCHS, PATIENCE, BATCH = 40, 4, 256
+N_SEEDS = 3  # 乱数を変えて学ぶ回数(平均を使う)
 
 
 class _Prep:
@@ -116,12 +117,32 @@ def _pl_loss(z, F, M):
     return loss
 
 
-def fit_predict(train: pd.DataFrame, target: pd.DataFrame, seed: int = 0) -> tuple[pd.Series, pd.DataFrame]:
+def fit_predict(train: pd.DataFrame, target: pd.DataFrame, seed: int = 0,
+                n_seeds: int | None = None) -> tuple[pd.Series, pd.DataFrame]:
     """train(結果のある行)で学び、target の各馬の勝率(レース内で合計1)と、要素ごとの勝率の表を返す。
 
+    乱数を変えて n_seeds 回(既定 N_SEEDS)学び、勝率は対数で平均してレース内で合計1にする(要素ごとの勝率も同じ)。
+    1回だけだと、乱数しだいで印が入れ替わる(2025〜2026年の約6,400レースで、勝ち馬の対数尤度が乱数で ±0.004 ほど動く)。
     学習は TRAIN_FROM 以後のレース。最後の1割のレースで成績を見て、良くならなくなったら止める。
     馬体重は、学習の行の BODY_WEIGHT_MASK_RATE の割合で空にする(朝の予想では馬体重が出ていないため)。
     """
+    runs = [_fit_predict_one(train, target, seed + k) for k in range(n_seeds or N_SEEDS)]
+    if len(runs) == 1:
+        return runs[0]
+    race = target["race_id"]
+
+    def geo(frames: list[pd.Series]) -> pd.Series:
+        z = np.exp(np.mean([np.log(f.clip(lower=1e-12)) for f in frames], axis=0))
+        z = pd.Series(z, index=frames[0].index).where(frames[0].notna())
+        return z / z.groupby(race).transform("sum")
+
+    p_win = geo([r[0] for r in runs])
+    parts = pd.DataFrame({c: geo([r[1][c] for r in runs]) for c in runs[0][1].columns}, index=runs[0][1].index)
+    return p_win, parts
+
+
+def _fit_predict_one(train: pd.DataFrame, target: pd.DataFrame, seed: int) -> tuple[pd.Series, pd.DataFrame]:
+    """fit_predict の1回ぶん。"""
     import torch
 
     torch.manual_seed(seed)

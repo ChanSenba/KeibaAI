@@ -5,8 +5,8 @@
 RA・SE の位置は中央と同じ(jvrace.py の説明を参照)。地方の場コードは 30〜61、海外は英字(A4 など)。
 海外はタイムが 0、外国馬は馬の番号が 0000000000。古い書き出しは日本語の欄が化けていることがあるが、数字の欄は読める。
 
-検証用。keiba.db には書かない。
-    python -m keibaai.jvother --raw data/jv_raw data/jv_raw_old --db data/jv_other.db
+成績の取り込み(jvlink.fetch_results)のたびに、keiba.db の other_runs にも入る。最初の1回は、セットアップの書き出しから入れる。
+    python -m keibaai.jvother --raw data/jv_raw data/jv_raw_old --db data/keiba.db
 """
 from __future__ import annotations
 
@@ -17,15 +17,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .jvrace import STATUS, _num, _records, _track
+from .jvrace import STATUS, _num, _records, _track, _txt
 
 KUBUNS = {b"A": "地方", b"B": "海外"}
 COLUMNS = ["race_id", "number", "horse_id", "date", "region", "venue_code", "course_type", "distance",
-           "finish", "status", "time_sec"]
+           "finish", "status", "time_sec", "name"]
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS other_runs (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, horse_id TEXT NOT NULL, date TEXT NOT NULL, region TEXT,
-    venue_code TEXT, course_type TEXT, distance INTEGER, finish INTEGER, status TEXT, time_sec REAL,
+    venue_code TEXT, course_type TEXT, distance INTEGER, finish INTEGER, status TEXT, time_sec REAL, name TEXT,
     PRIMARY KEY (race_id, number)
 );
 CREATE INDEX IF NOT EXISTS idx_other_horse ON other_runs(horse_id);
@@ -37,10 +37,10 @@ def _rid(b: bytes) -> str:
 
 
 def parse_other_ra(b: bytes) -> tuple | None:
-    """地方・海外の RA → (race_id, 芝/ダ, 距離)。対象外は None。"""
+    """地方・海外の RA → (race_id, 芝/ダ, 距離, レース名)。対象外は None。古い書き出しはレース名が化けている。"""
     if b[:2] != b"RA" or b[2:3] not in KUBUNS or len(b) < 707 or not b[11:19].isdigit():
         return None
-    return _rid(b), _track(b[705:707].decode("ascii", errors="replace"))[0], _num(b[697:701])
+    return _rid(b), _track(b[705:707].decode("ascii", errors="replace"))[0], _num(b[697:701]), _txt(b[32:92]) or None
 
 
 def parse_other_se(b: bytes) -> tuple | None:
@@ -62,6 +62,8 @@ def parse_other_se(b: bytes) -> tuple | None:
 def import_other(conn: sqlite3.Connection, raw_dirs: list[str | Path]) -> int:
     """raw_dirs の RACE.txt から地方・海外の出走を other_runs に入れる(同じ出走は入れ替え)。入れた件数を返す。"""
     conn.executescript(SCHEMA)
+    if "name" not in {r[1] for r in conn.execute("PRAGMA table_info(other_runs)")}:  # レース名の列がない古い表
+        conn.execute("ALTER TABLE other_runs ADD COLUMN name TEXT")
     races, runs = {}, {}
     for d in raw_dirs:
         path = Path(d) / "RACE.txt"
@@ -76,7 +78,8 @@ def import_other(conn: sqlite3.Connection, raw_dirs: list[str | Path]) -> int:
                 r = parse_other_se(b)
                 if r:
                     runs[(r[0], r[1])] = r
-    rows = [(*r[:6], *races.get(r[0], (None, None)), *r[8:]) for r in runs.values()]
+    none = (None, None, None)  # 芝ダ・距離・レース名(RA がなければ空)
+    rows = [(*r[:6], *races.get(r[0], none)[:2], *r[8:11], races.get(r[0], none)[2]) for r in runs.values()]
     with conn:
         conn.executemany(f"INSERT OR REPLACE INTO other_runs ({','.join(COLUMNS)}) "
                          f"VALUES ({','.join('?' * len(COLUMNS))})", rows)
@@ -84,12 +87,17 @@ def import_other(conn: sqlite3.Connection, raw_dirs: list[str | Path]) -> int:
 
 
 def load_other(path: str | Path) -> pd.DataFrame:
-    """other_runs を読む(読み取り専用)。頭数は同じレースの出走数。"""
+    """別の DB ファイルの other_runs を読む(読み取り専用)。頭数は同じレースの出走数。"""
     conn = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
     try:
-        df = pd.read_sql_query("SELECT * FROM other_runs", conn)
+        return load_other_frame(conn)
     finally:
         conn.close()
+
+
+def load_other_frame(conn: sqlite3.Connection) -> pd.DataFrame:
+    """接続先の other_runs を読む。頭数は同じレースの出走数。"""
+    df = pd.read_sql_query("SELECT * FROM other_runs", conn)
     df["date"] = pd.to_datetime(df["date"])
     df["field_size"] = df.groupby("race_id")["number"].transform("count")
     return df
@@ -155,9 +163,9 @@ def add_other_features(df: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="JRA-VAN の地方・海外の成績を別の DB に入れる(keiba.db には書かない)")
+    ap = argparse.ArgumentParser(description="JRA-VAN の地方・海外の成績を other_runs に入れる")
     ap.add_argument("--raw", nargs="+", default=["data/jv_raw"], help="RACE.txt のあるフォルダ(複数可)")
-    ap.add_argument("--db", default="data/jv_other.db")
+    ap.add_argument("--db", default="data/keiba.db")
     args = ap.parse_args(argv)
     conn = sqlite3.connect(args.db)
     n = import_other(conn, args.raw)

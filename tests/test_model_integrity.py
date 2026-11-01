@@ -193,7 +193,8 @@ def test_cli_and_gui_forward_blend_selection(monkeypatch,tmp_path,capsys,use_mar
         seen.append(kwargs['use_market'])
         return f,blend.Blend(.5,.5,-1.,-1.)
     monkeypatch.setattr(features,'load_results',lambda _:f)
-    monkeypatch.setattr(features,'build_features',lambda df:df)
+    monkeypatch.setattr(features,'build_features',lambda df,other=None:df)
+    monkeypatch.setattr(features,'load_other_runs',lambda _:None)
     monkeypatch.setattr(blend,'predict_test_blend',mixed)
     args=['backtest','--db',str(tmp_path/'k.db'),'--test-from','2026-01-01','--blend']
     cli.main(args+(['--market'] if use_market else []))

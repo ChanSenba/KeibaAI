@@ -105,6 +105,16 @@ RELATIVE_FEATURES = [f"{c}_{k}" for c in RELATIVE_BASE for k in ("z", "rk")]
 # モデルは市場の見立てからのずれだけを学ぶ。2025-01〜2026-10 の 6,153 レース(2024年までで学習)で、
 # 勝ち馬の対数尤度は市場だけより 1レースあたり +0.0060(95%区間 +0.0034〜+0.0085)、いままでのオッズ込みモデルより +0.0030(+0.0009〜+0.0050)
 RESIDUAL_MODEL_FEATURES = ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES
+# 地方・海外を含めた前走(jvother.add_other_features。other_runs の表から)。海外帰り・地方帰り、本当の間隔
+OTHER_FEATURES = ["days_since_any", "is_layoff_any", "prev_is_other", "prev_other_finish_rel", "prev_other_abroad",
+                  "n_other_prev", "other_top3_rate", "runs_since_jra"]
+# 乗り替わりの騎手の格の差: 今回の騎手の3着内率・勝率 − 前走の騎手の(前走の時点の)3着内率・勝率
+JOCKEY_DELTA_FEATURES = ["jockey_delta", "jockey_delta_win"]
+# 能力のみの勝率(ニューラルネット、nn_model)の特徴量。オッズ・人気は使わない。
+# 2025-01〜2026-10 の約6,400レース(2024年までで学習)で、走破タイムの指数・レース内の相対値・地方海外の前走・騎手の格の差を
+# 足すと、勝ち馬の対数尤度が良くなった(数字は docs/spec.md 8章)
+NN_FEATURES = list(dict.fromkeys(ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES + OTHER_FEATURES
+                                 + JOCKEY_DELTA_FEATURES))
 BIAS_WINDOW = "10D"
 
 
@@ -399,7 +409,24 @@ def _article_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["dist_bucket_s", "_ret", "_all", "l3f_rank_rel", "time_diff", "pos_gain", "pace_diff", "l3f_vs_lap"])
 
 
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
+def load_other_runs(conn: sqlite3.Connection) -> pd.DataFrame | None:
+    """地方・海外の成績(other_runs)。表がなければ None。"""
+    from .jvother import load_other_frame
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='other_runs'").fetchone():
+        return None
+    return load_other_frame(conn)
+
+
+def features_from_db(conn: sqlite3.Connection) -> pd.DataFrame:
+    """DB の結果すべての特徴量(地方・海外の前走も含める)。"""
+    return build_features(load_results(conn), other=load_other_runs(conn))
+
+
+def build_features(df: pd.DataFrame, other: pd.DataFrame | None = None) -> pd.DataFrame:
+    """特徴量を作る。other は地方・海外の成績(load_other_runs)。なければ地方・海外の列は中央だけで作る。"""
+    from .jvother import add_other_features
+
     df = df.copy()
     df["finish"] = pd.to_numeric(df["finish"], errors="coerce").astype(float)
     # 取消・除外は出走数にも履歴にも入れない。未知の結果を予測対象に変換しない。
@@ -454,6 +481,14 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["jockey_n"], df["jockey_win_rate"] = _expanding_rate(df, "jockey_id", "win")
     _, df["jockey_top3_rate"] = _expanding_rate(df, "jockey_id", "top3")
     df["trainer_n"], df["trainer_top3_rate"] = _expanding_rate(df, "trainer_id", "top3")
+    g = df.groupby("horse_id", sort=False)
+    df["jockey_delta"] = df["jockey_top3_rate"] - g["jockey_top3_rate"].shift(1)
+    df["jockey_delta_win"] = df["jockey_win_rate"] - g["jockey_win_rate"].shift(1)
+    if other is None:
+        other = pd.DataFrame({"horse_id": pd.Series(dtype=object), "date": pd.Series(dtype="datetime64[ns]"),
+                              "finish": pd.Series(dtype=float), "region": pd.Series(dtype=object),
+                              "field_size": pd.Series(dtype=float)})
+    df = add_other_features(df, other)
 
     df = add_speed_figures(df)
     df = add_relative(df)
