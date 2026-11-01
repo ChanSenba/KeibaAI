@@ -131,15 +131,16 @@ def test_add_marks_by_win_probability():
     assert gui.add_marks(t).set_index(["race_id", "number"])["star"]["A", 9] == ""  # 30倍を超える
     t.loc[8, "win_odds"] = 25.0
     m = gui.add_marks(t).set_index(["race_id", "number"])["mark"]
-    assert [m["A", i] for i in (2, 3, 4, 5, 6)] == ["◎", "○", "▲", "△", "△"]
-    assert m["A", 9] == "☆" and m["A", 1] == ""
-    # オッズのないレースは能力の勝率で。9 頭以下は △ が 1 頭、期待値 1 以上がいなければ ☆ なし
+    # 印は能力のみの勝率の順(オッズ込みの勝率では並べない)。レース A は能力が全馬同じなので馬番順
+    assert [m["A", i] for i in (1, 2, 3, 4, 5)] == ["◎", "○", "▲", "△", "△"]
+    assert m["A", 9] == "☆" and m["A", 6] == ""  # ☆はオッズ込みの期待値で
+    # 9 頭以下は △ が 1 頭、期待値 1 以上がいなければ ☆ なし
     assert [m["B", i] for i in (2, 3, 4, 1)] == ["◎", "○", "▲", "△"] and m["B", 5] == ""
-    # 印用の勝率(p_win_mix)があればそれで並べる。★はオッズ込みのまま
+    # 古い予想の表に p_win_mix(オッズを混ぜた勝率)があっても、印には使わない
     t["p_win_mix"] = [0.3, 0.05, 0.2, 0.1, 0.08, 0.07, 0.06, 0.06, 0.04, 0.04] + [None] * 5
+    t.loc[:9, "p_win_ability"] = [0.05, 0.3, 0.2, 0.1, 0.08, 0.07, 0.06, 0.06, 0.04, 0.04]
     out = gui.add_marks(t).set_index(["race_id", "number"])
-    assert [out["mark"]["A", i] for i in (1, 3, 4)] == ["◎", "○", "▲"] and out["star"]["A", 9] == "★"
-    assert out["mark"]["B", 2] == "◎"  # オッズのないレースは能力の勝率のまま
+    assert [out["mark"]["A", i] for i in (2, 3, 4)] == ["◎", "○", "▲"] and out["star"]["A", 9] == "★"
 
 
 def test_backtest_run_returns_table_and_curves():

@@ -364,7 +364,7 @@ def page_train() -> None:
 PRED_COLUMNS = {
     "mark": st.column_config.TextColumn(
         "印", width="small",
-        help="◎○▲△は勝率の高い順(オッズがあればオッズ込み、なければ能力のみ)。☆は印のない馬のうち、期待値(オッズ込み。なければ能力のみ)がいちばん高く1を超える穴馬"),
+        help="◎○▲△は、オッズを見ない能力のみの勝率の高い順(人気は混ぜない)。☆は印のない馬のうち、期待値(オッズ込み。なければ能力のみ)がいちばん高く1を超える穴馬"),
     "star": st.column_config.TextColumn(
         "★", width="small",
         help="オッズ込みのモデルが、オッズより高く評価している馬(その期待値1.1以上・勝率3%以上・単勝30倍以内)。"
@@ -380,7 +380,7 @@ PRED_COLUMNS = {
         help="オッズを見ずに、過去の成績などの能力だけで出した勝率。オッズが無くても出る"),
     "p_win_market": st.column_config.ProgressColumn(
         "勝率(オッズ込)", min_value=0, max_value=1, format="percent",
-        help="能力の勝率と、オッズから読み取れる市場の確率を、過去の結果で決めた割合で混ぜた勝率"),
+        help="オッズから読み取れる市場の確率を出発点に、過去の成績などから市場の見立てのずれだけを学んだ勝率。期待値と★に使う(印には使わない)"),
     "p_win_quality": st.column_config.ProgressColumn("馬の質", min_value=0, max_value=1, format="percent",
                                                      help="過去の成績・上がり・距離適性・クラスだけで見た勝率"),
     "p_win_fit": st.column_config.ProgressColumn("適性", min_value=0, max_value=1, format="percent",
@@ -1433,7 +1433,7 @@ BET_COLUMNS = {
 
 # ---------------------------------------------------------------- 回顧
 def page_review() -> None:
-    from keibaai import weekly
+    from keibaai import race_review, weekly
 
     header("Review", "回顧", "発走前に保存した予想と、レースの結果を照らし合わせます。毎週の処理(keibaai weekly)で予想が溜まります。")
     conn = connection()
@@ -1444,7 +1444,7 @@ def page_review() -> None:
             st.caption("PC で `keibaai weekly` を実行すると、今週末の予想が保存されます。")
         return
     day = st.selectbox("開催日", days)
-    r = weekly.review_day(conn, day)
+    r = weekly.review_day(conn, day, views=False)  # レースの見解は、選んだレースだけ作る
     if not r.summary["races"]:
         st.info("この日の結果はまだ取得されていません。取得したあとに表示されます。", icon=":material/hourglass_empty:")
         return
@@ -1458,7 +1458,7 @@ def page_review() -> None:
     scope = st.segmented_control("印ごとの成績の範囲", ["この日", "保存済みの全期間"], default="この日", key="review_scope") or "この日"
     marks = r.marks
     if scope != "この日":  # 1日だと頭数が少ないので、結果の出ている全部の日をまとめて出す
-        marks = weekly.mark_stats(pd.concat([weekly.review_day(conn, d).horses for d in days], ignore_index=True))
+        marks = weekly.mark_stats(pd.concat([weekly.review_day(conn, d, views=False).horses for d in days], ignore_index=True))
     if marks is not None and not marks.empty:
         st.subheader("印ごとの成績", anchor=False)
         pct = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
@@ -1481,13 +1481,33 @@ def page_review() -> None:
             race_head(heads.loc[race["race_id"]])
         else:
             st.markdown(f"#### {race['venue']}{int(race['round'])}R {gui.text_or_blank(race['race_name'])}")
-        review_race(r.horses[r.horses["race_id"] == race["race_id"]], race,
-                    (r.reviews or {}).get(race["race_id"]))
+        g = r.horses[r.horses["race_id"] == race["race_id"]]
+        with st.spinner("レースの見解をまとめています…"):
+            view = race_review.race_view(conn, race["race_id"], g)
+        review_race(g, race, (r.reviews or {}).get(race["race_id"]), view)
+
+
+def review_view(view: dict) -> None:
+    """レースの見解: 流れ、人気馬の結果と敗因の候補、過去の傾向、予想の振り返り。"""
+    from keibaai.race_review import SECTIONS
+
+    st.subheader("レースの見解", anchor=False)
+    st.caption("結果と過去のデータから機械的にまとめています。敗因は断定せず、前走からの条件の変化を候補として挙げ、"
+               "同じ条件の人気馬が過去にオッズの見込みどおり走ったか(実際の勝ち数 ÷ 見込みの勝ち数)を添えます。")
+    with st.container(border=True):
+        for key, title in SECTIONS.items():
+            lines = view.get(key) or []
+            if not lines:
+                continue
+            if key in ("favorites", "trends"):
+                st.markdown(f"**{title}**\n\n" + "\n".join(f"- {t}" for t in lines))
+            else:
+                st.markdown(f"**{title}** " + "".join(lines))
 
 
 def review_fit(horses: list[dict]) -> None:
-    """回顧の見解: 馬番順に、条件ごとの向き・不向きを1つの表で見せ、くわしい理由は馬ごとに畳む。"""
-    st.subheader("回顧の見解", anchor=False)
+    """馬ごとの条件(参考): 馬番順に、条件ごとの向き・不向きを1つの表で見せ、くわしい理由は馬ごとに畳む。"""
+    st.subheader("馬ごとの条件(参考)", anchor=False)
     st.caption("そのレースの展開・枠・馬場状態・コース・距離に、各馬が向いていたかを、結果と過去の成績から機械的に判定しています。"
                "向いたは緑、向かなかったは赤みで示します。馬番順です。",
                help=gui_help.REVIEW_COLUMNS["flow"][1])
@@ -1513,10 +1533,12 @@ def review_fit(horses: list[dict]) -> None:
             st.html(review_html(rv))
 
 
-def review_race(g, race=None, reviews=None) -> None:
-    """1レースの回顧: 全馬の着順表(印の列つき)と、馬ごとの見解。"""
+def review_race(g, race=None, reviews=None, view=None) -> None:
+    """1レースの回顧: レースの見解、全馬の着順表(印の列つき)、馬ごとの条件。"""
     from keibaai import weekly
 
+    if view:
+        review_view(view)
     if race is not None and race.get("flow"):  # 発走前の展開予想と、結果から出した実際の展開
         with st.container(border=True):  # 展開の予想・実際・馬場を、1つの枠にまとめる
             if race.get("forecast"):

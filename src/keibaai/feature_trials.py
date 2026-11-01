@@ -576,7 +576,7 @@ def prepare(conn: sqlite3.Connection, other_db: str | Path | None = None) -> pd.
     df = add_affinity_candidates(df)
     df = add_gaikyu_candidates(conn, add_more_candidates(df))
     if other_db is not None and Path(other_db).exists():
-        df = add_other_features(df, load_other(other_db))
+        df = add_other_features(df.drop(columns=[c for c in OTHER_COLUMNS if c in df]), load_other(other_db))
     return df
 
 

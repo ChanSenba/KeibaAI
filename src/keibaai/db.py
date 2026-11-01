@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS jv_training (
     center TEXT, course TEXT, turn TEXT, f4 REAL, f3 REAL, f2 REAL, l1 REAL,
     PRIMARY KEY (horse_id, date, time, kind)
 );
+-- JRA-VAN の地方(区分 A)・海外(区分 B)の成績(jvother.py)。中央の前走に「地方・海外を含めた前走」を足すのと、回顧の海外帰りの判定に使う
+CREATE TABLE IF NOT EXISTS other_runs (
+    race_id TEXT NOT NULL, number INTEGER NOT NULL, horse_id TEXT NOT NULL, date TEXT NOT NULL, region TEXT,
+    venue_code TEXT, course_type TEXT, distance INTEGER, finish INTEGER, status TEXT, time_sec REAL, name TEXT,
+    PRIMARY KEY (race_id, number)
+);
+CREATE INDEX IF NOT EXISTS idx_other_horse ON other_runs(horse_id);
 CREATE INDEX IF NOT EXISTS idx_results_horse ON results(horse_id);
 CREATE INDEX IF NOT EXISTS idx_races_date ON races(date);
 """
@@ -120,7 +127,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
 
 def _install_model_revision(conn: sqlite3.Connection) -> None:
     """直接SQLの訂正も含め、学習に使う表の更新を保存済み予測へ反映する。"""
-    tables = ("races", "results", "pedigree", "training", "jv_training")
+    tables = ("races", "results", "pedigree", "training", "jv_training", "other_runs")
     events = ("INSERT", "UPDATE", "DELETE")
     required = {f"model_revision_{table}_{event.lower()}" for table in tables for event in events}
     installed = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -151,7 +158,8 @@ def model_revision(conn: sqlite3.Connection) -> tuple | None:
 # 後から増えた列。作成済みの DB にも足す
 _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("pace_last3f", "REAL"), ("course", "TEXT"), ("rail", "TEXT")],
                   "entry_races": [("course", "TEXT"), ("rail", "TEXT")],
-                  "odds_snapshots": [("source", "TEXT")]}
+                  "odds_snapshots": [("source", "TEXT")],
+                  "other_runs": [("name", "TEXT")]}
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
