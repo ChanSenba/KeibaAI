@@ -28,7 +28,7 @@ def test_evaluate_kind_win_ev_and_payout(tmp_path):
 
 
 def test_evaluate_kind_quinella_uses_harville_prob(tmp_path):
-    b = bettypes.evaluate_kind(_test(), _db(tmp_path), "quinella")
+    b = bettypes.evaluate_kind(_test(), _db(tmp_path), "quinella", g2=1.0, g3=1.0)  # 補正なし(ハーヴィルそのまま)
     p = [0.5, 0.25, 0.125, 0.125]
     expect = p[0] * p[1] / (1 - p[0]) + p[1] * p[0] / (1 - p[1])  # 1-2 または 2-1 の順
     r = b[b["combo"] == (1, 2)].iloc[0]

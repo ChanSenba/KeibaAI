@@ -138,3 +138,19 @@ def test_small_bankroll_still_gets_100_yen_bets():
     plan = bt.make_plan(NUMS, P, odds, bankroll=1000, cap=10_000)
     assert plan.bets and all(b.stake >= 100 for b in plan.bets) and plan.total <= 300  # 資金の3割まで
     assert plan.note
+
+
+def test_pool_odds_are_mixed_only_when_the_whole_table_is_there():
+    from keibaai.betting import harville_outcomes, kind_probs
+
+    p = np.array([0.4, 0.3, 0.2, 0.1])
+    order, prob = harville_outcomes(p)
+    idx = {i + 1: i for i in range(4)}
+    full = {(a, b): 5.0 for a in range(1, 5) for b in range(a + 1, 5)}  # 6組とも同じオッズ
+    mixed = kind_probs("馬連", full, order, prob, idx, 4)
+    assert np.isclose(sum(v[0] for v in mixed.values()), 1.0)  # 馬連の当たりは1組
+    plain = kind_probs("馬連", {(1, 2): 5.0}, order, prob, idx, 4)  # 1組しかなければ混ぜない
+    h = prob[[{0, 1} == {int(o[0]), int(o[1])} for o in order]].sum()
+    assert np.isclose(plain[(1, 2)][0], h)
+    # 券種のオッズが平らなら、混ぜた確率はハーヴィルより平らになる(人気の組が下がる)
+    assert mixed[(1, 2)][0] < h
