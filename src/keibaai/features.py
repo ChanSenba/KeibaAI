@@ -110,6 +110,11 @@ OTHER_FEATURES = ["days_since_any", "is_layoff_any", "prev_is_other", "prev_othe
                   "n_other_prev", "other_top3_rate", "runs_since_jra"]
 # 乗り替わりの騎手の格の差: 今回の騎手の3着内率・勝率 − 前走の騎手の(前走の時点の)3着内率・勝率
 JOCKEY_DELTA_FEATURES = ["jockey_delta", "jockey_delta_win"]
+# 前走の勝ち方・負け方(add_result_tags)。結果から機械的に出した「展開・枠に恵まれたか」「上がり上位なのに届かなかったか」。
+# 回顧の各馬の勝因・敗因(race_review)に使う。次走の特徴量として 2025-01〜2026-10 の 6,375 レースで試したが、
+# 能力モデル −0.8/1000(95%区間 −2.8〜+1.3)、オッズ込みのモデル −1.2/1000(−3.0〜+0.8)と効かなかったので、モデルには入れていない
+# (前走の上がり順位・位置取り・馬場の偏りの特徴量から、すでに学べている)
+RESULT_TAG_FEATURES = ["prev_flow_fit", "prev_gate_fit", "prev_closer_unlucky", "flow_fit_3", "closer_unlucky_3"]
 # 能力のみの勝率(ニューラルネット、nn_model)の特徴量。オッズ・人気は使わない。
 # 2025-01〜2026-10 の約6,400レース(2024年までで学習)で、走破タイムの指数・レース内の相対値・地方海外の前走・騎手の格の差を
 # 足すと、勝ち馬の対数尤度が良くなった(数字は docs/spec.md 8章)
@@ -421,6 +426,43 @@ def load_other_runs(conn: sqlite3.Connection) -> pd.DataFrame | None:
 def features_from_db(conn: sqlite3.Connection) -> pd.DataFrame:
     """DB の結果すべての特徴量(地方・海外の前走も含める)。"""
     return build_features(load_results(conn), other=load_other_runs(conn))
+
+
+def add_result_tags(df: pd.DataFrame) -> pd.DataFrame:
+    """そのレースの勝ち方・負け方の印(flow_fit・gate_fit・closer_unlucky)と、それを前走・直近3走にずらした特徴量を足す。
+
+    flow_fit: 展開の向き。前に付けた馬(序盤の位置が前の3分の1)と、ほかの馬の3着内率の差を、前の馬にはそのまま、
+      後ろの3分の1の馬には符号を反対にして付ける。正なら展開に恵まれ、負なら不利だった。
+    gate_fit: 枠の向き。内の3分の1と外の3分の1の3着内率の差を、内の馬はそのまま、外の馬は反対に付ける。
+    closer_unlucky: 上がり3Fが上位3分の1なのに4着以下(届かなかった)。
+    df は日付順に並んでいること。印はそのレースの結果から出すので、特徴量には1走前より前の値だけを使う。
+    """
+    done = df["finish"].notna()
+    ep = df["early_pos"]
+    front, back = (ep <= 1 / 3) & done, (ep > 2 / 3) & done
+    rest = done & ep.notna() & ~front
+    t3 = df["top3"].astype(float)
+    r = df["race_id"]
+
+    def rate(mask):
+        return t3.where(mask).groupby(r).transform("mean")
+
+    edge = rate(front) - rate(rest)
+    pos_edge = rate(df["number"] <= df["field_size"] / 3) - rate(df["number"] > df["field_size"] * 2 / 3)
+    df["flow_fit"] = np.select([front, back], [edge, -edge], 0.0)
+    df["flow_fit"] = df["flow_fit"].where(done & ep.notna() & edge.notna())
+    inner, outer = df["number"] <= df["field_size"] / 3, df["number"] > df["field_size"] * 2 / 3
+    df["gate_fit"] = np.select([inner, outer], [pos_edge, -pos_edge], 0.0)
+    df["gate_fit"] = df["gate_fit"].where(done & pos_edge.notna())
+    l3 = df["l3f_rank_rel"] if "l3f_rank_rel" in df else df.groupby("race_id")["last3f"].rank(method="min") / df["field_size"]
+    df["closer_unlucky"] = ((l3 <= 1 / 3) & (df["finish"] > 3)).astype(float).where(done & l3.notna())
+    g = df.groupby("horse_id", sort=False)
+    df["prev_flow_fit"] = g["flow_fit"].shift(1)
+    df["prev_gate_fit"] = g["gate_fit"].shift(1)
+    df["prev_closer_unlucky"] = g["closer_unlucky"].shift(1)
+    df["flow_fit_3"] = _prior_mean(df["flow_fit"], df["horse_id"], 3)
+    df["closer_unlucky_3"] = _prior_mean(df["closer_unlucky"], df["horse_id"], 3)
+    return df
 
 
 def build_features(df: pd.DataFrame, other: pd.DataFrame | None = None) -> pd.DataFrame:
