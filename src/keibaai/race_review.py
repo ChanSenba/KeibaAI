@@ -351,6 +351,93 @@ def prediction_lines(g: pd.DataFrame) -> list[str]:
     return out
 
 
+# ---------------------------------------------------------------- 各馬の勝因・敗因の印(features.add_result_tags と同じ計算)
+TAG_EDGE = 0.2  # 展開・枠の向き(3着内率の差)がこれ以上なら「恵まれた」、−これ以下なら「不利」
+TAGS = {"展開に恵まれた": lambda d: d["flow_fit"] >= TAG_EDGE, "展開が不利": lambda d: d["flow_fit"] <= -TAG_EDGE,
+        "枠に恵まれた": lambda d: d["gate_fit"] >= TAG_EDGE, "枠が不利": lambda d: d["gate_fit"] <= -TAG_EDGE,
+        "上がり上位で届かず": lambda d: d["closer_unlucky"] == 1}
+GOOD_TAGS = {"展開に恵まれた", "枠に恵まれた"}
+
+
+def _tag_frame(runners: pd.DataFrame) -> pd.DataFrame:
+    """出走馬の表(race_id・horse_id・number・finish・passing・last3f)に flow_fit・gate_fit・closer_unlucky を付ける。"""
+    from .features import add_result_tags
+
+    d = runners.copy()
+    d["finish"] = pd.to_numeric(d["finish"], errors="coerce")
+    d["field_size"] = d.groupby("race_id")["number"].transform("count")
+    d["early_pos"] = d["passing"].map(parse_early_position) / d["field_size"]
+    d["top3"] = (d["finish"] <= 3).astype(int)
+    d["l3f_rank_rel"] = pd.to_numeric(d["last3f"], errors="coerce").groupby(d["race_id"]).rank(method="min") / d["field_size"]
+    return add_result_tags(d)
+
+
+def tags_of(row) -> list[str]:
+    return [name for name, cond in TAGS.items() if bool(cond(row))]
+
+
+def horse_lines(runners: pd.DataFrame) -> list[str]:
+    """各馬の勝因・敗因。1〜3着は全頭、4着以下は印の付いた馬だけ(着順の順)。"""
+    d = _tag_frame(runners.assign(race_id=runners.get("race_id", "r")))
+    out = []
+    for _, x in d[d["finish"].notna()].sort_values("finish").iterrows():
+        tags = tags_of(x)
+        won = x["finish"] <= 3
+        if not tags and not won:
+            continue
+        good, bad = [t for t in tags if t in GOOD_TAGS], [t for t in tags if t not in GOOD_TAGS]
+        pop = f"・{int(x['popularity'])}番人気" if x.get("popularity") == x.get("popularity") and x.get("popularity") else ""
+        text = f"{int(x['finish'])}着 {x['horse_name']}({pop.lstrip('・')}): " if pop else f"{int(x['finish'])}着 {x['horse_name']}: "
+        if won:
+            parts = [f"勝因の候補 {'・'.join(good)}" if good else "展開・枠の恵みはなく、力で来た"]
+            if bad:
+                parts.append(f"{'・'.join(bad)}をはね返した")
+        else:
+            parts = [f"敗因の候補 {'・'.join(bad)}"] if bad else []
+            if good:
+                parts.append(f"{'・'.join(good)}のに負けた")
+        out.append(text + "、".join(parts) + "。")
+    return out
+
+
+_NEXT: dict = {}
+
+
+def next_run_rates(conn: sqlite3.Connection, until: str) -> dict:
+    """前走で各印が付いた馬が、次走でオッズの見込みと比べてどれだけ勝ったか。{印: (頭数, 勝ち数, 見込みの勝ち数)}。
+    「負け方を学習に生かせるか」の確かめ。1.0 から離れていれば、市場が見落としている(モデルに足す価値がある)。"""
+    key = (_db_key(conn), until)
+    if key not in _NEXT:
+        df = pd.read_sql_query(
+            "SELECT r.race_id, r.number, r.horse_id, r.finish, r.passing, r.last3f, r.win_odds, c.date "
+            "FROM results r JOIN races c USING (race_id) WHERE c.date < ? AND r.finish IS NOT NULL", conn, params=(until,))
+        df = _tag_frame(df.sort_values(["date", "race_id", "number"]).reset_index(drop=True))
+        g = df.groupby("horse_id", sort=False)
+        prev = pd.DataFrame({c: g[c].shift(1) for c in ("flow_fit", "gate_fit", "closer_unlucky")})
+        odds = pd.to_numeric(df["win_odds"], errors="coerce")
+        inv = (1.0 / odds).where(odds > 0)
+        df["p_market"] = inv / inv.groupby(df["race_id"]).transform("sum")
+        ok = (df["date"] >= RATE_FROM) & df["p_market"].notna()
+        out = {"全体": (int(ok.sum()), int(((df["finish"] == 1) & ok).sum()), float(df.loc[ok, "p_market"].sum()))}
+        for name, cond in TAGS.items():
+            m = ok & cond(prev).fillna(False).astype(bool)
+            out[name] = (int(m.sum()), int(((df["finish"] == 1) & m).sum()), float(df.loc[m, "p_market"].sum()))
+        _NEXT.clear()
+        _NEXT[key] = out
+    return _NEXT[key]
+
+
+def next_run_table(rates: dict) -> pd.DataFrame:
+    rows = []
+    for name, (n, wins, exp) in rates.items():
+        if name == "全体" or not n:
+            continue
+        half = 1.96 * np.sqrt(exp) / exp if exp > 0 else float("nan")
+        rows.append({"前走の印": name, "次走の頭数": n, "勝ち": wins, "見込み": round(exp, 1),
+                     "実績÷見込み": round(wins / exp, 3) if exp else float("nan"), "95%の幅": round(half, 3)})
+    return pd.DataFrame(rows)
+
+
 def race_view(conn: sqlite3.Connection, race_id: str, g: pd.DataFrame | None = None) -> dict | None:
     """1レースの見解。{"flow": [...], "favorites": [...], "trends": [...], "prediction": [...]}。結果がなければ None。
 
@@ -377,11 +464,11 @@ def race_view(conn: sqlite3.Connection, race_id: str, g: pd.DataFrame | None = N
     if "_遅れ" in kinds:
         trends.append("JRA-VAN の海外の成績はレースから数週間たって出るので、休み明けに見える馬が、直近に海外を使っている"
                       "ことがある(出たあとで回顧を開き直すと反映される)。")
-    return {"flow": flow, "favorites": favs, "trends": trends,
+    return {"flow": flow, "favorites": favs, "horses": horse_lines(runners.assign(race_id=race_id)), "trends": trends,
             "prediction": prediction_lines(g) if g is not None else []}
 
 
-SECTIONS = {"flow": "流れ", "favorites": "人気馬", "trends": "過去の傾向", "prediction": "予想"}
+SECTIONS = {"flow": "流れ", "favorites": "人気馬", "horses": "各馬の勝因・敗因", "trends": "過去の傾向", "prediction": "予想"}
 
 
 def view_markdown(view: dict, indent: str = "  ") -> list[str]:
@@ -391,7 +478,7 @@ def view_markdown(view: dict, indent: str = "  ") -> list[str]:
         lines = view.get(key) or []
         if not lines:
             continue
-        if key in ("favorites", "trends"):
+        if key in ("favorites", "horses", "trends"):
             out.append(f"{indent}- {title}:")
             out += [f"{indent}  - {t}" for t in lines]
         else:

@@ -101,6 +101,7 @@ class Review:
     marks: pd.DataFrame | None = None  # 印ごとの成績(mark_stats)
     reviews: dict | None = None  # レースごとの、馬ごとの向き・不向き(horse_reviews)
     views: dict | None = None  # レースごとの見解(race_review.race_view)
+    next_runs: pd.DataFrame | None = None  # 前走の勝ち方・負け方ごとの次走の成績(race_review.next_run_table)
 
 
 def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: bool = True) -> Review:
@@ -148,7 +149,8 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: boo
         "flow_pace_hits": int((races["pace_hit"] == True).sum()) if "pace_hit" in races else 0,  # noqa: E712
     }
     out = {rid: race_review.race_view(conn, rid, g) for rid, g in h.groupby("race_id", sort=False)} if views else None
-    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out)
+    nxt = race_review.next_run_table(race_review.next_run_rates(conn, date)) if views else None
+    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out, nxt)
 
 
 def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
@@ -293,6 +295,13 @@ def render_markdown(r: Review) -> str:
         out += ["## 印ごとの成績", "", "| 印 | 頭数 | 1着 | 3着内 | 3着内率 |", "|---|---|---|---|---|"]
         out += [f"| {x['mark']} | {x['n']} | {x['wins']} | {x['top3']} | {x['top3_rate']:.0%} |"
                 for _, x in r.marks.iterrows()]
+    if r.next_runs is not None and len(r.next_runs):
+        out += ["", "## 前走の勝ち方・負け方ごとの次走の成績(2019年〜)", "",
+                "実績÷見込み は、次走の勝ち数 ÷ 次走の単勝オッズから出した見込みの勝ち数。1.0 から離れていれば市場が見落としている。", "",
+                "| 前走の印 | 次走の頭数 | 勝ち | 見込み | 実績÷見込み | 95%の幅 |", "|---|---|---|---|---|---|"]
+        out += [f"| {x['前走の印']} | {x['次走の頭数']:,} | {x['勝ち']:,} | {x['見込み']:,.1f} | {x['実績÷見込み']:.3f} | ±{x['95%の幅']:.3f} |"
+                for _, x in r.next_runs.iterrows()]
+    if r.marks is not None and len(r.marks):
         out += ["", "## レースごと", ""]
     for _, x in r.races.sort_values(["venue", "round"]).iterrows():
         fin = "—" if x["honmei_finish"] != x["honmei_finish"] else f"{int(x['honmei_finish'])}着"

@@ -1471,6 +1471,13 @@ def page_review() -> None:
             "top3_rate": pct("馬券内率", "3着以内の割合"),
             "roi": pct("単勝回収率", "その印の馬の単勝を100円ずつ買った場合の、払戻 ÷ 投資(確定オッズ)")})
 
+    with st.expander("前走の勝ち方・負け方ごとの次走の成績(負け方を学習に生かせるかの確かめ)"):
+        st.caption("前走で各印(展開・枠の恵み・不利、上がり上位で届かず)が付いた馬が、次走でどれだけ勝ったか(2019年〜)。"
+                   "実績÷見込み は、次走の勝ち数 ÷ 次走の単勝オッズから出した見込みの勝ち数。1.0 から離れていれば市場が見落としている。"
+                   "これらの印は能力モデル・オッズ込みのモデルに足しても当たりやすさが変わらなかった(前走の上がり順位や位置取りから、すでに学べている)。")
+        with st.spinner("集計しています…"):
+            st.dataframe(race_review.next_run_table(race_review.next_run_rates(conn, day)), hide_index=True, width="stretch")
+
     st.subheader("レースごと", anchor=False)
     races = (r.races.assign(_code=r.races["race_id"].str[4:6]).sort_values(["_code", "round"])  # 場コード順(ほかのページと同じ)
              .drop(columns="_code").reset_index(drop=True))
@@ -1499,7 +1506,7 @@ def review_view(view: dict) -> None:
             lines = view.get(key) or []
             if not lines:
                 continue
-            if key in ("favorites", "trends"):
+            if key in ("favorites", "horses", "trends"):
                 st.markdown(f"**{title}**\n\n" + "\n".join(f"- {t}" for t in lines))
             else:
                 st.markdown(f"**{title}** " + "".join(lines))

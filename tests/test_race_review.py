@@ -102,3 +102,21 @@ def test_review_markdown_has_race_view_and_prediction_line():
     assert "  - 流れ: 前半3F" in md and "  - 人気馬:" in md and "  - 過去の傾向:" in md
     assert "  - 予想: ◎馬h1は5着(1番人気)。勝った馬h4は予想3位(▲)で、人気(4番人気)より1つ上に見ていた。" in md
     assert weekly.review_day(conn, "2026-11-01", views=False).views is None
+
+
+def test_each_horse_gets_win_and_loss_tags():
+    conn = _db()
+    v = race_review.race_view(conn, "202605041111")
+    lines = {line.split(" ")[1].split("(")[0].rstrip(":"): line for line in v["horses"]}
+    # 差し決着(前の3頭が4〜6着)。勝った h4 は後ろから → 展開に恵まれた。前で負けた h1 は展開が不利
+    assert "勝因の候補 展開に恵まれた" in lines["馬h4"]
+    assert "敗因の候補 展開が不利" in lines["馬h1"]
+    assert v["horses"][0].startswith("1着 馬h4")
+
+
+def test_next_run_rates_count_the_tag_of_the_previous_race():
+    conn = _db()
+    rates = race_review.next_run_rates(conn, "2027-01-01")
+    assert set(race_review.TAGS) <= set(rates) and rates["全体"][0] > 0
+    table = race_review.next_run_table(rates)
+    assert {"前走の印", "実績÷見込み"} <= set(table.columns)
