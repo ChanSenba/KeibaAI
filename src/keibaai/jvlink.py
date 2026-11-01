@@ -88,6 +88,28 @@ def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_ro
     return import_entries(conn, raw, date, now.isoformat(timespec="seconds"))
 
 
+TRAINING_DAYS = 14  # 調教タイムは、DB にある最新の日からこの日数ぶん戻って取り直す(速報の後から入る分を拾う)
+
+
+def fetch_training(conn: sqlite3.Connection, raw_root: str | Path = RAW_DIR, python32: str = PYTHON32,
+                   today: dt.date | None = None) -> int:
+    """坂路・ウッドの調教タイム(SLOP・WOOD)を、DB にある最新の日の少し前から取って入れる。入れた件数を返す。
+
+    出馬表を取るときに一緒に呼ぶ(`jv --what training` を別に実行しなくても、出走馬の直近の調教が入る)。
+    """
+    from .jvtraining import import_raw
+
+    today = today or dt.date.today()
+    try:
+        last = conn.execute("SELECT MAX(date) FROM jv_training").fetchone()[0]
+    except sqlite3.Error:
+        last = None
+    start = (dt.date.fromisoformat(last) if last else today) - dt.timedelta(days=TRAINING_DAYS)
+    raw = Path(raw_root) / "training"  # 成績・血統の書き出し(raw_root 直下)と混ぜない
+    export(raw, f"{start:%Y%m%d}", ["SLOP", "WOOD"], option=1, python32=python32)
+    return import_raw(conn, raw)
+
+
 def fetch_results(conn: sqlite3.Connection, start: dt.date, end: dt.date, raw_root: str | Path = RAW_DIR,
                   python32: str = PYTHON32, today: dt.date | None = None) -> tuple[int, int]:
     """start〜end の成績を JRA-VAN から取って入れる。(レース数, 出走数) を返す。

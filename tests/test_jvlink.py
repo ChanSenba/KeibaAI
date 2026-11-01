@@ -226,3 +226,21 @@ def test_odds_history_runs_in_batches(tmp_path, monkeypatch):
     monkeypatch.setattr(jvlink, "export", export)
     jvlink.import_odds_history(conn, ids, raw_root=tmp_path, batch=2)
     assert calls == [2, 2, 1]
+
+
+def test_fetch_training_starts_before_latest_date_and_imports(tmp_path, monkeypatch):
+    from tests.test_jvtraining import HC
+
+    calls = []
+
+    def export(out, from_ymd, specs, option=1, rt=(), python32=None):
+        calls.append((out, from_ymd, specs, option))
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "SLOP.txt").write_text(f"a.jvd\t{HC}", encoding="utf-8")
+
+    monkeypatch.setattr(jvlink, "export", export)
+    conn = db.connect(":memory:")
+    conn.execute("INSERT INTO jv_training (horse_id, date, time, kind) VALUES ('x', '2026-10-30', '0600', 'slope')")
+    assert jvlink.fetch_training(conn, tmp_path, today=dt.date(2026, 11, 1)) == 1
+    assert calls == [(tmp_path / "training", "20261016", ["SLOP", "WOOD"], 1)]  # 最新 10/30 の14日前から
+    assert conn.execute("SELECT COUNT(*) FROM jv_training").fetchone()[0] == 2

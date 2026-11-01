@@ -534,6 +534,22 @@ def single_race_controls(conn, date: dt.date):
     return picked, fetch, predict
 
 
+def fetch_training_for(conn, date: dt.date) -> None:
+    """出馬表を取った日の調教を取る: JRA-VAN の調教タイム(坂路・ウッド)と netkeiba の追い切り評価。
+    どちらかが失敗しても、出馬表は保存済みなので続ける(失敗はログに出す)。"""
+    from keibaai import jvlink
+    from keibaai.fetch import Fetcher
+    from keibaai.training import fetch_entry_training
+
+    for name, run in (("調教タイム(JRA-VAN)", lambda: jvlink.fetch_training(conn)),
+                      ("追い切り評価(netkeiba)", lambda: fetch_entry_training(
+                          conn, Fetcher(cache_dir=st.session_state["cache_dir"]), date.isoformat()))):
+        try:
+            print(f"{name}: {run()} 件")
+        except Exception as e:
+            print(f"{name}を取れませんでした: {e}")
+
+
 def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
     """JRA-VAN から出馬表とオッズを取る。race_ids を渡すと、オッズはそのレースだけ。"""
     with st.status("取得しています…", expanded=True) as status:
@@ -545,6 +561,8 @@ def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
 
                 bar.progress(0.1, "JV-Link から書き出しています")
                 n = jvlink.fetch_entries(conn, date.isoformat(), race_ids=race_ids)
+                if n:
+                    fetch_training_for(conn, date)
                 if not n:
                     print("馬番がまだ確定していないか、出馬表がまだ出ていません(馬番は枠順の発表後に入ります)")
         except Exception as e:
