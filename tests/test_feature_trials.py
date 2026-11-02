@@ -194,3 +194,10 @@ def test_variant_features_have_no_duplicates():
     for add, drop in ft.other_variants().values():
         feats = ft.variant_features(["a", "days_since_last"], add, drop)
         assert len(feats) == len(set(feats))
+
+
+def test_market_model_does_not_use_the_training_comment():
+    from keibaai.features import NN_FEATURES, RESIDUAL_MODEL_FEATURES
+
+    assert "train_critic" not in RESIDUAL_MODEL_FEATURES  # 期間ごとに効き方が入れ替わり、合わせ込みになっていた
+    assert "train_critic" in NN_FEATURES  # 能力モデルでは外しても変わらないので残す

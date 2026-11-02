@@ -104,7 +104,10 @@ RELATIVE_FEATURES = [f"{c}_{k}" for c in RELATIVE_BASE for k in ("z", "rk")]
 # オッズ込みのモデル(model.fit_residual)。オッズは列ではなく、市場の勝率を出発点(init_score)にして、
 # モデルは市場の見立てからのずれだけを学ぶ。2025-01〜2026-10 の 6,153 レース(2024年までで学習)で、
 # 勝ち馬の対数尤度は市場だけより 1レースあたり +0.0060(95%区間 +0.0034〜+0.0085)、いままでのオッズ込みモデルより +0.0030(+0.0009〜+0.0050)
-RESIDUAL_MODEL_FEATURES = ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES
+# 調教の短評(train_critic、196種類)は外す。短評ごとの勝ちやすさが期間で入れ替わり(「仕上がる」は2024年まで 1.02倍 → 2025年から 0.86倍)、
+# 木が短評で細かく分けて過去に合わせ込んでいた。外すと 2025-01〜2026-10 の 6,375 レースで市場との差が +3.7 → +8.0/1000
+# (乱数3通りの平均。外した効果 +4.2、95%区間 +1.7〜+6.9。2025年 +5.1・2026年 +3.3)。能力のみのモデル(nn_model)では変わらない(−0.9、−3.4〜+1.7)ので残す
+RESIDUAL_MODEL_FEATURES = [c for c in ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES if c != "train_critic"]
 # 地方・海外を含めた前走(jvother.add_other_features。other_runs の表から)。海外帰り・地方帰り、本当の間隔
 OTHER_FEATURES = ["days_since_any", "is_layoff_any", "prev_is_other", "prev_other_finish_rel", "prev_other_abroad",
                   "n_other_prev", "other_top3_rate", "runs_since_jra"]
