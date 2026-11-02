@@ -138,3 +138,14 @@ def test_train_rows_hide_body_weight_in_some_rows():
         assert (out[c].isna() == hidden).all()
     assert out["age"].notna().all() and df["body_weight"].notna().all()
     assert (train_rows(df)["body_weight"].isna() == hidden).all()  # 毎回同じ行
+
+
+def test_evaluate_says_why_when_no_training_races_after_train_from():
+    """評価開始日が TRAIN_FROM より前だと学習の行がないので、理由の分かる ValueError を出す(LightGBM のエラーにしない)。"""
+    import pytest
+
+    from keibaai.model import evaluate
+
+    df = pd.DataFrame({"date": pd.to_datetime(["2015-06-01", "2016-06-01"]), "race_id": ["a", "b"]})
+    with pytest.raises(ValueError, match="2019-01-01 以後"):
+        evaluate(df, "2016-01-01", use_market=False)

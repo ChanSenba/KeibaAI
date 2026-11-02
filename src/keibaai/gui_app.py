@@ -317,18 +317,19 @@ def page_train() -> None:
     with st.container(border=True):
         c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
         earliest, default = gui.eval_start_bounds(first, last)
+        train_start = gui.train_start(first, last)
         test_from = c1.date_input("評価開始日", default, min_value=earliest, max_value=last, format="YYYY/MM/DD",
                                   help=f"取得済み期間は {first:%Y/%m/%d} – {last:%Y/%m/%d} です。"
-                                       f"学習用に、評価開始日より前のレースが要るので、選べるのは {earliest:%Y/%m/%d} 以降です")
+                                       f"学習に使うのは {train_start:%Y/%m/%d} 以後のレースで、評価開始日より前に"
+                                       f"学習用のレースが要るので、選べるのは {earliest:%Y/%m/%d} – {last:%Y/%m/%d} です")
         run = c2.button("学習して評価", type="primary", icon=":material/model_training:", width="stretch")
     if run:
         try:
             with st.spinner("学習しています(データ量によって数分かかります)"):
                 st.session_state["report"] = (test_from, gui.train_reports(conn, test_from.isoformat()))
-        except ValueError:
-            st.error(f"{test_from:%Y/%m/%d} では、学習用か評価用のレースが足りません。"
-                     f"{earliest:%Y/%m/%d} から {last:%Y/%m/%d} の間の日付を選んでください"
-                     f"(取得済みの期間は {first:%Y/%m/%d} から {last:%Y/%m/%d})。")
+        except ValueError as e:
+            st.error(f"{test_from:%Y/%m/%d} では学習できませんでした: {e}。"
+                     f"{earliest:%Y/%m/%d} から {last:%Y/%m/%d} の間の日付を選んでください。")
 
     if "report" not in st.session_state:
         return
@@ -1586,8 +1587,10 @@ def page_backtest() -> None:
 
     with st.container(border=True):
         c1, c2, c3 = st.columns(3, vertical_alignment="bottom")
-        start = c1.date_input("買う期間の開始日", max(first, last - dt.timedelta(days=90)), min_value=first,
-                              max_value=last, format="YYYY/MM/DD")
+        bt_earliest, _ = gui.eval_start_bounds(first, last)
+        start = c1.date_input("買う期間の開始日", max(bt_earliest, last - dt.timedelta(days=90)), min_value=bt_earliest,
+                              max_value=last, format="YYYY/MM/DD",
+                              help=f"開始日より前のレースで学習するので、選べるのは {bt_earliest:%Y/%m/%d} 以降です")
         model = c2.selectbox("勝率のモデル", ["能力のみ", "オッズ込み", "オッズと混ぜる"],
                              help="「オッズと混ぜる」は、モデルの勝率と市場の確率を、開始日の前の1年で決めた割合で混ぜます")
         stake = c3.number_input("1点の金額(円)", 100, 100000, 100, step=100)
