@@ -170,6 +170,9 @@ def test_eval_start_bounds():
     assert gui.eval_start_bounds(dt.date(2019, 1, 5), dt.date(2026, 10, 12)) == (dt.date(2020, 1, 5), dt.date(2025, 10, 12))
     # 2年に満たない期間: 前半は選ばせず、初期値は最も早い日
     assert gui.eval_start_bounds(dt.date(2025, 1, 4), dt.date(2025, 1, 18)) == (dt.date(2025, 1, 11), dt.date(2025, 1, 11))
+    # 取得済みが TRAIN_FROM(2019-01-01)より前からでも、学習に使うのは TRAIN_FROM 以後なので、その1年後から
+    assert gui.train_start(dt.date(2014, 1, 5), dt.date(2026, 11, 1)) == dt.date(2019, 1, 1)
+    assert gui.eval_start_bounds(dt.date(2014, 1, 5), dt.date(2026, 11, 1)) == (dt.date(2020, 1, 1), dt.date(2025, 11, 1))
 
 
 def test_course_text_names_turn_inner_outer_and_rail():

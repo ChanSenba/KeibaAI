@@ -115,6 +115,8 @@ def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 3
     train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
     if train.empty or test.empty:
         raise ValueError("学習期間または評価期間にデータがありません")
+    if not (train["date"] >= pd.Timestamp(TRAIN_FROM)).any():
+        raise ValueError(f"学習に使うのは {TRAIN_FROM} 以後のレースなので、評価開始日より前に学習できるレースがありません")
     top3_m = _fit(train, features, "top3", rounds)
     if use_market:  # 勝率は市場の見立てからのずれを学ぶモデル。オッズのそろわないレースは評価から外す
         test = test[has_market(test)].copy()

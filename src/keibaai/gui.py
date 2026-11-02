@@ -402,10 +402,20 @@ def date_bounds(conn: sqlite3.Connection) -> tuple[dt.date | None, dt.date | Non
     return dt.date.fromisoformat(s["first"]), dt.date.fromisoformat(s["last"])
 
 
+def train_start(first: dt.date, last: dt.date) -> dt.date:
+    """学習に使う最初の日。モデルは TRAIN_FROM(model.py)より前のレースを学習に使わないので、取得済みの最初の日と遅いほう。
+    TRAIN_FROM が最後の日より後なら、学習できる日がないので取得済みの最初の日を返す(実行時に足りないと伝える)。"""
+    from .model import TRAIN_FROM
+
+    start = max(first, dt.date.fromisoformat(TRAIN_FROM))
+    return start if start < last else first
+
+
 def eval_start_bounds(first: dt.date, last: dt.date) -> tuple[dt.date, dt.date]:
-    """評価開始日の (選べる最も早い日, 初期値)。学習には評価開始日より前のレースが要るので、最初の1年(短い期間なら前半)は選ばせない。
-    初期値は、最後の日の1年前(それが最も早い日より前なら、最も早い日)。"""
-    earliest = first + min(dt.timedelta(days=365), (last - first) / 2)
+    """評価開始日の (選べる最も早い日, 初期値)。学習には評価開始日より前のレースが要るので、学習に使う最初の日
+    (train_start)から1年(短い期間なら前半)は選ばせない。初期値は、最後の日の1年前(それが最も早い日より前なら、最も早い日)。"""
+    start = train_start(first, last)
+    earliest = start + min(dt.timedelta(days=365), (last - start) / 2)
     return earliest, max(earliest, last - dt.timedelta(days=365))
 
 

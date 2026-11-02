@@ -15,6 +15,7 @@ from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_
                        COURSE_FLOW_FEATURES, FIGURE_FEATURES, FORM_FEATURES, HUMAN_EXTRA, JOCKEY_DELTA_FEATURES,
                        LAP_FEATURES, OTHER_FEATURES, PACE_FEATURES, PEDIGREE_FEATURES, RELATIVE_FEATURES,
                        ROTATION_FEATURES, TRAINING_FEATURES)
+from . import model
 from .model import PARAMS, auc, logloss, normalize_within_race, train_rows
 
 FACTORS: dict[str, list[str]] = {
@@ -68,6 +69,8 @@ def evaluate_factors(df: pd.DataFrame, test_from: str, rounds: int = 300) -> tup
     train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
     if train.empty or test.empty:
         raise ValueError("学習期間または評価期間にデータがありません")
+    if not (train["date"] >= pd.Timestamp(model.TRAIN_FROM)).any():
+        raise ValueError(f"学習に使うのは {model.TRAIN_FROM} 以後のレースなので、評価開始日より前に学習できるレースがありません")
     sets = {**FACTORS, **OVERALL}
     probs = predict_factors(train, test, sets, rounds)
     y = test["win"].to_numpy()
