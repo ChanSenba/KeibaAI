@@ -121,8 +121,12 @@ RESULT_TAG_FEATURES = ["prev_flow_fit", "prev_gate_fit", "prev_closer_unlucky", 
 # 能力のみの勝率(ニューラルネット、nn_model)の特徴量。オッズ・人気は使わない。
 # 2025-01〜2026-10 の約6,400レース(2024年までで学習)で、走破タイムの指数・レース内の相対値・地方海外の前走・騎手の格の差を
 # 足すと、勝ち馬の対数尤度が良くなった(数字は docs/spec.md 8章)
+# 「過去レース」ページの評価点(add_past_race_score)。条件の近い走り・新しい走りを重く見た過去走の評価と、過去走のクラスの差。
+# 能力のみのモデルに足すと 2025-01〜2026-10 の 6,375 レースで勝ち馬の対数尤度が +13.5/1000(95%区間 +9.3〜+17.5。
+# 2025年 +11.3、2026年 +16.0、乱数3通りの平均どうし)。オッズ込みのモデルでは変わらない(−0.6、−1.6〜+0.4)ので入れない
+PAST_SCORE_FEATURES = ["past_score", "past_score_class", "past_score_adj", "past_score_n"]
 NN_FEATURES = list(dict.fromkeys(ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES + OTHER_FEATURES
-                                 + JOCKEY_DELTA_FEATURES))
+                                 + JOCKEY_DELTA_FEATURES + PAST_SCORE_FEATURES))
 BIAS_WINDOW = "10D"
 
 
@@ -537,9 +541,62 @@ def build_features(df: pd.DataFrame, other: pd.DataFrame | None = None) -> pd.Da
 
     df = add_speed_figures(df)
     df = add_relative(df)
+    df = add_past_race_score(df)
     for c in CATEGORICAL:
         df[c] = df[c].astype("category")
     return df
+
+
+def add_past_race_score(df: pd.DataFrame, n_runs: int = 10) -> pd.DataFrame:
+    """「過去レース」ページの評価点(past_races)と同じ計算の列を、全行にまとめて付ける。
+
+    1走ごとの評価(着順の位置 5割・勝ち馬とのタイム差 3割・上がり順位 2割、0〜100点)を、今回と条件が近い走り・
+    新しい走りほど重く見て平均し、走りが少ない馬は50点に寄せる(past_score)。直近 n_runs 走まで。
+    ほかに、重みつきで見た過去走のクラス − 今回のクラス(past_score_class。マイナスなら格上挑戦)、
+    クラスで補正した点(past_score_adj = past_score + 5 × past_score_class)、評価のある過去走の数(past_score_n)。
+    使うのは同じ馬の前の走りだけ。
+    """
+    from .past_races import DIST_BAND, MAX_SIM, PRIOR, RECENCY
+
+    num_of = {c: pd.to_numeric(df[c], errors="coerce").astype(float)
+              for c in ("finish", "time_sec", "last3f", "distance", "race_class")}
+    finish, dist0, cls0 = num_of["finish"], num_of["distance"], num_of["race_class"]
+    done = finish.notna() & (finish > 0)
+    size = done.groupby(df["race_id"]).transform("sum").clip(lower=2)
+    time_sec = num_of["time_sec"]
+    gap = time_sec - time_sec.where(done).groupby(df["race_id"]).transform("min")
+    l3r = num_of["last3f"].where(done).groupby(df["race_id"]).rank(method="min")
+    num = 0.5 * (1 - (finish - 1) / (size - 1))
+    den = pd.Series(0.5, index=df.index)
+    num = num + (0.3 * np.clip(1 - gap / 2.0, 0, 1)).fillna(0)
+    den = den + 0.3 * gap.notna()
+    num = num + (0.2 * (1 - (l3r - 1) / (size - 1))).fillna(0)
+    den = den + 0.2 * l3r.notna()
+    rating = (100 * np.clip(num / den, 0, 1)).where(done)
+    io = pd.Series([inner_outer(v, c, co) for v, c, co in zip(df["venue"], df["course_type"], df.get("course", ""))],
+                   index=df.index)
+    work = pd.DataFrame({"rating": rating, "ct": df["course_type"], "dist": dist0, "venue": df["venue"],
+                         "dir": df.get("direction"), "io": io, "cls": cls0})
+    g = work.groupby(df["horse_id"], sort=False)
+    w_sum = pd.Series(0.0, index=df.index)
+    s_sum, c_sum, n = w_sum.copy(), w_sum.copy(), w_sum.copy()
+    for k in range(1, n_runs + 1):
+        r = g["rating"].shift(k)
+        ct, dist, venue, dr, io_k, cls = (g[c].shift(k) for c in ("ct", "dist", "venue", "dir", "io", "cls"))
+        same = (venue == df["venue"]) & (ct == df["course_type"]) & (dist == dist0) & (io_k == io)
+        d = (dist - dist0).abs()
+        sim = (2 * (ct == df["course_type"]) + np.where(d == 0, 2, np.where(d <= DIST_BAND, 1, 0))
+               + (venue == df["venue"]) + ((dr == df.get("direction")) & dr.notna()))
+        sim = np.where(same, MAX_SIM, sim)
+        w = pd.Series(np.where(r.notna(), (1 + sim) / (1 + MAX_SIM) * RECENCY ** (k - 1), 0.0), index=df.index)
+        w_sum += w
+        s_sum += w * r.fillna(0)
+        c_sum += w * (cls - cls0).fillna(0)
+        n += r.notna()
+    score = (s_sum + 50 * PRIOR) / (w_sum + PRIOR)
+    cls_diff = (c_sum / w_sum).where(w_sum > 0)
+    return df.assign(past_score=score, past_score_class=cls_diff, past_score_adj=score + 5 * cls_diff.fillna(0),
+                     past_score_n=n)
 
 
 FIGURE_MIN_RACES = 5  # 基準タイムに使う過去の勝ちタイムがこれ未満のコースは、指数を出さない

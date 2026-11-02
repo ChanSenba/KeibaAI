@@ -201,3 +201,24 @@ def test_market_model_does_not_use_the_training_comment():
 
     assert "train_critic" not in RESIDUAL_MODEL_FEATURES  # 期間ごとに効き方が入れ替わり、合わせ込みになっていた
     assert "train_critic" in NN_FEATURES  # 能力モデルでは外しても変わらないので残す
+
+
+def test_past_score_matches_the_past_races_page():
+    """過去レースのページ(past_races)と同じ計算: 2走前は1着(100点)、前走は同コースで2頭中2着(勝ち馬と1秒差で15点)。"""
+    import pandas as pd
+    from keibaai.features import add_past_race_score
+    from keibaai.past_races import MAX_SIM, PRIOR, RECENCY
+
+    rows = []
+    for rid, date, dist, cls, fin in [("r1", "2026-01-01", 1600, 1, 1), ("r2", "2026-02-01", 2000, 2, 2), ("r3", "2026-03-01", 2000, 3, None)]:
+        for num, (h, f) in enumerate([("A", fin), ("B", None if fin is None else 3 - fin)], start=1):
+            rows.append(dict(race_id=rid, date=pd.Timestamp(date), number=num, horse_id=h, finish=f, venue="東京",
+                             course_type="芝", distance=dist, direction="左", course="", race_class=cls,
+                             time_sec=None if f is None else 100.0 + f, last3f=None if f is None else 33.0 + f))
+    out = add_past_race_score(pd.DataFrame(rows)).set_index(["race_id", "horse_id"])
+    # A: 前走 r2 は同コースで最下位・1秒差(15点、重み1)、2走前 r1 は芝・東京・左が同じで距離違い(近さ4、重み 5/9×0.85)で1着(100点)
+    w1, w2 = 1.0, (1 + 4) / (1 + MAX_SIM) * RECENCY
+    expect = (w1 * 15 + w2 * 100 + 50 * PRIOR) / (w1 + w2 + PRIOR)
+    assert abs(out.loc[("r3", "A"), "past_score"] - expect) < 1e-9
+    assert abs(out.loc[("r3", "A"), "past_score_class"] - (w1 * (2 - 3) + w2 * (1 - 3)) / (w1 + w2)) < 1e-9
+    assert out.loc[("r3", "A"), "past_score_n"] == 2 and out.loc[("r1", "A"), "past_score"] == 50  # 過去走なしは50点
