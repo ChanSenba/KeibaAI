@@ -222,3 +222,26 @@ def test_past_score_matches_the_past_races_page():
     assert abs(out.loc[("r3", "A"), "past_score"] - expect) < 1e-9
     assert abs(out.loc[("r3", "A"), "past_score_class"] - (w1 * (2 - 3) + w2 * (1 - 3)) / (w1 + w2)) < 1e-9
     assert out.loc[("r3", "A"), "past_score_n"] == 2 and out.loc[("r1", "A"), "past_score"] == 50  # 過去走なしは50点
+
+
+def test_race_level_uses_opponents_later_ratings_only_before_the_day():
+    """前走の相手のその後のレーティング。同じ日に終わる走りは使わない。"""
+    import math
+
+    import pandas as pd
+    from keibaai.features import add_race_level
+
+    rows = [("r1", "2026-01-01", "A", 1), ("r1", "2026-01-01", "B", 2),
+            ("r2", "2026-01-08", "B", 1), ("r2", "2026-01-08", "C", 2),
+            ("r3", "2026-01-15", "A", None), ("r3", "2026-01-15", "D", None),
+            ("r4", "2026-01-15", "B", 1), ("r4", "2026-01-15", "E", 2)]
+    df = pd.DataFrame([dict(race_id=r, date=pd.Timestamp(d), horse_id=h, finish=f, number=i % 2 + 1)
+                       for i, (r, d, h, f) in enumerate(rows)])
+    out = add_race_level(df).set_index(["race_id", "horse_id"])
+    # r1 の後 B = −0.5。r2 で新馬の C(0) に勝つ: 予想 1/(1+e^0.5)、1走済みなので ÷√1.1
+    b_after_r2 = -0.5 + (1 - 1 / (1 + math.exp(0.5))) / math.sqrt(1.1)
+    assert abs(out.loc[("r3", "A"), "race_lvl_1"] - b_after_r2) < 1e-9  # 同じ日の r4 の結果は入らない
+    assert abs(out.loc[("r3", "A"), "race_lvl_beaten_1"] - b_after_r2) < 1e-9
+    assert pd.isna(out.loc[("r3", "A"), "race_lvl_lostto_1"])
+    assert pd.isna(out.loc[("r1", "A"), "race_lvl_1"])  # 過去走なし
+    assert abs(out.loc[("r2", "B"), "race_lvl_1"] - 0.5) < 1e-9  # 前走の相手 A の r1 の後の値
