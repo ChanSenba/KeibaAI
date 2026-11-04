@@ -125,8 +125,13 @@ RESULT_TAG_FEATURES = ["prev_flow_fit", "prev_gate_fit", "prev_closer_unlucky", 
 # 能力のみのモデルに足すと 2025-01〜2026-10 の 6,375 レースで勝ち馬の対数尤度が +13.5/1000(95%区間 +9.3〜+17.5。
 # 2025年 +11.3、2026年 +16.0、乱数3通りの平均どうし)。オッズ込みのモデルでは変わらない(−0.6、−1.6〜+0.4)ので入れない
 PAST_SCORE_FEATURES = ["past_score", "past_score_class", "past_score_adj", "past_score_n"]
+# レースレベル(add_race_level)。過去の走りで一緒に走った相手が、その後どれだけ強くなったか(相手の今回の前日までのレーティング)。
+# 能力のみのモデルに足すと 2025-01〜2026-10 の 6,369 レースで勝ち馬の対数尤度が +8.4/1000(95%区間 +4.7〜+12.6。
+# 2025年 +8.5、2026年 +8.4、乱数4通りの平均どうし)。数字は docs/spec.md 8-11
+RACE_LEVEL_FEATURES = ["race_lvl_1", "race_lvl_2", "race_lvl_3", "race_lvl_avg3", "race_lvl_beaten_1", "race_lvl_lostto_1",
+                       "race_lvl_growth_1"]
 NN_FEATURES = list(dict.fromkeys(ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES + OTHER_FEATURES
-                                 + JOCKEY_DELTA_FEATURES + PAST_SCORE_FEATURES))
+                                 + JOCKEY_DELTA_FEATURES + PAST_SCORE_FEATURES + RACE_LEVEL_FEATURES))
 BIAS_WINDOW = "10D"
 
 
@@ -542,6 +547,7 @@ def build_features(df: pd.DataFrame, other: pd.DataFrame | None = None) -> pd.Da
     df = add_speed_figures(df)
     df = add_relative(df)
     df = add_past_race_score(df)
+    df = add_race_level(df)
     for c in CATEGORICAL:
         df[c] = df[c].astype("category")
     return df
@@ -597,6 +603,73 @@ def add_past_race_score(df: pd.DataFrame, n_runs: int = 10) -> pd.DataFrame:
     cls_diff = (c_sum / w_sum).where(w_sum > 0)
     return df.assign(past_score=score, past_score_class=cls_diff, past_score_adj=score + 5 * cls_diff.fillna(0),
                      past_score_n=n)
+
+
+RATING_K = 1.0  # レーティングの動きやすさ(1レースで、全ペアの勝ち負けの「予想とのずれ」の平均に掛ける)
+RATING_LAGS = (1, 2, 3)  # 何走前までのレースレベルを見るか
+
+
+def horse_ratings(df: pd.DataFrame, k: float = RATING_K) -> tuple[np.ndarray, np.ndarray]:
+    """馬のレーティングの、各走りの前と後の値(df の行の順)。前の値は、その馬が初めて走るときは NaN。
+
+    1レースごとに、出走馬の全ペアの先着・後着を、レーティングの差のロジスティック(1/(1+e^-(差)))で予想し、
+    実際との差の平均 g(−1〜+1)で更新する: 新しい値 = 前の値 + k × √(頭数−1) × g ÷ √(1 + 走った数/10)。
+    走った数が少ない馬ほど大きく動く。取消・除外・中止(着順なし)は更新しない。df は日付順に並んでいること。
+    """
+    hid = pd.factorize(df["horse_id"])[0]
+    rating = np.zeros(hid.max() + 1 if len(hid) else 0)
+    n_runs = np.zeros_like(rating)
+    pre, post = np.full(len(df), np.nan), np.full(len(df), np.nan)
+    fin = pd.to_numeric(df["finish"], errors="coerce").to_numpy(float)
+    race = pd.factorize(df["race_id"])[0]
+    cut = np.flatnonzero(np.diff(race)) + 1
+    for s, e in zip(np.r_[0, cut], np.r_[cut, len(df)]):
+        h, f = hid[s:e], fin[s:e]
+        pre[s:e] = np.where(n_runs[h] > 0, rating[h], np.nan)
+        ok = ~np.isnan(f) & (f > 0)
+        if ok.sum() >= 2:
+            hh, rr, ff = h[ok], rating[h[ok]], f[ok]
+            exp = 1 / (1 + np.exp(-(rr[:, None] - rr[None, :])))
+            act = (ff[:, None] < ff[None, :]) + 0.5 * (ff[:, None] == ff[None, :])
+            np.fill_diagonal(exp, 0)
+            np.fill_diagonal(act, 0)
+            m = len(hh)
+            g = (act - exp).sum(1) / (m - 1)
+            rating[hh] += k * np.sqrt(m - 1) * g / np.sqrt(1 + n_runs[hh] / 10)
+            n_runs[hh] += 1
+        post[s:e] = np.where(ok, rating[h], np.nan)
+    return pre, post
+
+
+def add_race_level(df: pd.DataFrame, lags: tuple[int, ...] = RATING_LAGS) -> pd.DataFrame:
+    """レースレベル: k走前のレースの相手(自分以外の完走馬)の、今回の前日までのレーティングの平均(race_lvl_k)。
+
+    相手がそのレースの後に勝ち上がっていればレベルが高かった、と見る。前走については、自分が先着した相手(beaten)・
+    先着された相手(lostto)に分けた平均と、相手がそのレースの時点から伸びた分(growth = 今の平均 − そのレースの前の平均)も。
+    race_lvl_avg3 は3走ぶんの平均。今回の日付より前に終わった走りのレーティングだけを使う。df は日付順に並んでいること。
+    """
+    pre, post = horse_ratings(df)
+    done = pd.to_numeric(df["finish"], errors="coerce").gt(0)
+    hist = (pd.DataFrame({"opp": df["horse_id"], "t": df["date"], "lvl": post})[done & ~np.isnan(post)]
+            .sort_values("t", kind="stable"))
+    runners = pd.DataFrame({"race_id": df["race_id"], "opp": df["horse_id"], "opp_fin": df["finish"], "opp_pre": pre})[done]
+    g = df.groupby("horse_id", sort=False)
+    out = pd.DataFrame(index=df.index)
+    for k in lags:
+        q = pd.DataFrame({"i": df.index, "race_id": g["race_id"].shift(k), "me": df["horse_id"], "t": df["date"],
+                          "my_fin": g["finish"].shift(k)}).dropna(subset=["race_id"])
+        q = q.merge(runners, on="race_id")
+        q = q[q["opp"] != q["me"]].sort_values("t", kind="stable")
+        q = pd.merge_asof(q, hist, on="t", by="opp", allow_exact_matches=False)
+        by = q.groupby("i")
+        out[f"race_lvl_{k}"] = by["lvl"].mean()
+        if k == 1:
+            out["race_lvl_beaten_1"] = q[q["opp_fin"] > q["my_fin"]].groupby("i")["lvl"].mean()
+            out["race_lvl_lostto_1"] = q[q["opp_fin"] < q["my_fin"]].groupby("i")["lvl"].mean()
+            out["race_lvl_growth_1"] = out["race_lvl_1"] - by["opp_pre"].mean()
+    out["race_lvl_avg3"] = out[[f"race_lvl_{k}" for k in lags]].mean(axis=1)
+    out = out.reindex(columns=RACE_LEVEL_FEATURES)
+    return pd.concat([df.drop(columns=[c for c in out if c in df]), out], axis=1)
 
 
 FIGURE_MIN_RACES = 5  # 基準タイムに使う過去の勝ちタイムがこれ未満のコースは、指数を出さない
