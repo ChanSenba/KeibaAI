@@ -5,8 +5,8 @@ import pytest
 
 from keibaai import db
 from keibaai.features import ARTICLE_FEATURES, LAP_FEATURES, PEDIGREE_FEATURES, build_features, load_results
-from keibaai.parse import ParsedRace, Race, Result, parse_race
-from keibaai.pedigree import collect_pedigrees, parse_pedigree, pending_horse_ids, save_pedigree
+from keibaai.parse import parse_race
+from keibaai.pedigree import collect_pedigrees, parse_pedigree, pending_horse_ids
 
 from test_model import synthetic_db
 

@@ -26,8 +26,10 @@ JRA-VAN の利用キーは、JV-Link の設定画面にご自分で入力しま�
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest
+python scripts/check.py
 ```
+
+`scripts/check.py` は ruff（明らかなバグの検出）と pytest をまとめて実行します。PR ごとに GitHub Actions でも同じものが動きます。
 
 予想の能力のみの勝率はニューラルネット(PyTorch)で出します。`pip install` で PyTorch の CPU 版(約200MB)も入ります。
 

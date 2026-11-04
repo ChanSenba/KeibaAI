@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import lightgbm as lgb
-import numpy as np
 import pandas as pd
 
 from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL,

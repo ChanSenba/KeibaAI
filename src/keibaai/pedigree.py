@@ -9,7 +9,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from . import db
-from .fetch import Fetcher, PageUnavailable
+from .fetch import Fetcher
 
 MAX_CONSECUTIVE_FAILURES = 5
 

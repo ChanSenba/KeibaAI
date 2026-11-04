@@ -12,7 +12,6 @@ from test_model import synthetic_db
 @pytest.fixture(scope="module")
 def raw():
     conn = synthetic_db(n_days=40, races_per_day=4)
-    rng = np.random.default_rng(3)
     conn.execute("UPDATE results SET time_sec = 90 + finish * 0.2 + abs(random() % 10) / 10.0")
     conn.execute("UPDATE results SET passing = (number % 5 + 1) || '-' || (number % 5 + 1) || '-' || finish")
     conn.execute("UPDATE results SET last3f = 33 + (finish % 7) / 2.0")
@@ -92,7 +91,6 @@ def test_course_flow_uses_only_earlier_days_at_the_same_course():
     from keibaai.features import _course_flow
 
     def day(date, rid, first, last, finishes, early):
-        n = len(finishes)
         return pd.DataFrame({"race_id": rid, "venue": "東京", "course_type": "芝", "distance": 1600,
                              "date": pd.Timestamp(date), "finish": finishes, "early_pos": early,
                              "pace_first3f": first, "pace_last3f": last, "early_pos_rel_3": early})

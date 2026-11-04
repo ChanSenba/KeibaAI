@@ -1,7 +1,6 @@
 import itertools
 
 import numpy as np
-import pytest
 
 from keibaai import betting as bt
 
