@@ -29,3 +29,13 @@ pytest は全部で約3分かかる。途中は `python -m pytest tests/test_xxx
 - 取得系のコマンドを同時に動かさない（SQLite がふさがる）
 - 画面・メッセージ・ドキュメントは日本語。尚さんへの報告も日本語
 - PR のマージは尚さんが行う
+
+## Model roles
+- Main session implements the change.
+- Use the `scout` agent for file/code search; at most 3 in parallel. Ask for
+  concise `file:line` summaries, not full files.
+- Consult the advisor (Opus), when available, only when: finalizing a multi-file
+  plan, the same test or error fails twice, or before an important commit.
+  Not for routine edits.
+- Run the `critic` agent before declaring done on multi-file changes or any change
+  to features, model training, or backtests.
