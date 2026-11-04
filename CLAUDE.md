@@ -5,7 +5,7 @@ JRA の成績・血統・調教タイムから各馬の勝率を予測し、買�
 
 ## 確認のしかた
 
-変更したら、PR を出す前に必ずこれを通す（CI でも同じものが動く）。
+変更したら、プッシュする前に必ずこれを通す（main への push ごとに CI でも同じものが動く）。
 
 ```
 python scripts/check.py          # ruff（明らかなバグ） → pytest の順に実行
@@ -28,7 +28,7 @@ pytest は全部で約3分かかる。途中は `python -m pytest tests/test_xxx
 - netkeiba へのアクセスは3〜5秒あけ、取得済みのページは取り直さない。ログイン情報や JRA-VAN の利用キーは扱わない
 - 取得系のコマンドを同時に動かさない（SQLite がふさがる）
 - 画面・メッセージ・ドキュメントは日本語。尚さんへの報告も日本語
-- PR のマージは尚さんが行う
+- PR は作らず、check が通ったら main に直接プッシュする（尚さんの指示、11/4）
 
 ## Model roles
 - Main session implements the change.
