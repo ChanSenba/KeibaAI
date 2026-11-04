@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import pytest
 
 from keibaai import betting, db, gui, weekly

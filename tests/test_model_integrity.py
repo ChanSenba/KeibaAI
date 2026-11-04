@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from keibaai import db, predict, blend, model
+from keibaai import db, predict, blend
 from keibaai.features import (build_features, load_results, result_mask, _track_bias,
                               ABILITY_MODEL_FEATURES, MARKET_MODEL_FEATURES)
 from keibaai.jvtraining import add_course_relative, add_jv_features, JV_FEATURES

@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = ["requests>=2.31", "beautifulsoup4>=4.12", "lxml>=5.0", "pandas>=2.0", "numpy>=1.26", "lightgbm>=4.0", "torch>=2.2", "streamlit>=1.50"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 keibaai = "keibaai.cli:main"
@@ -25,3 +25,11 @@ keibaai = [".streamlit/*.toml", "logo.svg", "style.css"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 140
+
+[tool.ruff.lint]
+# まずは明らかなバグ（構文エラー・未定義の名前・使っていない import や変数）だけを見る
+select = ["E9", "F"]

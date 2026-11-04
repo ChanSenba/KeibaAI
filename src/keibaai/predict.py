@@ -19,7 +19,7 @@ from .features import (ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURE
 from .flow_review import forecast_flow
 from .factors import COLUMN, FACTORS
 from .jvtraining import add_jv_features
-from .model import PARAMS, TRAIN_FROM, fit_residual, has_market, normalize_within_race, predict_residual, train_rows
+from .model import PARAMS, TRAIN_FROM, fit_residual, has_market, normalize_within_race, predict_residual
 
 
 def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,

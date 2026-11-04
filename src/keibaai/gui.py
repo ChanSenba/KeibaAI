@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import db
 from .cli import collect_day, daterange
 from .marks import top_marks
 from .parse import VENUES
