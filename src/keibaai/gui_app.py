@@ -681,6 +681,10 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
             for m, n, h in zip(marked["mark"], marked["number"], marked["horse_name"])) + "</div>")
     points = factor_view.model_factor_points(one) if "mark" in one else pd.DataFrame(index=one.index)
     one = pd.concat([one, points], axis=1)
+    # オッズ発売前は人気・オッズなどが None のまま(object 列)なので、数値にして空欄で見せる
+    for c in ("win_odds", "popularity", "p_win_market", "ev_market", "ev_ability"):
+        if c in one:
+            one[c] = pd.to_numeric(one[c], errors="coerce")
     cols = {**({"mark": PRED_COLUMNS["mark"], "star": PRED_COLUMNS["star"]} if "mark" in one else {}), **ENTRY_COLUMNS,
             **(PRED_COLUMNS if prediction is not None else {})}
     # 要素ごとの勝率は、点数(0〜10点)で見せる。勝率そのものは、能力・オッズ込みの2列だけ残す

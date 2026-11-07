@@ -287,6 +287,11 @@ def test_model_factor_points_and_commentary():
     assert fv.EVIDENCE["p_win_pedigree"](vals.set_index("number", drop=False), 1) == "血統のデータを取得していないため、評価に入れていません。"
     assert "初コンビ" not in fv.EVIDENCE["p_win_human"](vals.set_index("number", drop=False), 1)  # 3回騎乗済み
     assert fv.race_reviews(one, pts)[0]["rows"][0]["text"] == ""  # 要素の値がなければ点数だけ
+    # 人気・オッズが欠けた馬(None)でも落ちない
+    miss = one.astype({"popularity": object, "win_odds": object})
+    miss.loc[0, "popularity"], miss.loc[0, "win_odds"], miss.loc[1, "popularity"] = None, None, None
+    subs = [r["sub"] for r in fv.race_reviews(miss, pts)]
+    assert "人気" not in subs[0] and "倍" not in subs[0] and subs[1].endswith("4.0倍") and "3番人気・9.0倍" in subs[2]
 
 
 def test_same_day_history_uses_only_earlier_rounds_of_the_same_day_venue_and_surface():

@@ -759,8 +759,11 @@ def race_reviews(one: pd.DataFrame, points: pd.DataFrame, values: pd.DataFrame |
         total = points["factor_total"].get(i) if "factor_total" in points else None
         if total is not None and total == total:
             sub.append(f"総合スコア{total:.1f}/100")
-        if r["popularity"] == r["popularity"]:
-            sub.append(f"{int(r['popularity'])}番人気・{r['win_odds']}倍")
+        pop, odds = pd.to_numeric(r.get("popularity"), errors="coerce"), pd.to_numeric(r.get("win_odds"), errors="coerce")
+        if pd.notna(pop):  # 取消・オッズ未発表の馬は人気・オッズが欠ける
+            sub.append(f"{int(pop)}番人気" + (f"・{odds}倍" if pd.notna(odds) else ""))
+        elif pd.notna(odds):
+            sub.append(f"{odds}倍")
         parts = []
         pa, pm = r.get("p_win_ability"), r.get("p_win_market")
         if pa == pa and pm == pm and pa is not None and pm is not None:
