@@ -285,12 +285,15 @@ def predict_and_save(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
 
 def save_prediction(conn: sqlite3.Connection, table: pd.DataFrame, flow: pd.DataFrame | None = None,
                     now: dt.datetime | None = None) -> int:
-    """出した予想を、回顧のために保存する(keibaai weekly と同じ。結果が出たレースと、当日朝以降の予想は書き換えない)。"""
+    """出した予想を、回顧のために保存する(keibaai weekly と同じ。結果が出たレースと、当日朝以降の予想は書き換えない)。
+
+    ただし予想を1件も保存していない直近の日は、結果が出たあとでも保存する(画面で予想したのに回顧に出ない、を防ぐ)。
+    """
     from . import flow_review
     from .weekly import save_predictions
 
     now = now or dt.datetime.now()
-    n = save_predictions(conn, table, now)
+    n = save_predictions(conn, table, now, late_ok=True)
     if n and flow is not None:
         saved = {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE saved_at = ?",
                                             (now.isoformat(timespec="seconds"),))}

@@ -23,12 +23,15 @@ PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_na
 
 
 FREEZE_HOUR = 9  # 開催日のこの時刻以降は、保存済みの予想を書き換えない(レースが始まってから変えないため)
+LATE_DAYS = 7  # 予想を1件も保存していない日は、この日数までなら結果のあとでも保存できる(画面で予想したとき)
 
 
-def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.datetime) -> int:
+def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.datetime, late_ok: bool = False) -> int:
     """印を付けて保存する。結果が出たレースと、凍結した予想は保存しない。保存した頭数を返す。
 
     予想は開催日の前日までと、当日の朝(FREEZE_HOUR 時前)なら、取り直したオッズで更新できる。
+    late_ok なら、予想を1件も保存していない直近 LATE_DAYS 日以内の日は、結果が出たあとでも保存する
+    (発走前に保存しそびれた日を回顧できるように。回顧の画面では、結果のあとで保存したと示す)。
     """
     t = add_marks(table)
     t["saved_at"] = now.isoformat(timespec="seconds")
@@ -38,13 +41,24 @@ def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.date
         today = now.date().isoformat()
         done |= {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE date <= ?", (today,))}
     done |= {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE date < ?", (now.date().isoformat(),))}
-    t = t[~t["race_id"].isin(done)][PRED_COLS]
+    keep = ~t["race_id"].isin(done)
+    if late_ok:
+        saved_days = {r[0] for r in conn.execute("SELECT DISTINCT date FROM predictions")}
+        oldest = (now.date() - dt.timedelta(days=LATE_DAYS)).isoformat()
+        keep |= ~t["date"].isin(saved_days) & (t["date"] >= oldest) & (t["date"] <= now.date().isoformat())
+    t = t[keep][PRED_COLS]
     t = t.astype(object).where(t.notna(), None)
     with conn:
         conn.executemany(
             f"INSERT OR REPLACE INTO predictions ({','.join(PRED_COLS)}) VALUES ({','.join('?' * len(PRED_COLS))})",
             t.itertuples(index=False, name=None))
     return len(t)
+
+
+def saved_after_race_day(conn: sqlite3.Connection, date: str) -> bool:
+    """その日の予想を、開催日より後(結果が出たあと)に保存したか。"""
+    first = conn.execute("SELECT MIN(saved_at) FROM predictions WHERE date = ?", (date,)).fetchone()[0]
+    return first is not None and first[:10] > date
 
 
 def _fetch_training(conn: sqlite3.Connection, fetcher, date: dt.date, jv: tuple[str, str] | None) -> None:

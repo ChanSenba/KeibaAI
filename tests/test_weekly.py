@@ -300,3 +300,27 @@ def test_review_gives_fit_for_each_horse_from_flow_gate_and_ground():
     assert "上がり" in by[4]["summary"] and by[4]["sub"].startswith("4着 ・ 4番人気")
     md = weekly.render_markdown(r)
     assert "  - 馬場・枠: 稍重・内枠有利" in md and "◎馬1(1着 ・ 1番人気 ・ 向いた条件): 展開向いた / 枠向いた / 馬場向いた / コース向いた / 距離向いた" in md
+
+
+def test_gui_saves_a_missed_day_after_results():
+    """画面で予想したのに発走前に保存していなかった日は、結果のあとでも保存して回顧に出す(直近だけ、1件もない日だけ)。"""
+    from keibaai import gui
+
+    conn = db.connect(":memory:")
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    assert weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 3, 2, 2)) == 0  # weekly は今までどおり保存しない
+    assert gui.save_prediction(conn, pred_table(), now=dt.datetime(2025, 3, 2, 2)) == 5
+    assert gui.review_dates(conn) == ["2025-03-01"]
+    assert weekly.saved_after_race_day(conn, "2025-03-01")
+    assert weekly.review_day(conn, "2025-03-01").summary["races"] == 1
+    t = pred_table(); t["win_odds"] = 99.0
+    assert gui.save_prediction(conn, t, now=dt.datetime(2025, 3, 2, 3)) == 0  # 一度保存した日は書き換えない
+    add_result(conn, "202505010201", "2025-02-01", [1, 2, 3, 4, 5])
+    assert gui.save_prediction(conn, pred_table("202505010201", "2025-02-01"), now=dt.datetime(2025, 3, 2, 3)) == 0  # 古い日は保存しない
+
+
+def test_saved_before_race_day_is_not_marked_late():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    assert not weekly.saved_after_race_day(conn, "2025-03-01")
+    assert not weekly.saved_after_race_day(conn, "2025-03-08")
