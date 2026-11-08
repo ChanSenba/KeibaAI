@@ -203,6 +203,16 @@ def test_market_model_does_not_use_the_training_comment():
     assert "train_critic" in NN_FEATURES  # 能力モデルでは外しても変わらないので残す
 
 
+def test_market_model_uses_the_ability_only_columns_too():
+    """地方海外の前走・騎手の格の差・評価点・レースレベルは、オッズ込みのモデルにも入れる(docs/spec.md 8-21)。"""
+    from keibaai.features import (JOCKEY_DELTA_FEATURES, OTHER_FEATURES, PAST_SCORE_FEATURES, RACE_LEVEL_FEATURES,
+                                  RESIDUAL_MODEL_FEATURES)
+
+    for c in OTHER_FEATURES + JOCKEY_DELTA_FEATURES + PAST_SCORE_FEATURES + RACE_LEVEL_FEATURES:
+        assert c in RESIDUAL_MODEL_FEATURES
+    assert len(RESIDUAL_MODEL_FEATURES) == len(set(RESIDUAL_MODEL_FEATURES))
+
+
 def test_past_score_matches_the_past_races_page():
     """過去レースのページ(past_races)と同じ計算: 2走前は1着(100点)、前走は同コースで2頭中2着(勝ち馬と1秒差で15点)。"""
     import pandas as pd

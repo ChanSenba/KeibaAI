@@ -107,7 +107,7 @@ RELATIVE_FEATURES = [f"{c}_{k}" for c in RELATIVE_BASE for k in ("z", "rk")]
 # 調教の短評(train_critic、196種類)は外す。短評ごとの勝ちやすさが期間で入れ替わり(「仕上がる」は2024年まで 1.02倍 → 2025年から 0.86倍)、
 # 木が短評で細かく分けて過去に合わせ込んでいた。外すと 2025-01〜2026-10 の 6,375 レースで市場との差が +3.7 → +8.0/1000
 # (乱数3通りの平均。外した効果 +4.2、95%区間 +1.7〜+6.9。2025年 +5.1・2026年 +3.3)。能力のみのモデル(nn_model)では変わらない(−0.9、−3.4〜+1.7)ので残す
-RESIDUAL_MODEL_FEATURES = [c for c in ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES if c != "train_critic"]
+# (RESIDUAL_MODEL_FEATURES の定義は、使う列の一覧がそろう NN_FEATURES のあと)
 # 地方・海外を含めた前走(jvother.add_other_features。other_runs の表から)。海外帰り・地方帰り、本当の間隔
 OTHER_FEATURES = ["days_since_any", "is_layoff_any", "prev_is_other", "prev_other_finish_rel", "prev_other_abroad",
                   "n_other_prev", "other_top3_rate", "runs_since_jra"]
@@ -132,6 +132,12 @@ RACE_LEVEL_FEATURES = ["race_lvl_1", "race_lvl_2", "race_lvl_3", "race_lvl_avg3"
                        "race_lvl_growth_1"]
 NN_FEATURES = list(dict.fromkeys(ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES + OTHER_FEATURES
                                  + JOCKEY_DELTA_FEATURES + PAST_SCORE_FEATURES + RACE_LEVEL_FEATURES))
+# 地方・海外の前走・騎手の格の差・評価点・レースレベルも、オッズ込みのモデルに入れる(能力のみのモデルにだけ入っていた)。
+# 2025-01〜2026-11-07 の 6,405 レース(2024年までで学習、乱数4通りの平均)で、勝ち馬の対数尤度が +1.6/1000
+# (95%区間 +0.2〜+3.1。2025年 +0.6、2026年 +2.8)。2024年を評価にしても +0.7(−1.7〜+3.0)。数字は docs/spec.md 8-21
+RESIDUAL_MODEL_FEATURES = list(dict.fromkeys(
+    c for c in ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES + OTHER_FEATURES + JOCKEY_DELTA_FEATURES
+    + PAST_SCORE_FEATURES + RACE_LEVEL_FEATURES if c != "train_critic"))
 BIAS_WINDOW = "10D"
 
 
