@@ -1449,9 +1449,10 @@ def page_review() -> None:
             st.caption("PC で `keibaai weekly` を実行すると、今週末の予想が保存されます。")
         return
     day = st.selectbox("開催日", days)
-    if weekly.saved_after_race_day(conn, day):
-        st.caption(":material/info: この日の予想は、レースの結果が出たあとに保存したものです(学習はその日より前の結果だけ。"
-                   "オッズは保存した時点の、確定後のものです)。")
+    late = weekly.saved_after_results(conn, day)
+    if late:
+        st.caption(f":material/info: この日のうち {late} レースの予想は、結果が出たあとに出したものです(自動の予想・"
+                   "発走前に保存しそびれた分)。学習はその日より前の結果だけですが、オッズは確定後のものです。")
     r = weekly.review_day(conn, day, views=False)  # レースの見解は、選んだレースだけ作る
     if not r.summary["races"]:
         st.info("この日の結果はまだ取得されていません。取得したあとに表示されます。", icon=":material/hourglass_empty:")

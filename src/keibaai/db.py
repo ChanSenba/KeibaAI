@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, saved_at TEXT,
     date TEXT, venue TEXT, round INTEGER, race_name TEXT, horse_name TEXT, jockey TEXT,
     win_odds REAL, popularity INTEGER, mark TEXT,
-    p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL,
+    p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL, after_result INTEGER,
     PRIMARY KEY (race_id, number)
 );
 -- 発走前の展開予想(レースごと)。回顧で、結果から出した実際の展開と比べる
@@ -159,7 +159,8 @@ def model_revision(conn: sqlite3.Connection) -> tuple | None:
 _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("pace_last3f", "REAL"), ("course", "TEXT"), ("rail", "TEXT")],
                   "entry_races": [("course", "TEXT"), ("rail", "TEXT")],
                   "odds_snapshots": [("source", "TEXT")],
-                  "other_runs": [("name", "TEXT")]}
+                  "other_runs": [("name", "TEXT")],
+                  "predictions": [("after_result", "INTEGER")]}  # 1: 結果が出たあとに保存した予想(確定オッズで後から出したもの)
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:

@@ -19,33 +19,35 @@ from .marks import MARK_ORDER
 
 
 PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_name", "horse_name", "jockey",
-             "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
+             "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result"]
 
 
 FREEZE_HOUR = 9  # 開催日のこの時刻以降は、保存済みの予想を書き換えない(レースが始まってから変えないため)
-LATE_DAYS = 7  # 予想を1件も保存していない日は、この日数までなら結果のあとでも保存できる(画面で予想したとき)
+LATE_DAYS = 7  # 予想を保存していないレースは、この日数までなら結果のあとでも保存できる(画面で予想したときと、自動の予想)
 
 
 def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.datetime, late_ok: bool = False) -> int:
     """印を付けて保存する。結果が出たレースと、凍結した予想は保存しない。保存した頭数を返す。
 
     予想は開催日の前日までと、当日の朝(FREEZE_HOUR 時前)なら、取り直したオッズで更新できる。
-    late_ok なら、予想を1件も保存していない直近 LATE_DAYS 日以内の日は、結果が出たあとでも保存する
-    (発走前に保存しそびれた日を回顧できるように。回顧の画面では、結果のあとで保存したと示す)。
+    late_ok なら、予想を保存していない直近 LATE_DAYS 日以内のレースは、結果が出たあとでも保存する
+    (発走前に保存しそびれたレースも回顧できるように)。そのレースは after_result=1 にし、回顧で区別する。
     """
     t = add_marks(table)
     t["saved_at"] = now.isoformat(timespec="seconds")
     t["date"] = pd.to_datetime(t["date"]).dt.strftime("%Y-%m-%d")
-    done = {r[0] for r in conn.execute("SELECT race_id FROM races")}
+    finished = {r[0] for r in conn.execute("SELECT race_id FROM races")}
+    done = set(finished)
     if now.hour >= FREEZE_HOUR:
         today = now.date().isoformat()
         done |= {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE date <= ?", (today,))}
     done |= {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE date < ?", (now.date().isoformat(),))}
     keep = ~t["race_id"].isin(done)
     if late_ok:
-        saved_days = {r[0] for r in conn.execute("SELECT DISTINCT date FROM predictions")}
+        saved = {r[0] for r in conn.execute("SELECT race_id FROM predictions")}
         oldest = (now.date() - dt.timedelta(days=LATE_DAYS)).isoformat()
-        keep |= ~t["date"].isin(saved_days) & (t["date"] >= oldest) & (t["date"] <= now.date().isoformat())
+        keep |= ~t["race_id"].isin(saved) & (t["date"] >= oldest) & (t["date"] <= now.date().isoformat())
+    t["after_result"] = t["race_id"].isin(finished).astype(int)
     t = t[keep][PRED_COLS]
     t = t.astype(object).where(t.notna(), None)
     with conn:
@@ -55,10 +57,48 @@ def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.date
     return len(t)
 
 
-def saved_after_race_day(conn: sqlite3.Connection, date: str) -> bool:
-    """その日の予想を、開催日より後(結果が出たあと)に保存したか。"""
-    first = conn.execute("SELECT MIN(saved_at) FROM predictions WHERE date = ?", (date,)).fetchone()[0]
-    return first is not None and first[:10] > date
+def saved_after_results(conn: sqlite3.Connection, date: str) -> int:
+    """その日の予想のうち、結果が出たあとに保存したレースの数(列を足す前の保存は、開催日より後に保存したかで見る)。"""
+    return conn.execute(
+        "SELECT COUNT(DISTINCT race_id) FROM predictions WHERE date = ? AND "
+        "(after_result = 1 OR (after_result IS NULL AND substr(saved_at, 1, 10) > date))", (date,)).fetchone()[0]
+
+
+def auto_predict(conn: sqlite3.Connection, fetcher, today: dt.date, include_today: bool = False,
+                 jv: tuple[str, str] | None = None, now: dt.datetime | None = None) -> dict[str, int]:
+    """直近 LATE_DAYS 日の開催日で、予想を保存していないレースを、結果(確定オッズ)が出たあとに予想して保存する。
+
+    発走前に予想しなかったレースも回顧と成績の推移に入れるため。学習に使うのはその日より前の結果だけ。
+    保存した予想は after_result=1 になる。{日付: 保存した頭数} を返す(保存がなかった日は入れない)。
+    """
+    from . import jvlink
+    from .cli import collect_day
+    from .gui import predict_with_flow, save_prediction
+
+    now = now or dt.datetime.now()
+    last = today if include_today else today - dt.timedelta(days=1)
+    first = today - dt.timedelta(days=LATE_DAYS)
+    days = [r[0] for r in conn.execute(
+        "SELECT DISTINCT date FROM entry_races WHERE date BETWEEN ? AND ? AND race_id NOT IN "
+        "(SELECT race_id FROM predictions) ORDER BY date", (first.isoformat(), last.isoformat()))]
+    out = {}
+    for d in days:
+        day = dt.date.fromisoformat(d)
+        if jv:
+            jvlink.fetch_results(conn, day, day, jv[0], jv[1], today=today)
+        else:
+            collect_day(conn, fetcher, d.replace("-", ""))
+        ready = conn.execute("SELECT COUNT(*) FROM entry_races e JOIN races r USING (race_id) WHERE e.date = ? AND "
+                             "e.race_id NOT IN (SELECT race_id FROM predictions)", (d,)).fetchone()[0]
+        if not ready:  # 結果がまだ
+            continue
+        table, flow = predict_with_flow(conn, day)
+        table = table[table["race_id"].isin({r[0] for r in conn.execute("SELECT race_id FROM races WHERE date = ?", (d,))})]
+        table = table.reset_index(drop=True)
+        n = save_prediction(conn, table, flow, now=now)
+        if n:
+            out[d] = n
+    return out
 
 
 def _fetch_training(conn: sqlite3.Connection, fetcher, date: dt.date, jv: tuple[str, str] | None) -> None:
@@ -348,12 +388,13 @@ def render_markdown(r: Review) -> str:
 
 def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: str | Path,
                now: dt.datetime | None = None, jv: tuple[str, str] | None = None,
-               after_races: bool = False, evals_dir: str | Path | None = None) -> dict:
+               after_races: bool = False, evals_dir: str | Path | None = None, auto: bool = True) -> dict:
     """毎週の処理。何度実行しても、済んだ分は飛ばす(木〜金と月曜の両方に同じ命令を登録できる)。
 
     jv=(書き出し先, 32bit Python) なら、成績と出馬表を JRA-VAN から取る(なければ netkeiba)。
     after_races=True は最終レース後の実行用(日曜の夜): 今日の分も回顧し、今週末の予想は作らず、
     evals_dir があれば学習・評価の結果も書く。
+    auto なら先に、直近の開催で予想を保存していないレースを、結果のあとで予想して保存する(auto_predict)。
     """
     from . import jvlink
     from .cli import collect_day
@@ -361,7 +402,11 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
     now = now or dt.datetime.now()
     reviews_dir = Path(reviews_dir)
     reviews_dir.mkdir(parents=True, exist_ok=True)
-    out = {"reviewed": [], "forecast": {}, "evaluated": None}
+    out = {"reviewed": [], "forecast": {}, "evaluated": None, "auto": {}}
+    if auto:
+        out["auto"] = auto_predict(conn, fetcher, today, include_today=after_races, jv=jv, now=now)
+        for d in out["auto"]:  # 回顧を書き直す(足したレースを入れる)
+            (reviews_dir / f"{d}.md").unlink(missing_ok=True)
     for d in unreviewed_dates(conn, today, reviews_dir, include_today=after_races):
         if jv:
             day = dt.date.fromisoformat(d)

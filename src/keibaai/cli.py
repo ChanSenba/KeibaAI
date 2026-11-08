@@ -178,6 +178,8 @@ def main(argv=None) -> None:
     wk.add_argument("--after-races", action="store_true",
                     help="最終レース後の実行用(日曜の夜): 今日の分も回顧し、学習・評価を書く。今週末の予想は作らない")
     wk.add_argument("--today", help="今日の日付(YYYY-MM-DD)。試すとき用")
+    wk.add_argument("--no-eval", action="store_true", help="--after-races でも学習・評価を書かない(土曜の最終レース後用)")
+    wk.add_argument("--no-auto", action="store_true", help="予想を保存していないレースを、結果のあとで予想して保存しない")
     _add_source(wk, "成績と出馬表")
     bt = sub.add_parser("backtest", help="過去のレースで単勝の買い方ルールを再現し、回収率などを表示")
     bt.add_argument("--test-from", required=True, help="この日以後を買う期間にする(YYYY-MM-DD)")
@@ -367,7 +369,10 @@ def main(argv=None) -> None:
         today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
         out = run_weekly(db.connect(args.db), Fetcher(cache_dir=args.cache), today, args.reviews,
                          jv=(args.raw, args.python32), after_races=args.after_races,
-                         evals_dir=args.evals if args.after_races else None)
+                         evals_dir=args.evals if args.after_races and not args.no_eval else None,
+                         auto=not args.no_auto)
+        for d, n in out["auto"].items():
+            print(f"auto {d}: 結果のあとで予想して {n}頭 保存")
         print(f"reviewed: {', '.join(out['reviewed']) or 'なし'}")
         if out["evaluated"]:
             print(f"evaluated: {out['evaluated']}")

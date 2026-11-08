@@ -123,9 +123,10 @@ def test_weekly_command_runs_run_weekly(tmp_path, monkeypatch, capsys):
 
     seen = {}
 
-    def fake(conn, fetcher, today, reviews_dir, jv=None, after_races=False, evals_dir=None):
-        seen.update(today=today, reviews=str(reviews_dir), jv=jv)
-        return {"reviewed": ["2025-03-01"], "forecast": {"2025-03-08": 0, "2025-03-09": 12}, "evaluated": None}
+    def fake(conn, fetcher, today, reviews_dir, jv=None, after_races=False, evals_dir=None, auto=True):
+        seen.update(today=today, reviews=str(reviews_dir), jv=jv, auto=auto)
+        return {"reviewed": ["2025-03-01"], "forecast": {"2025-03-08": 0, "2025-03-09": 12}, "evaluated": None,
+                "auto": {"2025-03-01": 5}}
 
     monkeypatch.setattr(weekly, "run_weekly", fake)
     cli.main(["weekly", "--db", str(tmp_path / "k.db"), "--cache", str(tmp_path / "c"),
@@ -133,6 +134,7 @@ def test_weekly_command_runs_run_weekly(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert seen["today"] == dt.date(2025, 3, 3) and "reviewed: 2025-03-01" in out and seen["jv"] == ("rawdir", "py32")
     assert "forecast 2025-03-08: 出馬表がまだありません" in out and "forecast 2025-03-09: 12頭" in out
+    assert seen["auto"] and "auto 2025-03-01: 結果のあとで予想して 5頭 保存" in out
 
 
 def test_weekly_with_jv_takes_results_and_entries_from_jravan(tmp_path, monkeypatch):
@@ -303,24 +305,65 @@ def test_review_gives_fit_for_each_horse_from_flow_gate_and_ground():
 
 
 def test_gui_saves_a_missed_day_after_results():
-    """画面で予想したのに発走前に保存していなかった日は、結果のあとでも保存して回顧に出す(直近だけ、1件もない日だけ)。"""
+    """画面で予想したのに発走前に保存していなかったレースは、結果のあとでも保存して回顧に出す(直近だけ、未保存のレースだけ)。"""
     from keibaai import gui
 
     conn = db.connect(":memory:")
     add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
-    assert weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 3, 2, 2)) == 0  # weekly は今までどおり保存しない
+    assert weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 3, 2, 2)) == 0  # weekly の予想は今までどおり保存しない
     assert gui.save_prediction(conn, pred_table(), now=dt.datetime(2025, 3, 2, 2)) == 5
     assert gui.review_dates(conn) == ["2025-03-01"]
-    assert weekly.saved_after_race_day(conn, "2025-03-01")
+    assert weekly.saved_after_results(conn, "2025-03-01") == 1
     assert weekly.review_day(conn, "2025-03-01").summary["races"] == 1
     t = pred_table(); t["win_odds"] = 99.0
-    assert gui.save_prediction(conn, t, now=dt.datetime(2025, 3, 2, 3)) == 0  # 一度保存した日は書き換えない
+    assert gui.save_prediction(conn, t, now=dt.datetime(2025, 3, 2, 3)) == 0  # 一度保存したレースは書き換えない
     add_result(conn, "202505010201", "2025-02-01", [1, 2, 3, 4, 5])
     assert gui.save_prediction(conn, pred_table("202505010201", "2025-02-01"), now=dt.datetime(2025, 3, 2, 3)) == 0  # 古い日は保存しない
 
 
-def test_saved_before_race_day_is_not_marked_late():
+def test_saved_before_race_is_not_counted_as_after_results():
     conn = db.connect(":memory:")
     weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
-    assert not weekly.saved_after_race_day(conn, "2025-03-01")
-    assert not weekly.saved_after_race_day(conn, "2025-03-08")
+    assert weekly.saved_after_results(conn, "2025-03-01") == 0
+    # 列を足す前の保存(after_result が空)は、開催日より後に保存したかで見る
+    conn.execute("UPDATE predictions SET after_result = NULL, saved_at = '2025-03-02T02:00:00'")
+    assert weekly.saved_after_results(conn, "2025-03-01") == 1
+
+
+def add_entry_race(conn, race_id, date):
+    conn.execute("INSERT INTO entry_races (race_id, name, date, venue, round) VALUES (?, 'テスト特別', ?, '東京', 1)",
+                 (race_id, date))
+
+
+def test_auto_predict_saves_races_without_prediction_after_results(tmp_path, monkeypatch):
+    """自動の予想: 直近の開催で予想を保存していないレースを、結果が出たあとに予想して保存し、回顧に入れる。"""
+    from keibaai import gui
+
+    conn = db.connect(":memory:")
+    for rid in ("202505010101", "202505010102", "202505010103"):
+        add_entry_race(conn, rid, "2025-03-01")
+    weekly.save_predictions(conn, pred_table("202505010101"), dt.datetime(2025, 2, 28, 20))  # 1Rは発走前に保存済み
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    add_result(conn, "202505010102", "2025-03-01", [2, 1, 3, 4, 5])  # 2Rは結果あり、3Rはまだ
+    calls = []
+
+    def fake_predict(conn, date):
+        calls.append(date)
+        return pd.concat([pred_table(r) for r in ("202505010101", "202505010102", "202505010103")], ignore_index=True), None
+
+    monkeypatch.setattr(gui, "predict_with_flow", fake_predict)
+    (tmp_path / "r").mkdir()
+    (tmp_path / "r" / "2025-03-01.md").write_text("古い回顧")
+    out = weekly.run_weekly(conn, FakeFetcher(), dt.date(2025, 3, 1), tmp_path / "r", now=dt.datetime(2025, 3, 1, 17),
+                            after_races=True)
+    assert out["auto"] == {"2025-03-01": 5} and out["reviewed"] == ["2025-03-01"]
+    rows = dict(conn.execute("SELECT race_id, MAX(after_result) FROM predictions GROUP BY race_id").fetchall())
+    assert rows == {"202505010101": 0, "202505010102": 1}  # 発走前の予想は書き換えず、結果のない3Rは保存しない
+    assert "古い回顧" not in (tmp_path / "r" / "2025-03-01.md").read_text(encoding="utf-8")
+    assert weekly.review_day(conn, "2025-03-01").summary["races"] == 2
+    out = weekly.run_weekly(conn, FakeFetcher(), dt.date(2025, 3, 1), tmp_path / "r", now=dt.datetime(2025, 3, 1, 18),
+                            after_races=True)
+    assert out["auto"] == {} and len(calls) == 1  # 3Rの結果が出るまでは予想し直さない
+    out = weekly.run_weekly(conn, FakeFetcher(), dt.date(2025, 3, 20), tmp_path / "r", now=dt.datetime(2025, 3, 20, 21),
+                            auto=True)
+    assert out["auto"] == {}  # 古い開催日は対象外
