@@ -82,8 +82,10 @@ bat は黒い画面(コンソール)で動くので、文字化けしないよ�
 コマンドプロンプトで、次を実行します(木曜と月曜の夜 21 時)。`C:\パス\KeibaAI` は、このフォルダの場所に置き換えます。
 
 ```
-schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "\"C:\パス\KeibaAI\KeibaAI-weekly.bat\""
+schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "wscript.exe //B //Nologo \"C:\パス\KeibaAI\run-hidden.vbs\" \"C:\パス\KeibaAI\KeibaAI-weekly.bat\""
 ```
+
+`run-hidden.vbs` を通すのは、実行中にコマンドプロンプトの窓を一切出さず、ゲームなど前面のアプリからフォーカスを奪わないためです(bat を直接登録すると黒い窓が前面に出ます。PowerShell の `-WindowStyle Hidden` も一瞬窓が出ます)。終了コードはそのまま返すので、タスクの「前回の実行結果」で成否が分かります。
 
 登録の確認は `schtasks /Query /TN "KeibaAI weekly"`、削除は `schtasks /Delete /TN "KeibaAI weekly" /F` です。
 
@@ -128,7 +130,7 @@ schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "\"C:\
 ### タスクスケジューラへの登録(1度だけ)
 
 ```
-schtasks /Create /TN "KeibaAI sunday" /SC WEEKLY /D SUN /ST 18:30 /TR "\"C:\パス\KeibaAI\KeibaAI-sunday.bat\""
+schtasks /Create /TN "KeibaAI sunday" /SC WEEKLY /D SUN /ST 18:30 /TR "wscript.exe //B //Nologo \"C:\パス\KeibaAI\run-hidden.vbs\" \"C:\パス\KeibaAI\KeibaAI-sunday.bat\""
 ```
 
 最終レースの発走は 16:40 前後です。成績の確定を待つため 18:30 にしています。結果がまだ出ていなければ、その日は回顧されず、木曜・月曜の実行で拾われます。

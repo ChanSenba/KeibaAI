@@ -181,7 +181,7 @@ keibaai weekly
 Windows のタスクスケジューラに登録するには、次を1度だけ実行します（木曜と月曜の夜 21 時）。
 
 ```
-schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "\"C:\パス\KeibaAI\KeibaAI-weekly.bat\""
+schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "wscript.exe //B //Nologo \"C:\パス\KeibaAI\run-hidden.vbs\" \"C:\パス\KeibaAI\KeibaAI-weekly.bat\""
 ```
 
 `C:\パス\KeibaAI` はこのフォルダの場所に置き換えてください。記録は `data\weekly.log` に残ります。PC が起動していないと動きません。
