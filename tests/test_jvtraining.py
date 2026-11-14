@@ -2,7 +2,8 @@ import pytest
 import pandas as pd
 
 from keibaai import db
-from keibaai.jvtraining import JV_FEATURES, add_course_relative, add_jv_features, import_raw, parse_record
+from keibaai.jvtraining import (JV_FEATURES, VOLUME_FEATURES, add_course_relative, add_day_relative, add_jv_features,
+                                import_raw, parse_record)
 
 HC = "HC12026100502026100506112022103274064918304661710295151144\r\n"
 
@@ -58,7 +59,60 @@ def test_add_jv_features():
     assert (a.jv_n14, a.jv_best_f4, a.jv_best_l1, a.jv_last_f4, a.jv_last_l1, a.jv_days_since) == (2, 52.0, 11.8, 52.0, 11.8, 6)
     assert a.jv_f4_vs_base == 52.0 - 55.0
     assert out.iloc[0].jv_f4_vs_field == 0.0  # 調教のある馬が1頭だけなので平均との差は0
-    assert out.iloc[1][JV_FEATURES].isna().all() and out.iloc[2][JV_FEATURES].isna().all()
+    timed = [c for c in JV_FEATURES if c not in VOLUME_FEATURES]
+    assert out.iloc[1][timed].isna().all() and out.iloc[2][timed].isna().all()
+    # 本数: 流しも数える。レース当日の1本は数えない。調教のない馬は 0
+    assert (a.jv_n_all14, a.jv_n_all28, a.jv_n_fast28, a.jv_wood_share28, a.jv_last_is_wood) == (2, 2, 2, 0.0, 0.0)
+    b = out.iloc[1]
+    assert (b.jv_n_all28, b.jv_n_fast28) == (1, 0) and pd.isna(b.jv_wood_share28)
+    assert (out.iloc[2].jv_n_all28, out.iloc[2].jv_n_fast28) == (0, 0)
+
+
+def test_volume_is_missing_before_wood_data_and_when_training_is_stale():
+    conn = db.connect(":memory:")
+    _train(conn, [("x", "2021-07-02", "0600", "slope", 55.0, 12.0), ("x", "2021-09-20", "0600", "slope", 55.0, 12.0)])
+    df = pd.DataFrame({"race_id": ["r", "s", "t"], "horse_id": ["h", "h", "h"],
+                       "date": pd.to_datetime(["2021-07-10", "2021-09-20", "2021-10-10"])})
+    out = add_jv_features(conn, df)
+    assert out.iloc[0][VOLUME_FEATURES].isna().all()  # ウッドの揃う前
+    assert out.iloc[1].jv_n_all28 == 0  # 3日前までの調教が入っているので「調教なし」
+    assert pd.isna(out.iloc[2].jv_n_all28)  # 取り込みが3日前まで届いていないので欠損
+
+
+def test_volume_counts_up_to_three_days_before_and_no_recent_work():
+    conn = db.connect(":memory:")
+    _train(conn, [("h", "2026-10-04", "0600", "slope", 55.0, 12.0),  # 3日前: 数える
+                  ("h", "2026-10-05", "0600", "slope", 70.0, 15.0),  # 2日前の流し: 数えない
+                  ("g", "2026-08-01", "0600", "slope", 55.0, 12.0)])  # 28日より前だけの馬
+    df = pd.DataFrame({"race_id": ["r", "r"], "horse_id": ["h", "g"], "date": pd.to_datetime(["2026-10-07"] * 2)})
+    out = add_jv_features(conn, df)
+    assert (out.iloc[0].jv_n_all28, out.iloc[0].jv_n_fast28) == (1, 1)
+    assert (out.iloc[1].jv_n_all28, out.iloc[1].jv_n_fast28) == (0, 0)
+
+
+def test_day_relative_compares_with_same_day_same_course_only():
+    rows = [("h0", "2026-10-01", "0600", "slope", "1", None, 50.0 + i, 12.0 + i / 10) for i in range(9)]
+    rows += [("w", "2026-10-01", "0600", "wood", "1", "2", 40.0, 11.0)]  # ウッドは別の基準
+    rows += [("x", "2026-10-02", "0700", "slope", "1", None, 45.0, 11.0)]  # 別の日は別の基準(本数不足で欠損)
+    tr = pd.DataFrame(rows, columns=["horse_id", "date", "time", "kind", "center", "course", "f4", "l1"])
+    tr["date"] = pd.to_datetime(tr["date"])
+    out = add_day_relative(tr)
+    assert list(out["day_f4"].iloc[:9]) == [float(i - 4) for i in range(9)]
+    assert out["day_f4"].iloc[9:].isna().all() and out["day_l1"].iloc[9:].isna().all()
+    assert out["hour"].tolist() == [6] * 10 + [7]
+
+
+def test_day_features_use_workouts_before_race_day():
+    conn = db.connect(":memory:")
+    rows = [(f"o{i}", "2026-10-01", "0600", "slope", 50.0 + i, 12.0) for i in range(8)]
+    rows += [("h", "2026-10-01", "0730", "slope", 51.0, 11.9),
+             ("h", "2026-10-07", "0600", "slope", 49.0, 11.0)]  # レース当日なので使わない
+    _train(conn, rows)
+    df = pd.DataFrame({"race_id": ["r"], "horse_id": ["h"], "date": pd.to_datetime(["2026-10-07"])})
+    a = add_jv_features(conn, df).iloc[0]
+    assert a.jv_last_day_f4 == 51.0 - 53.0 and a.jv_best_day_f4 == a.jv_last_day_f4
+    assert a.jv_last_day_l1 == 11.9 - 12.0
+    assert a.jv_last_hour == 7 and a.jv_n_all28 == 1
 
 
 def test_add_jv_features_without_table_data():

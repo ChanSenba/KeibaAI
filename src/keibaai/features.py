@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .jvrace import INNER_OUTER_VENUES
-from .jvtraining import JV_FEATURES, add_jv_features
+from .jvtraining import DAY_FEATURES as JV_DAY_FEATURES, JV_FEATURES, VOLUME_FEATURES as JV_VOLUME_FEATURES, add_jv_features
 
 CATEGORICAL = ["course_type", "venue", "ground", "sex", "train_critic"]
 # 馬の過去成績・騎手/調教師の過去成績・レース条件。オッズは含めない(能力だけで予測するため)
@@ -135,9 +135,12 @@ NN_FEATURES = list(dict.fromkeys(ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELA
 # 地方・海外の前走・騎手の格の差・評価点・レースレベルも、オッズ込みのモデルに入れる(能力のみのモデルにだけ入っていた)。
 # 2025-01〜2026-11-07 の 6,405 レース(2024年までで学習、乱数4通りの平均)で、勝ち馬の対数尤度が +1.6/1000
 # (95%区間 +0.2〜+3.1。2025年 +0.6、2026年 +2.8)。2024年を評価にしても +0.7(−1.7〜+3.0)。数字は docs/spec.md 8-21
+# 調教の同じ日の基準との差・量(JV_DAY_FEATURES・JV_VOLUME_FEATURES)は、能力のみのモデルでは効いたが、オッズ込みのモデルでは
+# 2025-01〜で +1.2/1000(95%区間 −0.1〜+2.5)、2024-01〜で +0.3(−0.9〜+1.5)と変わらないので入れない(docs/spec.md 8-23)
 RESIDUAL_MODEL_FEATURES = list(dict.fromkeys(
     c for c in ABILITY_MODEL_FEATURES + FIGURE_FEATURES + RELATIVE_FEATURES + OTHER_FEATURES + JOCKEY_DELTA_FEATURES
-    + PAST_SCORE_FEATURES + RACE_LEVEL_FEATURES if c != "train_critic"))
+    + PAST_SCORE_FEATURES + RACE_LEVEL_FEATURES
+    if c != "train_critic" and c not in JV_DAY_FEATURES + JV_VOLUME_FEATURES))
 BIAS_WINDOW = "10D"
 
 

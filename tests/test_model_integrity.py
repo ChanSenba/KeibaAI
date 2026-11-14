@@ -229,3 +229,19 @@ def test_constant_pace_has_no_finite_z_score():
     df=pd.DataFrame({'race_id':[str(i) for i in range(100)],'date':pd.date_range('2026-01-01',periods=100),
                     'course_type':['芝']*100,'dist_bucket':[4]*100,'pace_first3f':[36.4]*100})
     assert _past_pace_z(df).isna().all()
+
+
+def test_future_training_does_not_change_day_and_volume_features():
+    conn = db.connect(':memory:')
+    rows = [(f'o{i}', '2026-10-01', '0600', 'slope', 50.0 + i, 12.0) for i in range(8)]
+    rows += [('h', '2026-10-01', '0700', 'slope', 51.0, 11.9), ('h', '2026-09-25', '0600', 'slope', 65.0, 14.0)]
+    conn.executemany('INSERT INTO jv_training (horse_id, date, time, kind, f4, l1) VALUES (?,?,?,?,?,?)', rows)
+    target = pd.DataFrame({'race_id': ['r'], 'horse_id': ['h'], 'date': ['2026-10-04']})
+    a = add_jv_features(conn, target.copy())
+    # レース当日以後の追い切り(同じ日の基準を変えうる本数と、本人の調教)を足しても変わらない
+    later = [(f'n{i}', d, '0600', 'slope', 40.0, 10.0) for i in range(10) for d in ('2026-10-04', '2026-10-05')]
+    later += [('h', '2026-10-04', '0600', 'slope', 49.0, 11.0), ('h', '2026-10-06', '0600', 'slope', 60.0, 13.0)]
+    conn.executemany('INSERT INTO jv_training (horse_id, date, time, kind, f4, l1) VALUES (?,?,?,?,?,?)', later)
+    b = add_jv_features(conn, target.copy())
+    pd.testing.assert_frame_equal(a[JV_FEATURES], b[JV_FEATURES])
+    assert a.iloc[0].jv_last_day_f4 == 51.0 - 53.0 and a.iloc[0].jv_n_all28 == 2
