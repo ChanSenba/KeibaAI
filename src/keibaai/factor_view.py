@@ -12,7 +12,6 @@ import pandas as pd
 
 from .features import inner_outer, same_course
 from .jvtraining import FAST_F4
-from .marks import top_marks
 from .predict import _cached, day_frame
 
 # 画面に出す区分。cols は (列名, 画面での見出し)。
@@ -560,10 +559,10 @@ def column_points(values: pd.Series, good: str) -> pd.Series:
 
 
 def score_race(one: pd.DataFrame) -> pd.DataFrame:
-    """1レースの出走馬(factor_values の行)に、ファクターごとの点数・総合点(100点満点)・順位・印を付けて返す。
+    """1レースの出走馬(factor_values の行)に、ファクターごとの点数・総合点(100点満点)・順位を付けて返す。
 
-    列は pt_<列名>(0〜10点)、score(総合点)、score_rank(1が最上位)、score_mark(◎○▲△。9頭立て以下は△1頭)。
-    列の順に1つずつ点数をつけて足し、最後に総合点の高い順に印をつける。
+    列は pt_<列名>(0〜10点)、score(総合点)、score_rank(1が最上位)。
+    ◎○▲ の印は付けない。予想ページのモデルの印と同じ記号だと、どちらを信じるか迷うため(2026-11)。
     """
     cols = [(c, label) for c, label in score_columns() if c in one]
     out = pd.DataFrame(index=one.index)
@@ -576,10 +575,6 @@ def score_race(one: pd.DataFrame) -> pd.DataFrame:
         wsum += w
     out["score"] = total / (10 * wsum) * 100 if wsum else np.nan
     out["score_rank"] = out["score"].rank(method="min", ascending=False)
-    out["score_mark"] = ""
-    marks = top_marks(len(one))
-    top = out["score"].sort_values(ascending=False, kind="stable").index[:len(marks)]
-    out.loc[top, "score_mark"] = marks[:len(top)]
     return out
 
 

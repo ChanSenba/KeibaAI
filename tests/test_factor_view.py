@@ -211,13 +211,12 @@ def test_column_points_ranks_within_the_race():
     assert (fv.column_points(pd.Series([1.0, 1.0, 1.0]), "high") == 5.0).all()  # 差がなければ全員5点
 
 
-def test_score_race_sums_points_and_marks_the_top(conn):
+def test_score_race_sums_points_and_ranks_without_marks(conn):
     one = fv.factor_values(conn, DAY)
     sc = fv.score_race(one)
     assert sc["score"].between(0, 100).all() and sc["score_rank"].min() == 1
-    assert sorted(sc.loc[sc["score_mark"] != "", "score_mark"]) == sorted(["◎", "○", "▲", "△", "△"])  # 10頭立て
-    best = sc["score"].idxmax()
-    assert sc.loc[best, "score_mark"] == "◎"
+    assert "score_mark" not in sc  # 予想の印と紛れるので、点数には ◎○▲ を付けない
+    assert sc.loc[sc["score"].idxmax(), "score_rank"] == 1
     assert not any(c in fv.SCORE_EXCLUDE for c in (k[3:] for k in sc if k.startswith("pt_")))
     assert len(fv.score_day(one)) == len(one)
 

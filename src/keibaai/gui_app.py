@@ -822,9 +822,9 @@ def _factor_config(cols, frame=None) -> dict:
 OVERALL_COLUMNS = ["mark", "star", "p_win_market", "p_win_ability", "ev_market", "ev_ability"]
 OVERALL_HIGH = {"p_win_market", "p_win_ability", "ev_market", "ev_ability", "score"}
 SCORE_CONFIG = {
-    "score_mark": st.column_config.TextColumn(
-        "印(点数)", width="small",
-        help="総合点の高い順に ◎ ○ ▲ △。モデルの勝率による印(右の「印」)とは別で、各ファクターの点数だけで決めています"),
+    "score_rank": st.column_config.NumberColumn(
+        "点数順位", format="%d位", width="small",
+        help="総合点のレース内の順位。予想の印(◎○▲)ではありません。印は右の「印」(モデルの勝率)を見てください"),
     "score": st.column_config.NumberColumn(
         "総合点", format="%.1f", help="下の各列を、同じレースの中で0〜10点にして平均した100点満点の点数。人気・オッズは入れていません"),
 }
@@ -901,13 +901,13 @@ def page_factors() -> None:
         cfg = {"number": st.column_config.NumberColumn("馬番", format="%d", pinned=True),
                "horse_name": st.column_config.TextColumn("馬名", pinned=True), **_factor_config(cols, one)}
         scored = factor_view.score_race(one)
-        marked = scored[scored["score_mark"] != ""].sort_values("score", ascending=False)
+        top = scored.sort_values("score", ascending=False, kind="stable").head(5)  # 点数の上位5頭(印ではない)
         st.html('<div class="kb-marks">' + "".join(
-            f'<span class="kb-mark"><b>{scored.loc[i, "score_mark"]}</b>{int(one.loc[i, "number"])} '
+            f'<span class="kb-mark"><b>点数{int(scored.loc[i, "score_rank"])}位</b>{int(one.loc[i, "number"])} '
             f'{html.escape(str(one.loc[i, "horse_name"]))} {scored.loc[i, "score"]:.1f}</span>'
-            for i in marked.index) + "</div>")
+            for i in top.index) + "</div>")
         st.caption("表の見方と総合点", help=TIPS["factor_overall"])
-        extra = scored[["score_mark", "score"]]
+        extra = scored[["score_rank", "score"]]
         cfg.update(SCORE_CONFIG)
         pred = st.session_state.get("prediction")
         if pred is not None and pred[0] == date:
