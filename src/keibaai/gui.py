@@ -327,21 +327,29 @@ def fetch_bet_odds(fetcher, race_id: str, on_type=None, conn: sqlite3.Connection
 
     JV-Link を呼べる PC で conn(出馬表の入った DB)を渡せば、JRA-VAN の速報オッズを使う。
     そうでなければ netkeiba に6回アクセスする(3〜5秒おき)。
+    conn を渡したときは、取ったオッズを取得時刻つきで bet_odds_snapshots にも残す
+    (全券種のオッズは後から取り直せないので、買う時点のオッズでの検証に使う)。
+    保存に失敗しても、オッズの取得そのものは止めない。
     """
-    from . import jvlink
+    from . import db, jvlink
     from .entries import BET_ODDS_TYPES, parse_bet_odds
 
     if conn is not None and jvlink.available():
         try:
-            return jvlink.fetch_bet_odds(conn, race_id)
+            out = jvlink.fetch_bet_odds(conn, race_id)
         except jvlink.JVError as e:
             raise RuntimeError(str(e)) from e
-
-    out: dict = {}
-    for i, t in enumerate(BET_ODDS_TYPES):
-        if on_type:
-            on_type(i, len(BET_ODDS_TYPES), t)
-        out.update(parse_bet_odds(fetcher.odds_json(race_id, t), t))
+    else:
+        out = {}
+        for i, t in enumerate(BET_ODDS_TYPES):
+            if on_type:
+                on_type(i, len(BET_ODDS_TYPES), t)
+            out.update(parse_bet_odds(fetcher.odds_json(race_id, t), t))
+    if conn is not None and out:
+        try:
+            db.save_bet_odds_snapshot(conn, race_id, out, dt.datetime.now().isoformat(timespec="seconds"))
+        except Exception as e:  # 保存の失敗で買い方の表示を止めない
+            print(f"bet odds snapshot {race_id}: {e}")
     return out
 
 

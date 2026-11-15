@@ -137,12 +137,13 @@ def main(argv=None) -> None:
     tr_.add_argument("--date", help="YYYY-MM-DD。出馬表を取った日のレースだけ取り直す(発走前の予想用)")
     tr_.add_argument("--reparse", action="store_true", help="保存済みページから読み直す(通信なし)")
     jv_ = sub.add_parser("jv", help="JRA-VAN から取り込む(調教タイム・過去の成績・血統)。32bit Python で JV-Link から書き出し、DB に入れる")
-    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree", "blood", "odds"], default=["training"],
+    jv_.add_argument("--what", nargs="+", choices=["training", "races", "pedigree", "blood", "odds", "sales"], default=["training"],
                      help="取り込むもの。training=坂路とウッドの調教タイム、races=レース成績、pedigree=全馬の血統(上書き)、"
                           "blood=血統データ(父の系統 sire_line と5代血統 pedigree5。先に pedigree を入れておく)、"
-                          "odds=全券種の確定オッズと払戻(--odds-db に入れる)")
+                          "odds=全券種の確定オッズと払戻(--odds-db に入れる)、sales=セリの取引価格(sales テーブル。特徴量には未使用)")
     jv_.add_argument("--blood-from", default="19860101", help="blood: 取得を始める日 YYYYMMDD(血統は全期間が要る)")
     jv_.add_argument("--odds-from", default="20190101", help="odds: 取得を始める日 YYYYMMDD")
+    jv_.add_argument("--sales-from", default="19970101", help="sales: 取得を始める日 YYYYMMDD(セリ価格は1997年から収録)")
     jv_.add_argument("--odds-raw", default="data/jv_raw_odds", help="odds: 書き出し先(成績の RACE.txt と分ける)")
     jv_.add_argument("--odds-db", default="data/jravan_odds.db", help="odds: 入れる先(keiba.db とは別のファイル)")
     jv_.add_argument("--replace", action="store_true",
@@ -302,6 +303,9 @@ def main(argv=None) -> None:
             if "odds" in args.what:
                 runs.append([args.python32, "-m", "keibaai.jvexport", "--from", args.odds_from, "--out", args.odds_raw,
                              "--option", str(args.option), "--specs", "RACE", "--odds"])
+            if "sales" in args.what:  # セリ価格も取得を始める日が違うので、別に書き出す
+                runs.append([args.python32, "-m", "keibaai.jvexport", "--from", args.sales_from, "--out", args.raw,
+                             "--option", str(args.option), "--specs", "HOSN"])
             for i, cmd in enumerate(runs):
                 if i:
                     time.sleep(jvexport.RT_INTERVAL)  # 続けて開き直すと JV-Link の内部サービスが落ちることがあった
@@ -325,6 +329,10 @@ def main(argv=None) -> None:
                 print(f"done: 5代血統 {r['horses']} 頭(先祖の欠け {r['missing_rate']:.1%})、"
                       f"父の系統 {r['sire_line']}/{r['pedigree']} 頭を取り込みました")
                 print("  多い系統: " + "、".join(f"{k} {v}" for k, v in r["top_lines"]))
+        if "sales" in args.what:
+            from .jvsales import import_sales
+
+            print(f"done: セリ価格 {import_sales(conn, args.raw)} 件を取り込みました")
         if "odds" in args.what:
             from . import jvodds
 

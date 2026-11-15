@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from keibaai import gui
+from keibaai import db, gui
 from keibaai.blend import Blend
 from keibaai.entries import parse_bet_odds
 
@@ -55,6 +55,37 @@ def test_fetch_bet_odds_asks_each_type_once_and_merges():
     out = gui.fetch_bet_odds(f, "r1", on_type=lambda i, n, t: seen.append(t))
     assert f.asked == [1, 4, 5, 6, 7, 8] == seen
     assert out["単勝"] == {(1,): 3.0, (2,): 4.0} and out["馬連"] == {(1, 2): 6.0}
+
+
+def test_fetch_bet_odds_survives_snapshot_failure():
+    out = gui.fetch_bet_odds(FakeFetcher(), "r1", conn=object())  # 保存できない conn でも、オッズ取得は止めない
+    assert out["単勝"][(1,)] == 3.0
+
+
+def test_fetch_bet_odds_saves_snapshot_when_conn_given(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    out = gui.fetch_bet_odds(FakeFetcher(), "r1", conn=conn)
+    assert out["単勝"] == {(1,): 3.0, (2,): 4.0}
+    rows = conn.execute(
+        "SELECT kind, combo, odds FROM bet_odds_snapshots WHERE race_id = 'r1' ORDER BY kind, combo").fetchall()
+    assert rows == [("単勝", "01", 3.0), ("単勝", "02", 4.0), ("馬連", "01-02", 6.0)]
+    stamps = {r[0] for r in conn.execute("SELECT snapped_at FROM bet_odds_snapshots WHERE race_id = 'r1'")}
+    assert len(stamps) == 1 and stamps.pop()  # 取得時刻が入っている
+
+
+def test_save_bet_odds_snapshot_appends_by_time_and_replaces_same_time(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    odds = {"単勝": {(1,): 3.0}, "三連単": {(1, 2, 3): 100.0}}
+    assert db.save_bet_odds_snapshot(conn, "r1", odds, "2026-11-15T10:00:00") == 2
+    assert db.save_bet_odds_snapshot(conn, "r1", {"単勝": {(1,): 2.5}}, "2026-11-15T10:00:00") == 1  # 同じ時刻は置き換え
+    assert db.save_bet_odds_snapshot(conn, "r1", odds, "2026-11-15T11:00:00") == 2  # 別の時刻は追記
+    assert db.save_bet_odds_snapshot(conn, "r1", {}, "2026-11-15T12:00:00") == 0  # 空は何も書かない
+    rows = conn.execute(
+        "SELECT snapped_at, kind, combo, odds FROM bet_odds_snapshots ORDER BY snapped_at, kind").fetchall()
+    assert rows == [("2026-11-15T10:00:00", "三連単", "01-02-03", 100.0),
+                    ("2026-11-15T10:00:00", "単勝", "01", 2.5),
+                    ("2026-11-15T11:00:00", "三連単", "01-02-03", 100.0),
+                    ("2026-11-15T11:00:00", "単勝", "01", 3.0)]
 
 
 def test_bet_plan_for_mixes_probabilities_and_uses_race_odds():

@@ -48,6 +48,20 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
     win_odds REAL, popularity INTEGER, source TEXT,
     PRIMARY KEY (race_id, number, snapped_at)
 );
+-- 買い方を出すときに取った全券種のオッズを、取得時刻つきで溜める(単勝の odds_snapshots と違い、全券種は後から取り直せない)。
+-- odds は買い方の計算に使った値そのもの(複勝・ワイドは幅のあるオッズの下限)。combo は馬番を '-' でつないだ形(馬単・三連単は着順どおり)
+CREATE TABLE IF NOT EXISTS bet_odds_snapshots (
+    race_id TEXT NOT NULL, snapped_at TEXT NOT NULL, kind TEXT NOT NULL, combo TEXT NOT NULL,
+    odds REAL,
+    PRIMARY KEY (race_id, snapped_at, kind, combo)
+);
+-- セリ(競走馬市場)の取引価格(JRA-VAN HOSN)。特徴量にはまだ使わず、データだけ溜める
+CREATE TABLE IF NOT EXISTS sales (
+    horse_id TEXT NOT NULL, market_code TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT,
+    host TEXT, market_name TEXT, age INTEGER, price INTEGER, sire_id TEXT, dam_id TEXT, birth_year INTEGER,
+    made TEXT,
+    PRIMARY KEY (horse_id, market_code, start_date)
+);
 -- 発走前に出した予想をそのまま残す(あとから結果と照合する)。レースが終わってからは書き換えない
 CREATE TABLE IF NOT EXISTS predictions (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, saved_at TEXT,
@@ -191,6 +205,22 @@ def save_race(conn: sqlite3.Connection, parsed: ParsedRace) -> None:
 
 def has_race(conn: sqlite3.Connection, race_id: str) -> bool:
     return conn.execute("SELECT 1 FROM races WHERE race_id = ?", (race_id,)).fetchone() is not None
+
+
+def save_bet_odds_snapshot(conn: sqlite3.Connection, race_id: str, odds: dict, snapped_at: str) -> int:
+    """買い方用の全券種オッズ {券種: {馬番の組: オッズ}} を取得時刻つきで追記し、記録した件数を返す。
+
+    同じレース・同じ時刻の取り直しは置き換える。空のオッズは何も書かず 0 を返す。
+    あとから確定オッズ(jravan_odds.db)と並べて、買う時点のオッズで検証するために残す。
+    """
+    rows = [(race_id, snapped_at, kind, "-".join(f"{n:02d}" for n in combo), float(o))
+            for kind, table in odds.items() for combo, o in table.items() if o]
+    if not rows:
+        return 0
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO bet_odds_snapshots (race_id, snapped_at, kind, combo, odds) VALUES (?,?,?,?,?)", rows)
+    return len(rows)
 
 
 def save_entries(conn: sqlite3.Connection, parsed, fetched_at: str) -> None:
