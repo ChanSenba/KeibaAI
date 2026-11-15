@@ -22,7 +22,11 @@ CATS = [c for c in CATEGORICAL if c in NN_FEATURES]
 NUMS = [c for c in NN_FEATURES if c not in CATS]
 OTHER = "その他"  # どの要素にも入らない列(性別など)の網。表示には出さない
 PLACE_WEIGHTS = (1.0, 0.5, 0.25)  # 1着・2着・3着を当てる項の重み
-EPOCHS, PATIENCE, BATCH = 40, 4, 256
+# 検証が良くならない回が LR_DECAY_AFTER 回続くたびに学習率を半分にし、PATIENCE 回続いたら止める。学習率が一定で
+# 4回で止める形より、勝ち馬の対数尤度が 2025-01〜2026-11 の 6,485 レースで +1.1/1000(95%区間 +0.4〜+1.9)、
+# 確認用の 2023年(2022年までで学習、3,456 レース)で +1.6(−0.0〜+3.4)。乱数4通りの平均どうし(docs/spec.md 8-24)
+EPOCHS, PATIENCE, BATCH = 40, 6, 256
+LR_DECAY_AFTER = 2
 N_SEEDS = 3  # 乱数を変えて学ぶ回数(平均を使う)
 # 過去走の塔: 直近 PAST_RUNS 走を1走ずつ見て、どの走りを重く見るかも学ぶ。レースレベル入りのモデルに足すと
 # 2025-01〜2026-10 の 6,369 レースで勝ち馬の対数尤度 +10.9/1000(95%区間 +7.6〜+14.0。数字は docs/spec.md 8-12)
@@ -314,6 +318,9 @@ def _fit_one(train: pd.DataFrame, seed: int, past: dict | None = None) -> dict:
             best, bad, best_state = ll, 0, {k: v.clone() for k, v in net.state_dict().items()}
         else:
             bad += 1
+            if bad % LR_DECAY_AFTER == 0:
+                for g in opt.param_groups:
+                    g["lr"] *= 0.5
             if bad >= PATIENCE:
                 break
     if best_state is not None:

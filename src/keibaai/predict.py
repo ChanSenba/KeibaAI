@@ -104,6 +104,9 @@ def day_frame(conn: sqlite3.Connection, date: str) -> tuple[pd.DataFrame, pd.Dat
 
     出馬表の行は finish が空(これから走るので結果がない)。
     """
+    from .nn_year import use_db
+
+    use_db(conn)  # オッズ込みのモデルが使う年ごとのネットを、この DB の隣に保存する
     entries = load_entries(conn, date)
     if entries.empty:
         raise ValueError(f"{date} の出馬表がありません。先に出馬表を取得してください")
@@ -234,8 +237,12 @@ def models_for_day(conn: sqlite3.Connection, date: str, train: pd.DataFrame) -> 
 def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFrame:
     from .nn_model import predict_models
 
+    from .nn_year import add_nn_year
+
     df, hist = day_frame(conn, date)
     train, target = df[result_mask(df)], df[df["is_entry"]].copy()
+    # オッズ込みのモデルの入力(年ごとのネットの予想)。学習の行の分は fit_residual が作るので、予想の行の年だけ
+    target = add_nn_year(df, only=target.index).loc[target.index]
 
     models = models_for_day(conn, date, train)
     # 能力のみの勝率と、要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場…)

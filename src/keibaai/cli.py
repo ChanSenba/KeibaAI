@@ -110,6 +110,8 @@ def main(argv=None) -> None:
     t = sub.add_parser("train", help="予想と同じモデルで学習し、時系列で評価する(オッズなしはニューラルネット)")
     t.add_argument("--db", default="data/keiba.db")
     t.add_argument("--test-from", required=True, help="この日付以降を評価用にする YYYY-MM-DD")
+    t.add_argument("--test-to", help="この日付より前までを評価用にする YYYY-MM-DD(省略時は最後まで)。"
+                                     "採用の確認は、使い込んでいない 2023 年(--test-from 2023-01-01 --test-to 2024-01-01)で一度だけ測る")
     e = sub.add_parser("entries", help="指定日の出馬表と単勝オッズを取得して保存")
     e.add_argument("--date", required=True, help="YYYY-MM-DD")
     e.add_argument("--db", default="data/keiba.db")
@@ -190,6 +192,10 @@ def main(argv=None) -> None:
     pr.add_argument("--date", required=True, help="YYYY-MM-DD")
     pr.add_argument("--db", default="data/keiba.db")
     args = p.parse_args(argv)
+    if getattr(args, "db", None) and str(args.db) != ":memory:":
+        from . import nn_year
+
+        nn_year.use_db_path(args.db)  # 年ごとのネットを DB の隣に保存する
 
     source = resolve_source(getattr(args, "source", "netkeiba"), getattr(args, "python32", None))
     if args.cmd in ("collect", "entries", "weekly") and source != "jv":
@@ -419,6 +425,8 @@ def main(argv=None) -> None:
         from .model import format_report, model_reports
 
         df = features_from_db(db.connect(args.db))
+        if args.test_to:
+            df = df[df["date"] < dt.datetime.fromisoformat(args.test_to)]
         print(format_report(model_reports(df, args.test_from)))
         return
 

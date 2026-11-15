@@ -204,6 +204,9 @@ def backtest_run(conn: sqlite3.Connection, test_from: str, use_market: bool, ev_
     from . import backtest as bt
     from .features import features_from_db
 
+    from .nn_year import use_db
+
+    use_db(conn)  # オッズ込みのモデルが使う年ごとのネットを、DB の隣に保存して使い回す
     feats = features_from_db(conn)
     if blend:
         from .blend import predict_test_blend

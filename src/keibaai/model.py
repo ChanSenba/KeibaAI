@@ -56,10 +56,22 @@ def has_market(df: pd.DataFrame) -> pd.Series:
     return (odds > 0).groupby(df["race_id"]).transform("all")
 
 
+def residual_features() -> list[str]:
+    """オッズ込みのモデルの入力: RESIDUAL_MODEL_FEATURES と、能力のみのネットの年ごとの予想(nn_year.FEATURES)。"""
+    from .nn_year import FEATURES
+
+    return RESIDUAL_MODEL_FEATURES + FEATURES
+
+
 def fit_residual(train: pd.DataFrame, rounds: int = RESIDUAL_ROUNDS) -> lgb.Booster:
-    """オッズ込みの勝率のモデル(市場の見立てからのずれを学ぶ)。オッズのそろったレースだけで学習する。"""
-    train = train_rows(train[has_market(train)])
-    feats = RESIDUAL_MODEL_FEATURES
+    """オッズ込みの勝率のモデル(市場の見立てからのずれを学ぶ)。オッズのそろったレースだけで学習する。
+
+    能力のみのネットの年ごとの予想の列(nn_year.add_nn_year)がなければ、train から作る。
+    """
+    from .nn_year import add_nn_year
+
+    train = train_rows(add_nn_year(train)[has_market(train)])
+    feats = residual_features()
     cats = [c for c in CATEGORICAL if c in feats]
     ds = lgb.Dataset(train[feats], train["win"], categorical_feature=cats, init_score=market_logit(train),
                      free_raw_data=False)
@@ -67,8 +79,11 @@ def fit_residual(train: pd.DataFrame, rounds: int = RESIDUAL_ROUNDS) -> lgb.Boos
 
 
 def predict_residual(model: lgb.Booster, df: pd.DataFrame) -> np.ndarray:
-    """fit_residual のモデルの勝率(レース内で合計1にする前)。オッズのない馬は NaN。"""
-    z = model.predict(df[RESIDUAL_MODEL_FEATURES], raw_score=True) + market_logit(df)
+    """fit_residual のモデルの勝率(レース内で合計1にする前)。オッズのない馬は NaN。
+
+    df には nn_year.add_nn_year の列が要る(過去の結果とつないだ表で足してから、予想する行を取り出すこと)。
+    """
+    z = model.predict(df[residual_features()], raw_score=True) + market_logit(df)
     return 1.0 / (1.0 + np.exp(-z))
 
 
@@ -117,6 +132,9 @@ def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 3
     """
     if not use_market:
         return evaluate_nn(df, test_from)
+    from .nn_year import add_nn_year
+
+    df = add_nn_year(df)  # 年ごとのネットはその年より前だけで学ぶので、評価期間の結果は混ざらない
     cut = pd.Timestamp(test_from)
     train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
     if train.empty or test.empty:
