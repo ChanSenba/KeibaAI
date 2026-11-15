@@ -463,7 +463,9 @@ def load_other_runs(conn: sqlite3.Connection) -> pd.DataFrame | None:
 
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='other_runs'").fetchone():
         return None
-    return load_other_frame(conn)
+    from .diskcache import cached
+
+    return cached(conn, "other_runs", lambda: load_other_frame(conn))  # other_runs も model_revision で更新を検知する
 
 
 def features_from_db(conn: sqlite3.Connection) -> pd.DataFrame:
