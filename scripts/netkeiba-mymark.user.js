@@ -4,6 +4,8 @@
 // @version      0.1
 // @description  KeibaAI の「netkeiba で印を付ける」ボタンで開いた出馬表に、予想タブの印を入れる
 // @match        https://race.netkeiba.com/race/shutuba.html*
+// @updateURL    https://raw.githubusercontent.com/ChanSenba/KeibaAI/main/scripts/netkeiba-mymark.user.js
+// @downloadURL  https://raw.githubusercontent.com/ChanSenba/KeibaAI/main/scripts/netkeiba-mymark.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
