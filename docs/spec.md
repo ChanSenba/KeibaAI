@@ -37,6 +37,8 @@ JRA（中央競馬）の全レースについて、各馬の勝率を予測し�
 - 血統の番号は JRA-VAN の繁殖登録番号で、netkeiba の馬 ID とは別の体系。取り込むと netkeiba の番号の行は消す。netkeiba からの血統の取得（`keibaai pedigree`）は 2026-11-15 に削除
 - 確定成績は開催の翌週前半に出る（10/10〜12 の3日間開催ぶんは 10/13 13:39）。それまでは速報成績（`--rt-days`）で入れ、直近14日のレースは確定成績が出たら入れ替わる。速報は、確定成績が出ると過去の日のぶんが取れなくなる
 - 出馬表・オッズ・レース直後の成績と払戻も速報で取れることを 10/12 のレースで確かめた。出馬表と単勝オッズは `entries --source jv` で取れる（既定は netkeiba のまま。発走前のレースでの確認は 10/15 夕方以降）
+- セリ（競走馬市場）の取引価格は HOSN（HS レコード、1997年から収録）を `jv --what sales` で `sales` テーブルに取り込む（2026-11-15 追加）。キーは血統登録番号で results とそのまま結合できる。特徴量にはまだ使っていない（使うときは対象レースより前の取引だけにすること）
+- 買い方を出すときに取った全券種オッズは、取得時刻つきで `bet_odds_snapshots` に残す（2026-11-15 追加）。JV-Data の時系列オッズは単勝・複勝・枠連・馬連だけで、ワイド・馬単・三連系の発走前オッズはこのスナップショットが唯一の記録になる。ただし溜まるのは買い方を出したレースだけなので、検証に使うときは標本の偏りに注意する
 - **注意**：JV-Link を短い時間に何度も開き直すと、内部サービス（JVLinkAgent）が異常終了し、JVOpen が -303（利用キーが設定されていない）を返すようになる（10/13 に数秒で7回開閉して発生）。復旧は、PC の再起動か、JV-Link 設定を管理者として実行して起動する。対策として、続けて開くときは5秒あけている
 
 **netkeiba へのアクセス方針**（規約確認は 2026-10-11。自動取得そのものを禁じる条文は見当たらなかったが、私的利用を超える複製・公開（第14条）、営利目的（第15条）、サーバー運営への支障（第16条）は禁止）
@@ -220,7 +222,8 @@ Windows では `python -m venv .venv`、`.venv\Scripts\activate`、`pip install 
 | ★ `collect` | `--from` `--to`（YYYY-MM-DD） | 期間内のレース結果を取得して DB に保存。結果未掲載の日は飛ばす |
 | `reparse` | — | 保存済みページから DB（ラップを含む）を作り直す（通信なし） |
 | `train` | `--test-from` | 特徴量を作って学習し、1番人気基準・能力のみ・オッズありの3行を表示 |
-| `jv` | `--what`（training / races / pedigree）`--from`（YYYYMMDD）`--option`（4=最初の一括、1=差分）`--rt-days` `--replace` `--python32` `--import-only` | JRA-VAN（JV-Link）から調教タイム・成績・血統を取り込む。netkeiba へはアクセスしない |
+| `jv` | `--what`（training / races / pedigree / blood / odds / sales）`--from`（YYYYMMDD）`--option`（4=最初の一括、1=差分）`--rt-days` `--replace` `--python32` `--import-only` `--sales-from` | JRA-VAN（JV-Link）から調教タイム・成績・血統・セリ価格を取り込む。netkeiba へはアクセスしない |
+| `python -m keibaai.devig_trials` | `--test-from` `--test-to` | 市場の勝率の作り方（比例方式と Shin 方式）を、確定オッズと結果だけで比べる。本番の作り方はまだ比例方式 |
 | ★ `entries` | `--date` `--source`（netkeiba / jv）`--no-odds` `--python32` | 出馬表と単勝オッズを取得して保存。馬が0頭のレースは「保存済み」にしない。`--source jv` は JRA-VAN の速報から取り、netkeiba へはアクセスしない |
 | `predict` | `--date` | 各馬の勝率と期待値（印・★・要素別の勝率を含む）を表示 |
 | ★ `training` | `--limit` `--date` `--reparse` | 調教の評価を取得。`--date` は出馬表を取った日だけ取り直し、`--reparse` は保存済みページから読み直す |
