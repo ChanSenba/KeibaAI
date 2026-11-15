@@ -10,7 +10,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from keibaai import betting, db, factor_view, gui, past_races, progress
+from keibaai import betting, db, factor_view, gui, mymark, past_races, progress
 from keibaai import gui_help
 from keibaai.gui_help import TIPS
 from keibaai.cli import reparse_cache
@@ -700,6 +700,10 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
         st.html('<div class="kb-marks">' + "".join(
             f'<span class="kb-mark"><b>{m}</b>{n} {html.escape(str(h))}</span>'
             for m, n, h in zip(marked["mark"], marked["number"], marked["horse_name"])) + "</div>")
+        if not marked.empty:
+            st.link_button("netkeiba で印を付ける", mymark.mark_url(race_id, zip(marked["number"], marked["mark"])),
+                           help="netkeiba の出馬表を開き、この印をマイ印に入れる"
+                                "(ブラウザに scripts/netkeiba-mymark.user.js を入れておく)")
     points = factor_view.model_factor_points(one) if "mark" in one else pd.DataFrame(index=one.index)
     one = pd.concat([one, points], axis=1)
     # オッズ発売前は人気・オッズなどが None のまま(object 列)なので、数値にして空欄で見せる

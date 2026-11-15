@@ -196,6 +196,7 @@ schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "wscri
 - 取得 / 再解析：netkeiba からの取得、保存済みページからの DB の作り直し（通信なし）
 - 成績：予想の実際の的中・回収率（回顧した日の通算と日ごと）と、日曜の自動評価（直近1年）の結果。学習は予想のたびに自動で行うので、GUI で学習する操作はない
 - 予想 / 買い方 / ファクター / シミュレーション / 回顧：上の各節の画面版
+- 予想のレース詳細の「netkeiba で印を付ける」：netkeiba の出馬表を開き、予想の印をマイ印に入れる。ブラウザ拡張 Tampermonkey に `scripts/netkeiba-mymark.user.js` を入れておく（くわしくは docs/spec.md の 6 章）
 - ヘルプ：各ページの数字と表の見方。画面の ? や表の見出しにマウスを乗せると短い説明が出て、「くわしくはヘルプ」から該当の節が開く
 
 ## netkeiba 利用上の注意
