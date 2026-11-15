@@ -80,7 +80,12 @@ def parse_record(rec: str) -> tuple | None:
 def import_raw(conn: sqlite3.Connection, raw_dir: str | Path, chunk: int = 50_000) -> int:
     """raw_dir の *.txt(jvexport の出力)を読んで jv_training に入れる。入れた件数を返す。"""
     n = 0
-    sql = f"INSERT OR REPLACE INTO jv_training ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})"
+    # 同じ中身を入れ直しても DB の更新(model_revision)にしない。REPLACE だと消して入れ直すので、
+    # 出馬表を取るたびの取り直しで、保存した学習済みモデルや成績の読み込みが無駄に作り直しになる
+    keys = ("horse_id", "date", "time", "kind")
+    sql = (f"INSERT INTO jv_training ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))}) "
+           f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET "
+           + ",".join(f"{c} = excluded.{c}" for c in COLUMNS if c not in keys))
     for path in sorted(Path(raw_dir).glob("*.txt")):
         if path.stem in ("RACE", "DIFN"):  # 成績と馬のマスタは jvrace.py が読む
             continue

@@ -234,16 +234,19 @@ def _track_bias(df: pd.DataFrame) -> pd.DataFrame:
     done["_front"] = np.where(done["early_pos"].isna(), np.nan, (done["early_pos"] <= 1 / 3).astype(float))
     done["_inner"] = np.where(pos <= 1 / 3, 1.0, np.where(pos >= 2 / 3, 0.0, np.nan))
 
-    def diff(g: pd.DataFrame, col: str) -> float:
-        a, b = g.loc[g[col] == 1, "_top3"], g.loc[g[col] == 0, "_top3"]
-        return a.mean() - b.mean() if len(a) and len(b) else np.nan
-
     keys = ["venue", "course_type", "date"]
     if done.empty:
         return df[keys].drop_duplicates().assign(**{c: np.nan for c in BIAS_FEATURES})
-    day = done.groupby(keys, observed=True).apply(
-        lambda g: pd.Series({"track_front_bias": diff(g, "_front"), "track_inner_bias": diff(g, "_inner")}),
-        include_groups=False).reset_index()
+
+    # 日ごとに「印が1の馬の3着以内率 − 印が0の馬の率」(どちらかがいなければ NaN)。groupby.apply より桁違いに速い
+    def diff(col: str) -> pd.Series:
+        top3 = done["_top3"]
+        parts = pd.DataFrame({"a": top3.where(done[col] == 1), "b": top3.where(done[col] == 0)})
+        g = parts.groupby([done[k] for k in keys], observed=True)
+        s, n = g.sum(), g.count()
+        return (s["a"] / n["a"] - s["b"] / n["b"]).where((n["a"] > 0) & (n["b"] > 0))
+
+    day = pd.DataFrame({"track_front_bias": diff("_front"), "track_inner_bias": diff("_inner")}).reset_index()
     # まだ結果のない予測日も窓の評価対象にする。当日値は closed="left" で使わない。
     day = df[keys].drop_duplicates().merge(day, on=keys, how="left")
     out = []
@@ -264,13 +267,21 @@ def _course_flow(df: pd.DataFrame) -> pd.DataFrame:
     done = df[df["finish"].notna() & df["early_pos"].notna() & df["venue"].notna()].copy()
     done["_front"] = (done["early_pos"] <= 1 / 3)
     done["_top3"] = (done["finish"] <= 3).astype(float)
-    race = done.groupby(["race_id", *keys, "date"], observed=True).apply(
-        lambda g: pd.Series({
-            "pace_diff": pd.to_numeric(g["pace_first3f"], errors="coerce").iloc[0]
-            - pd.to_numeric(g["pace_last3f"], errors="coerce").iloc[0],
-            "front_edge": (g.loc[g["_front"], "_top3"].mean() - g.loc[~g["_front"], "_top3"].mean())
-            if g["_front"].any() and (~g["_front"]).any() else np.nan}),
-        include_groups=False).reset_index()
+    # レースごとのペース差(先頭の行の値)と先行有利度。groupby.apply より桁違いに速い
+    gkeys = ["race_id", *keys, "date"]
+    top3 = done["_top3"]
+    parts = pd.DataFrame({
+        "first": pd.to_numeric(done["pace_first3f"], errors="coerce").astype(float),
+        "last": pd.to_numeric(done["pace_last3f"], errors="coerce").astype(float),
+        "a": top3.where(done["_front"]), "b": top3.where(~done["_front"])})
+    g = parts.groupby([done[k] for k in gkeys], observed=True)
+    s, n = g[["a", "b"]].sum(), g[["a", "b"]].count()
+    first = (g.cumcount() == 0).to_numpy()  # 各レースの先頭の行(空欄も飛ばさない)
+    head = parts.loc[first, ["first", "last"]].set_axis(
+        pd.MultiIndex.from_frame(done.loc[first, gkeys]), axis=0).reindex(s.index)
+    race = pd.DataFrame({"pace_diff": head["first"] - head["last"],
+                         "front_edge": (s["a"] / n["a"] - s["b"] / n["b"]).where((n["a"] > 0) & (n["b"] > 0))}
+                        ).reset_index()
     cols = ["course_pace_diff_5", "course_front_edge_5"]
     if race.empty:
         for c in cols:
