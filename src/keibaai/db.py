@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE TABLE IF NOT EXISTS predictions (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, saved_at TEXT,
     date TEXT, venue TEXT, round INTEGER, race_name TEXT, horse_name TEXT, jockey TEXT,
-    win_odds REAL, popularity INTEGER, mark TEXT,
+    win_odds REAL, popularity INTEGER, mark TEXT, star TEXT,
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL, after_result INTEGER,
     PRIMARY KEY (race_id, number)
 );
@@ -175,9 +175,10 @@ _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("p
                   "odds_snapshots": [("source", "TEXT")],
                   "other_runs": [("name", "TEXT")],
                   # after_result=1: 結果が出たあとに保存した予想(確定オッズで後から出したもの)。
+                  # star: ★(オッズ込みモデルの印)。付け始める前の保存は NULL
                   # p_win_*: 要素ごとの勝率(全頭の回顧で、強かった要素・弱かった要素を出す)。
                   # factors_later=1: 要素の列だけ、保存後に予想し直した値から埋めた行
-                  "predictions": [("after_result", "INTEGER")] + [(c, "REAL") for c in (
+                  "predictions": [("after_result", "INTEGER"), ("star", "TEXT")] + [(c, "REAL") for c in (
                       "p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree",
                       "p_win_training")] + [("factors_later", "INTEGER")]}
 

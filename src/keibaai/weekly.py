@@ -20,7 +20,7 @@ from .marks import MARK_ORDER
 
 
 PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_name", "horse_name", "jockey",
-             "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result",
+             "win_odds", "popularity", "mark", "star", "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result",
              "p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree", "p_win_training"]
 
 
@@ -195,12 +195,14 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: boo
     races = pd.DataFrame(rows)
     # 能力のみの期待値は人気薄を高く見すぎて、全頭の半分が1を超える。オッズ込みがあればそちらで数える
     ev = h[h["ev_market"].fillna(h["ev_ability"]) >= 1]
+    star = h[h["star"] == "★"] if "star" in h else h.iloc[0:0]  # ★を保存し始める前の予想には列がない・NULL
     summary = {
         "races": len(races),
         "honmei_wins": int(races["honmei_win"].sum()) if len(races) else 0,
         "top3_hits": int(races["top3_hit"].sum()) if len(races) else 0,
         "honmei_roi": _roi(h[h["mark"] == "◎"], stake), "ev_bets": len(ev), "ev_wins": int(ev["win"].sum()),
         "ev_roi": _roi(ev, stake),
+        "star_bets": len(star), "star_wins": int(star["win"].sum()), "star_roi": _roi(star, stake),
         "flow_races": int(races["adv_hit"].notna().sum()) if "adv_hit" in races else 0,
         "flow_adv_hits": int((races["adv_hit"] == True).sum()) if "adv_hit" in races else 0,  # noqa: E712
         "flow_pace_races": int(races["pace_hit"].notna().sum()) if "pace_hit" in races else 0,
@@ -294,15 +296,17 @@ def horse_reviews(conn: sqlite3.Connection, h: pd.DataFrame, flows: dict, date: 
 
 def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
     """印ごとの頭数・1着・3着内と、勝率・連対率・3着内率(馬券内率)・単勝回収率。取消・除外(着順のない馬)は数えない。"""
-    rows = []
-    for m in MARK_ORDER:
-        g = h[(h["mark"] == m) & h["finish"].notna()]
-        if g.empty:
-            continue
+    def row(m: str, g: pd.DataFrame) -> dict:
         n, win, top3 = len(g), int((g["finish"] == 1).sum()), int(g["finish"].between(1, 3).sum())
-        rows.append({"mark": m, "n": n, "wins": win, "top3": top3, "win_rate": win / n,
-                     "top2_rate": float(g["finish"].between(1, 2).mean()), "top3_rate": top3 / n,
-                     "roi": _roi(g, 100) / 100})
+        return {"mark": m, "n": n, "wins": win, "top3": top3, "win_rate": win / n,
+                "top2_rate": float(g["finish"].between(1, 2).mean()), "top3_rate": top3 / n,
+                "roi": _roi(g, 100) / 100}
+
+    rows = [row(m, g) for m in MARK_ORDER if not (g := h[(h["mark"] == m) & h["finish"].notna()]).empty]
+    if "star" in h:  # ★は mark とは別の列。印ごとの成績にも並べて出す(保存し始める前の予想にはない)
+        g = h[(h["star"] == "★") & h["finish"].notna()]
+        if not g.empty:
+            rows.append(row("★", g))
     return pd.DataFrame(rows, columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi"])
 
 
@@ -345,7 +349,8 @@ def render_markdown(r: Review) -> str:
            f"- ◎が1着: {s['honmei_wins']}レース" + (f"({s['honmei_wins'] / s['races']:.0%})" if s["races"] else "")
            + f" / ◎の単勝回収率 {_pct(s['honmei_roi'])}",
            f"- ◎○▲のうち3着以内に入った頭数(のべ): {s['top3_hits']}(最大 {3 * s['races']})",
-           f"- 期待値≧1 の馬: {s['ev_bets']}頭を買って{s['ev_wins']}頭が勝ち、単勝回収率 {_pct(s['ev_roi'])}", "",
+           f"- 期待値≧1 の馬: {s['ev_bets']}頭を買って{s['ev_wins']}頭が勝ち、単勝回収率 {_pct(s['ev_roi'])}",
+           f"- ★の馬: {s['star_bets']}頭を買って{s['star_wins']}頭が勝ち、単勝回収率 {_pct(s['star_roi'])}", "",
            "回収率は確定オッズで計算。予想は発走前に保存したものです。", ""]
     if s["flow_races"]:
         out[-2:-2] = [f"- 展開の予想: 前後の有利不利が{s['flow_adv_hits']}/{s['flow_races']}レース的中"
@@ -449,7 +454,8 @@ def live_trend(conn: sqlite3.Connection) -> pd.DataFrame:
         if s["races"]:
             rows.append({"日付": d, "レース数": s["races"], "◎1着": s["honmei_wins"],
                          "◎単勝回収率(%)": s["honmei_roi"], "期待値≧1の頭数": s["ev_bets"],
-                         "期待値≧1の回収率(%)": s["ev_roi"]})
+                         "期待値≧1の回収率(%)": s["ev_roi"], "★の頭数": s["star_bets"],
+                         "★単勝回収率(%)": s["star_roi"]})
     return pd.DataFrame(rows)
 
 

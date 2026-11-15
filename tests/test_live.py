@@ -40,6 +40,24 @@ def test_clv_positive_when_market_moves_toward_pick(tmp_path):
     assert table.loc[table["対象"] == "◎", "平均CLV(/1000)"].iloc[0] > 0
 
 
+def test_clv_includes_star_group_when_star_saved(tmp_path):
+    conn = _db(tmp_path)
+    with conn:
+        conn.execute("UPDATE predictions SET star = '★' WHERE number = 2")
+    table = clv_table(conn)
+    star = table[table["対象"] == "★"]
+    assert len(star) == 1 and star.iloc[0]["頭数"] == 1
+    # 2番は保存時4.0倍→確定4.0倍。保存時と確定の市場確率の比が CLV
+    saved = np.array([1 / 2.0, 1 / 4.0, 1 / 8.0])
+    final = np.array([1 / 1.6, 1 / 4.0, 1 / 8.0])
+    assert star.iloc[0]["平均CLV(/1000)"] == pytest.approx(round(np.log((final / final.sum())[1] / (saved / saved.sum())[1]) * 1000, 1))
+
+
+def test_clv_has_no_star_group_when_star_not_saved(tmp_path):
+    table = clv_table(_db(tmp_path))  # star は NULL のまま
+    assert "★" not in set(table["対象"])
+
+
 def test_clv_excludes_after_result_and_late_saves(tmp_path):
     assert race_clv(_db(tmp_path, after_result=1)).empty
     assert race_clv(_db(tmp_path, saved_at="2026-11-16T09:00:00")).empty  # 翌日の保存

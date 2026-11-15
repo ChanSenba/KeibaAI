@@ -11,7 +11,8 @@ CLV (Closing Line Value) は結果を見ずに測れる先行指標で、数百�
 
 注意: 「期待値≧1」の対象は、保存時点のオッズで計算した期待値で選んでいる。その時点のオッズが
 高すぎた馬が選ばれやすく、早い時刻のオッズは確定に向けて平均へ戻るため、予想に情報がなくても
-この対象の CLV はプラスに寄る。◎(能力のみの勝率で付ける印)はその偏りが小さいので、主にこちらを見る。
+この対象の CLV はプラスに寄る。★もオッズ込みの期待値で選ぶので同じ偏りがある。
+◎(能力のみの勝率で付ける印)はその偏りが小さいので、主にこちらを見る。
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import pandas as pd
 
 from .devig import proportional
 
-GROUPS = ("◎", "期待値≧1", "1番人気", "全馬")
+GROUPS = ("◎", "★", "期待値≧1", "1番人気", "全馬")
 
 
 def _is_late(saved_at: str, date: str, start_time: str | None) -> bool:
@@ -41,13 +42,13 @@ def _is_late(saved_at: str, date: str, start_time: str | None) -> bool:
 def race_clv(conn: sqlite3.Connection) -> pd.DataFrame:
     """発走前に保存した予想の、レース×対象ごとの CLV。列は date, race_id, 対象, n, clv(対象馬の平均)。
 
-    対象は ◎(mark)と、期待値≧1(ev_market、なければ ev_ability)の馬。比べる基準として、
+    対象は ◎(mark)と ★(star。保存し始める前の予想にはない)、期待値≧1(ev_market、なければ ev_ability)の馬。比べる基準として、
     保存時点で1番人気だった馬と、全馬の平均も出す。
     結果のあとに保存した予想(after_result=1 と、保存時刻が発走を過ぎたもの)は除く。
     市場の勝率は、保存時点・確定のどちらも「両方にオッズのある馬」だけで正規化する(取消馬などの扱いを揃える)。
     """
     pred = pd.read_sql_query(
-        "SELECT race_id, number, date, saved_at, win_odds, mark, ev_market, ev_ability, after_result FROM predictions", conn)
+        "SELECT race_id, number, date, saved_at, win_odds, mark, star, ev_market, ev_ability, after_result FROM predictions", conn)
     if pred.empty:
         return pd.DataFrame(columns=["date", "race_id", "対象", "n", "clv"])
     final = pd.read_sql_query(
@@ -74,7 +75,7 @@ def race_clv(conn: sqlite3.Connection) -> pd.DataFrame:
         ev = g["ev_market"].fillna(g["ev_ability"])
         # 基準の行(1番人気・全馬)も一緒に出す。人気馬は締め切りに向けてオッズが下がりやすいので、
         # ◎の CLV は単体でなく、基準との差で読む(基準より上なら、人気という理由だけでは説明できない)
-        for name, mask in (("◎", g["mark"] == "◎"), ("期待値≧1", ev >= 1),
+        for name, mask in (("◎", g["mark"] == "◎"), ("★", g["star"] == "★"), ("期待値≧1", ev >= 1),
                            ("1番人気", odds == odds.min()), ("全馬", pd.Series(True, index=g.index))):
             if mask.any():
                 rows.append({"date": first["date"], "race_id": race_id, "対象": name,

@@ -85,6 +85,66 @@ def test_review_matches_predictions_with_results():
     assert "2025-03-01 回顧" in md and "勝ち馬は馬3(予想3位" in md
 
 
+def star_table(race_id="202505010101", date="2025-03-01"):
+    t = pred_table(race_id, date)
+    t["p_win_market"] = [0.3, 0.25, 0.2, 0.15, 0.1]
+    t["ev_market"] = [1.2, 0.9, 0.8, 0.7, 0.6]  # ★の基準(期待値1.1以上・勝率0.03以上・30倍以下)を満たすのは1番だけ
+    return t
+
+
+def test_star_is_saved_and_measured():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, star_table(), dt.datetime(2025, 2, 28, 20))
+    saved = conn.execute("SELECT number, star FROM predictions ORDER BY number").fetchall()
+    assert saved[0] == (1, "★") and all(s == "" for _, s in saved[1:])
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])  # ★の1番が勝ち(確定2.0倍)
+    r = weekly.review_day(conn, "2025-03-01")
+    assert r.summary["star_bets"] == 1 and r.summary["star_wins"] == 1 and r.summary["star_roi"] == 200.0
+    assert r.marks.set_index("mark").loc["★", "n"] == 1  # 印ごとの成績にも ★ の行が出る
+    trend = weekly.live_trend(conn)
+    assert trend.iloc[0]["★の頭数"] == 1 and trend.iloc[0]["★単勝回収率(%)"] == 200.0
+
+
+def test_star_null_old_saves_and_missing_column():
+    from keibaai import gui
+
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, star_table(), dt.datetime(2025, 2, 28, 20))
+    with conn:
+        conn.execute("UPDATE predictions SET star = NULL")  # ★を付け始める前の保存
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    r = weekly.review_day(conn, "2025-03-01")
+    assert r.summary["star_bets"] == 0 and r.summary["star_wins"] == 0
+    assert r.summary["star_roi"] != r.summary["star_roi"]  # NaN
+    assert "★" not in set(r.marks["mark"])  # 印ごとの成績にも ★ の行は出ない
+    trend = weekly.live_trend(conn)
+    assert trend.iloc[0]["★の頭数"] == 0
+    # star 列のない入力でも ★ の行は出ない
+    t = weekly.add_marks(pred_table())
+    t["finish"] = [1, 2, 3, 4, 5]
+    t["win"] = t["finish"] == 1
+    t["odds"] = t["win_odds"]
+    assert "★" not in set(weekly.mark_stats(t.drop(columns=["star"]))["mark"])
+    # ★の列がない旧形式の推移でも、通算は 0 頭・回収率 NaN になる
+    old = pd.DataFrame([{"日付": "2025-03-01", "レース数": 1, "◎1着": 1, "◎単勝回収率(%)": 200.0,
+                         "期待値≧1の頭数": 1, "期待値≧1の回収率(%)": 200.0}])
+    totals = gui.live_totals(old)
+    assert totals["star_bets"] == 0 and totals["star_roi"] != totals["star_roi"]
+
+
+def test_star_column_is_added_to_existing_db(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE predictions (race_id TEXT NOT NULL, number INTEGER NOT NULL, mark TEXT, "
+                "PRIMARY KEY (race_id, number))")
+    raw.commit()
+    raw.close()
+    conn = db.connect(path)  # 接続時に、足りない列が足される
+    assert "star" in {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+
+
 def test_unreviewed_dates_and_upcoming_weekend(tmp_path):
     conn = db.connect(":memory:")
     weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
