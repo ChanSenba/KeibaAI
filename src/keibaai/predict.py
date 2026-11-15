@@ -216,15 +216,32 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
     return _cached(conn, "predict", date, True, (rounds,), lambda: _predict_day(conn, date, rounds)).copy()
 
 
+def models_for_day(conn: sqlite3.Connection, date: str, train: pd.DataFrame) -> dict:
+    """date の予想に使う学習済みのモデル(能力のみのニューラルネットと、オッズ込みの LightGBM)。
+
+    学習は date より前の結果だけで決まり、その日の出馬表やオッズには左右されないので、保存して使い回す。
+    出馬表・オッズ・馬体重を取り直したときは、学習し直さずに予想だけ出し直す(成績を足すと学習し直す)。
+    train は day_frame の結果のある行。
+    """
+    def compute():
+        from .nn_model import fit_models
+
+        return {"nn": fit_models(train), "residual": fit_residual(train)}
+
+    return _cached(conn, "models", date, False, (), compute)
+
+
 def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFrame:
-    from .nn_model import fit_predict
+    from .nn_model import predict_models
 
     df, hist = day_frame(conn, date)
     train, target = df[result_mask(df)], df[df["is_entry"]].copy()
 
-    p_ability, parts = fit_predict(train, target)  # 能力のみの勝率と、要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場…)
+    models = models_for_day(conn, date, train)
+    # 能力のみの勝率と、要素ごとの勝率(馬の質・騎手と厩舎・展開と馬場…)
+    p_ability, parts = predict_models(models["nn"], train, target)
     target["p_win_ability"] = p_ability
-    target["p_win_market"] = np.where(has_market(target), predict_residual(fit_residual(train), target), np.nan)
+    target["p_win_market"] = np.where(has_market(target), predict_residual(models["residual"], target), np.nan)
     ok = target["p_win_market"].notna()
     target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())
     target["ev_ability"] = target["p_win_ability"] * target["win_odds"]

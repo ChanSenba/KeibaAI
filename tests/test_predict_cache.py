@@ -38,9 +38,22 @@ def test_predict_day_is_reused_until_the_card_changes(tmp_path, monkeypatch):
     conn.execute("UPDATE entries SET win_odds = win_odds + 1 WHERE number = 1")  # オッズを取り直した
     conn.commit()
     changed = predict.predict_day(conn, DAY)
-    assert len(fits) > n  # 中身が変わったので計算し直す
+    assert len(fits) == n  # 予想は出し直すが、学習は出馬表やオッズに左右されないので保存したモデルを使う
     assert not changed["win_odds"].equals(first["win_odds"])
+    pd.testing.assert_series_equal(changed["p_win_ability"], first["p_win_ability"])  # 能力のみの勝率はオッズで変わらない
+    assert len(list((tmp_path / predict.CACHE_DIR).glob("models-*.pkl"))) == 1
     assert len(list((tmp_path / predict.CACHE_DIR).glob("predict-*.pkl"))) == 1  # 古い保存は消える
+
+
+def test_models_are_retrained_when_results_change(tmp_path, monkeypatch):
+    conn = disk_db(tmp_path)
+    fits = count_fits(monkeypatch)
+    predict.predict_day(conn, DAY)
+    n = len(fits)
+    conn.execute("UPDATE results SET finish = finish + 1 WHERE rowid = (SELECT MAX(rowid) FROM results)")  # 成績が変わった
+    conn.commit()
+    predict.predict_day(conn, DAY)
+    assert len(fits) == n + 1
 
 
 def test_fetch_time_alone_does_not_recompute(tmp_path, monkeypatch):

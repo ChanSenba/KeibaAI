@@ -206,22 +206,30 @@ def _pl_loss(z, F, M):
     return loss
 
 
-def fit_predict(train: pd.DataFrame, target: pd.DataFrame, seed: int = 0,
-                n_seeds: int | None = None) -> tuple[pd.Series, pd.DataFrame]:
-    """train(結果のある行)で学び、target の各馬の勝率(レース内で合計1)と、要素ごとの勝率の表を返す。
-
-    乱数を変えて n_seeds 回(既定 N_SEEDS)学び、勝率は対数で平均してレース内で合計1にする(要素ごとの勝率も同じ)。
-    1回だけだと、乱数しだいで印が入れ替わる(2025〜2026年の約6,400レースで、勝ち馬の対数尤度が乱数で ±0.004 ほど動く)。
-    学習は TRAIN_FROM 以後のレース。最後の1割のレースで成績を見て、良くならなくなったら止める。
-    馬体重は、学習の行の BODY_WEIGHT_MASK_RATE の割合で空にする(朝の予想では馬体重が出ていないため)。
-    """
-    assert train.index.is_unique and target.index.is_unique and not target.index.isin(train.index).any(), \
-        "train と target の行の番号は重ならないこと(過去走を行の番号で引くため)"
-    cols = [c for c in PAST_RUN_COLUMNS if c in train or c in target]
-    both = pd.concat([train[[c for c in cols if c in train]], target[[c for c in cols if c in target]]])
+def _past(train: pd.DataFrame, target: pd.DataFrame | None = None) -> dict:
+    """train(と target)の各行の直近の走り(past_runs)と、行の番号 → 位置の対応。"""
+    frames = [train] if target is None else [train, target]
+    cols = [c for c in PAST_RUN_COLUMNS if any(c in f for f in frames)]
+    both = pd.concat([f[[c for c in cols if c in f]] for f in frames])
     pv, pm = past_runs(both)
-    past = {"X": pv, "M": pm, "pos": pd.Series(np.arange(len(both)), index=both.index)}
-    runs = [_fit_predict_one(train, target, seed + k, past) for k in range(n_seeds or N_SEEDS)]
+    return {"X": pv, "M": pm, "pos": pd.Series(np.arange(len(both)), index=both.index)}
+
+
+def fit_models(train: pd.DataFrame, seed: int = 0, n_seeds: int | None = None, past: dict | None = None) -> list[dict]:
+    """train(結果のある行)で、乱数を変えて n_seeds 回(既定 N_SEEDS)学んだ網。predict_models で勝率にする。
+
+    学んだ網は train だけで決まる(予想する出馬表には左右されない)ので、保存して出馬表やオッズを取り直したときに使い回せる。
+    """
+    past = past if past is not None else _past(train)
+    return [_fit_one(train, seed + k, past) for k in range(n_seeds or N_SEEDS)]
+
+
+def predict_models(models: list[dict], train: pd.DataFrame, target: pd.DataFrame,
+                   past: dict | None = None) -> tuple[pd.Series, pd.DataFrame]:
+    """fit_models の網で、target の各馬の勝率(レース内で合計1)と要素ごとの勝率を出す。train は過去走を引くための行。"""
+    assert train.index.is_unique and target.index.is_unique and not target.index.isin(train.index).any(),         "train と target の行の番号は重ならないこと(過去走を行の番号で引くため)"
+    past = past if past is not None else _past(train, target)
+    runs = [_predict_one(m, target, past) for m in models]
     if len(runs) == 1:
         return runs[0]
     race = target["race_id"]
@@ -236,15 +244,26 @@ def fit_predict(train: pd.DataFrame, target: pd.DataFrame, seed: int = 0,
     return p_win, parts
 
 
-def _fit_predict_one(train: pd.DataFrame, target: pd.DataFrame, seed: int,
-                     past: dict | None = None) -> tuple[pd.Series, pd.DataFrame]:
-    """fit_predict の1回ぶん。past は past_runs の結果(行の位置つき)。なければ過去走の塔を使わない。"""
+def fit_predict(train: pd.DataFrame, target: pd.DataFrame, seed: int = 0,
+                n_seeds: int | None = None) -> tuple[pd.Series, pd.DataFrame]:
+    """train(結果のある行)で学び、target の各馬の勝率(レース内で合計1)と、要素ごとの勝率の表を返す。
+
+    乱数を変えて n_seeds 回(既定 N_SEEDS)学び、勝率は対数で平均してレース内で合計1にする(要素ごとの勝率も同じ)。
+    1回だけだと、乱数しだいで印が入れ替わる(2025〜2026年の約6,400レースで、勝ち馬の対数尤度が乱数で ±0.004 ほど動く)。
+    学習は TRAIN_FROM 以後のレース。最後の1割のレースで成績を見て、良くならなくなったら止める。
+    馬体重は、学習の行の BODY_WEIGHT_MASK_RATE の割合で空にする(朝の予想では馬体重が出ていないため)。
+    """
+    assert train.index.is_unique and target.index.is_unique and not target.index.isin(train.index).any(),         "train と target の行の番号は重ならないこと(過去走を行の番号で引くため)"
+    past = _past(train, target)
+    return predict_models(fit_models(train, seed, n_seeds, past), train, target, past)
+
+
+def _fit_one(train: pd.DataFrame, seed: int, past: dict | None = None) -> dict:
+    """fit_models の1回ぶん。past は past_runs の結果(行の位置つき)。なければ過去走の塔を使わない。"""
     import torch
 
     torch.manual_seed(seed)
     tr = train[train["date"] >= pd.Timestamp(TRAIN_FROM)].sort_values(["date", "race_id", "number"])
-    order = target.index
-    target = target.sort_values(["race_id", "number"])
     races = tr["race_id"].unique()
     n_val = len(races) // 10
     fit_r, val_r = (races[:-n_val], races[-n_val:]) if n_val else (races, races[:0])
@@ -257,12 +276,7 @@ def _fit_predict_one(train: pd.DataFrame, target: pd.DataFrame, seed: int,
         scale = (valid.mean(0), np.maximum(valid.std(0), 1e-2)) if len(valid) else None  # ほぼ一定の列を大きくしすぎない
 
     def pack(d: pd.DataFrame):
-        if scale is None:
-            return _pack(d, *prep.transform(d))
-        at = past["pos"][d.index].to_numpy()
-        pm = past["M"][at]
-        pv = np.where(pm[..., None], (past["X"][at] - scale[0]) / scale[1], 0.0).astype(np.float32)
-        return _pack(d, *prep.transform(d), past=(pv, pm))
+        return _pack_with(d, prep, scale, past)
 
     net = _net(groups, [len(prep.levels[c]) for c in CATS], past["X"].shape[-1] if scale is not None else 0)
     D = pack(fit)
@@ -304,7 +318,33 @@ def _fit_predict_one(train: pd.DataFrame, target: pd.DataFrame, seed: int,
                 break
     if best_state is not None:
         net.load_state_dict(best_state)
-    T = pack(target)
+    return {"state": {k: v.clone() for k, v in net.state_dict().items()}, "prep": prep, "scale": scale,
+            "n_past": past["X"].shape[-1] if scale is not None else 0}
+
+
+def _pack_with(d: pd.DataFrame, prep: _Prep, scale, past: dict | None):
+    if scale is None:
+        return _pack(d, *prep.transform(d))
+    at = past["pos"][d.index].to_numpy()
+    pm = past["M"][at]
+    pv = np.where(pm[..., None], (past["X"][at] - scale[0]) / scale[1], 0.0).astype(np.float32)
+    return _pack(d, *prep.transform(d), past=(pv, pm))
+
+
+def _predict_one(model: dict, target: pd.DataFrame, past: dict | None) -> tuple[pd.Series, pd.DataFrame]:
+    """_fit_one で学んだ網で、target の勝率と要素ごとの勝率を出す。"""
+    import torch
+
+    prep, scale = model["prep"], model["scale"]
+    groups = _groups()
+    net = _net(groups, [len(prep.levels[c]) for c in CATS], model["n_past"])
+    net.load_state_dict(model["state"])
+    order = target.index
+    target = target.sort_values(["race_id", "number"])
+    T = _pack_with(target, prep, scale, past)
+
+    def score(B: dict):
+        return net(B["X"], B["C"], B["M"], *((B["P"], B["PM"]) if "P" in B else ()))
     net.eval()
     with torch.no_grad():
         s = score(T)
