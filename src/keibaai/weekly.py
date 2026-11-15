@@ -465,6 +465,13 @@ def write_evaluation(conn: sqlite3.Connection, today: dt.date, evals_dir: str | 
         out.append("回顧できた日はまだありません。")
     else:
         out.append(trend.to_markdown(index=False, floatfmt=".0f") if _has_tabulate() else trend.to_string(index=False))
+    from .live import clv_table
+    clv = clv_table(conn)
+    out += ["", "## CLV(保存時点 → 確定の市場の動き。プラスはオッズが下がった側。◎は1番人気・全馬の基準との差で読む)", ""]
+    if clv.empty:
+        out.append("発走前に保存し、確定オッズと比べられる予想はまだありません。")
+    else:
+        out.append(clv.to_markdown(index=False) if _has_tabulate() else clv.to_string(index=False))
     path = evals_dir / f"{today.isoformat()}.md"
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
     return path
