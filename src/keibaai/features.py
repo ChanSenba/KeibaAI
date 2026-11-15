@@ -145,6 +145,17 @@ BIAS_WINDOW = "10D"
 
 
 def load_results(conn: sqlite3.Connection) -> pd.DataFrame:
+    """確定した出走の表(調教タイムの特徴量つき)。
+
+    読み込みに1分ほどかかるので、DB の隣の model_cache に保存し、学習に使う表(model_revision)と
+    コードが同じなら次からはそれを返す。メモリ上の DB や更新検知のない DB では保存しない。
+    """
+    from .diskcache import cached
+
+    return cached(conn, "results", lambda: _load_results(conn))
+
+
+def _load_results(conn: sqlite3.Connection) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
         SELECT r.*, c.name AS race_name, c.date, c.venue, c.round, c.course_type, c.direction, c.course, c.distance,

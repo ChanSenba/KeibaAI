@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -127,10 +127,15 @@ def parse_oikiri(html: str, race_id: str) -> list[TrainingRun]:
 
 def save_training(conn: sqlite3.Connection, race_id: str, runs: list[TrainingRun]) -> None:
     """1レースぶんを置き換えて保存する。runs が空でも「読んだ」印は残す(表のないレースを取り直さないため)。"""
+    cols = [f.name for f in fields(TrainingRun)]
+    have = conn.execute(f"SELECT {','.join(cols)} FROM training WHERE race_id = ? ORDER BY number, seq",
+                        (race_id,)).fetchall()
+    new = sorted((tuple(getattr(r, c) for c in cols) for r in runs), key=lambda t: (t[1], t[2]))
     with conn:
-        conn.execute("DELETE FROM training WHERE race_id = ?", (race_id,))
-        for r in runs:
-            db._upsert(conn, "training", TrainingRun, r)
+        if have != new:  # 同じ中身なら書き直さない(DB の更新にすると、保存した学習済みモデルが作り直しになる)
+            conn.execute("DELETE FROM training WHERE race_id = ?", (race_id,))
+            for r in runs:
+                db._upsert(conn, "training", TrainingRun, r)
         conn.execute("INSERT OR REPLACE INTO training_fetched VALUES (?, ?, ?)",
                      (race_id, len({r.number for r in runs}), dt.datetime.now().isoformat(timespec="seconds")))
 

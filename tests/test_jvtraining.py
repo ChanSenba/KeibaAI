@@ -41,6 +41,19 @@ def test_import_raw_is_idempotent(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM jv_training").fetchone()[0] == 2
 
 
+def test_reimporting_the_same_rows_does_not_bump_the_revision(tmp_path):
+    (tmp_path / "SLOP.txt").write_text(f"a.jvd	{HC}", encoding="utf-8")
+    conn = db.connect(":memory:")
+    import_raw(conn, tmp_path)
+    rev = db.model_revision(conn)
+    import_raw(conn, tmp_path)  # 出馬表を取るたびの取り直し。中身が同じなら保存した学習済みモデルを捨てない
+    assert db.model_revision(conn) == rev
+    (tmp_path / "SLOP.txt").write_text(f"a.jvd	{HC.replace('0649', '0648')}", encoding="utf-8")
+    import_raw(conn, tmp_path)
+    assert db.model_revision(conn) != rev
+    assert conn.execute("SELECT f4 FROM jv_training").fetchone()[0] == 64.8
+
+
 def _train(conn, rows):
     conn.executemany("INSERT INTO jv_training (horse_id, date, time, kind, f4, l1) VALUES (?,?,?,?,?,?)", rows)
 

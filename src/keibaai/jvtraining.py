@@ -172,6 +172,14 @@ def add_day_relative(tr: pd.DataFrame, min_workouts: int = DAY_MIN_WORKOUTS) -> 
     return tr
 
 
+def _training_frames(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+    """jv_training の全件と、速い追い切りの印、速い追い切りに基準との差を足した表。DB の全件を読むので時間がかかる。"""
+    every = pd.read_sql_query("SELECT horse_id, date, time, kind, center, course, f4, f3, f2, l1 FROM jv_training", conn)
+    every["date"] = pd.to_datetime(every["date"])
+    fast = every["f4"].notna() & (every["f4"] <= every["kind"].map(FAST_F4))
+    return every, fast, add_day_relative(add_course_relative(every[fast]))
+
+
 def add_jv_features(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
     """出走の表(horse_id と date の列がある)に、レース前の調教タイムの特徴量(JV_FEATURES)を足す。
 
@@ -186,10 +194,9 @@ def add_jv_features(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
     n = conn.execute("SELECT COUNT(*) FROM jv_training").fetchone()[0]
     if not n or df.empty:
         return df
-    every = pd.read_sql_query("SELECT horse_id, date, time, kind, center, course, f4, f3, f2, l1 FROM jv_training", conn)
-    every["date"] = pd.to_datetime(every["date"])
-    fast = every["f4"].notna() & (every["f4"] <= every["kind"].map(FAST_F4))
-    tr = add_day_relative(add_course_relative(every[fast]))
+    from .diskcache import cached
+
+    every, fast, tr = cached(conn, "jv_training", lambda: _training_frames(conn))
     horses = set(df["horse_id"].dropna())
     tr = tr[tr["horse_id"].isin(horses)].sort_values(["date", "time"])
     keys = df[["horse_id"]].assign(day=pd.to_datetime(df["date"])).drop_duplicates()
