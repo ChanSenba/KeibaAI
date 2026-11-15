@@ -7,7 +7,6 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 import sys
-from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -85,19 +84,47 @@ def collect(conn, fetcher, start: dt.date, end: dt.date, on_day=None) -> int:
     return total
 
 
-def train_reports(conn: sqlite3.Connection, test_from: str) -> pd.DataFrame:
-    """CLI の train と同じ3行(基準・オッズなし・オッズあり)を表にして返す。"""
-    from .features import features_from_db
-    from .model import baseline_market, evaluate
+REPORT_COLUMNS = {"name": "モデル", "n_races": "レース数", "win_logloss": "勝LogLoss", "win_auc": "勝AUC",
+                  "top3_auc": "複AUC", "top1_hit_rate": "1番手的中", "top1_roi": "単勝回収率(%)"}
 
-    df = features_from_db(conn)
-    r_abil, test = evaluate(df, test_from, use_market=False)
-    r_mkt, _ = evaluate(df, test_from, use_market=True)
-    rows = [asdict(r) for r in (baseline_market(test), r_abil, r_mkt)]
-    return pd.DataFrame(rows).rename(columns={
-        "name": "モデル", "n_races": "レース数", "win_logloss": "勝LogLoss", "win_auc": "勝AUC",
-        "top3_auc": "複AUC", "top1_hit_rate": "1番手的中", "top1_roi": "単勝回収率(%)",
-    })
+
+def load_evals(evals_dir: str | Path) -> list[dict]:
+    """日曜の評価(weekly.write_evaluation の <日付>.json)を新しい順に。各要素は date・test_from・report(表)。"""
+    import json
+
+    out = []
+    for f in sorted(Path(evals_dir).glob("*.json"), reverse=True):
+        try:
+            e = json.loads(f.read_text(encoding="utf-8"))
+            out.append({"date": e["date"], "test_from": e["test_from"],
+                        "report": pd.DataFrame(e["reports"]).rename(columns=REPORT_COLUMNS)})
+        except (ValueError, KeyError):  # 書きかけ・壊れたファイルは飛ばす
+            continue
+    return out
+
+
+def eval_history(evals: list[dict]) -> pd.DataFrame:
+    """日曜の評価の週ごとの推移(古い順): 日付と、モデルごとの勝LogLoss・勝AUC・単勝回収率。"""
+    rows = []
+    for e in evals:
+        for _, r in e["report"].iterrows():
+            rows.append({"日付": e["date"], "モデル": r["モデル"], "勝LogLoss": r["勝LogLoss"], "勝AUC": r["勝AUC"],
+                         "単勝回収率(%)": r["単勝回収率(%)"]})
+    return pd.DataFrame(rows).sort_values("日付").reset_index(drop=True) if rows else pd.DataFrame()
+
+
+def live_totals(trend: pd.DataFrame) -> dict:
+    """実運用の推移(weekly.live_trend)の通算。回収率は、日ごとの回収率を買った数(◎はレース数)で重み付けて合わせる。"""
+    if trend.empty:
+        return {"days": 0, "races": 0, "honmei_wins": 0, "honmei_roi": float("nan"), "ev_bets": 0, "ev_roi": float("nan")}
+
+    def wavg(col: str, w: pd.Series) -> float:
+        ok = trend[col].notna() & (w > 0)
+        return float((trend.loc[ok, col] * w[ok]).sum() / w[ok].sum()) if ok.any() else float("nan")
+
+    return {"days": len(trend), "races": int(trend["レース数"].sum()), "honmei_wins": int(trend["◎1着"].sum()),
+            "honmei_roi": wavg("◎単勝回収率(%)", trend["レース数"]), "ev_bets": int(trend["期待値≧1の頭数"].sum()),
+            "ev_roi": wavg("期待値≧1の回収率(%)", trend["期待値≧1の頭数"])}
 
 
 def next_race_day(today: dt.date) -> dt.date:

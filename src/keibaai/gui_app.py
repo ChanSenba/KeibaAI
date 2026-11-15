@@ -292,11 +292,11 @@ def page_reparse() -> None:
                           state="complete", expanded=bad > 0)
 
 
-# ---------------------------------------------------------------- 学習・評価
+# ---------------------------------------------------------------- 成績
 MODEL_NOTES = {
     "基準": "オッズだけで予測。的中・回収率は毎回1番人気を単勝で買った場合",
-    "オッズなし": "馬・騎手・調教師の過去成績とレース条件だけで予測",
-    "オッズあり": "上の情報に単勝オッズ・人気を加えて予測",
+    "オッズなし": "予想の ◎○▲ と同じニューラルネット。過去成績・血統・調教・条件だけで、オッズは見ない",
+    "オッズあり": "予想の期待値と同じ、オッズからのずれを学ぶモデル",
 }
 
 
@@ -304,38 +304,52 @@ def _note(name: str) -> str:
     return next((v for k, v in MODEL_NOTES.items() if name.startswith(k)), "")
 
 
-def page_train() -> None:
-    header("Model", "学習・評価", "評価開始日より前のレースで学習し、それ以後のレースで成績を確かめます。")
-    conn = connection()
-    first, last = gui.date_bounds(conn)
-    if first is None:
-        with st.container(border=True):
-            st.markdown("#### まだデータがありません")
-            st.page_link(PAGES["collect"], label="取得へ", icon=":material/arrow_forward:")
-        return
+def _stats_html(stats: list[tuple[str, str]]) -> str:
+    return '<div class="kb-stats">' + "".join(
+        f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>"
 
-    with st.container(border=True):
-        c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
-        earliest, default = gui.eval_start_bounds(first, last)
-        train_start = gui.train_start(first, last)
-        test_from = c1.date_input("評価開始日", default, min_value=earliest, max_value=last, format="YYYY/MM/DD",
-                                  help=f"取得済み期間は {first:%Y/%m/%d} – {last:%Y/%m/%d} です。"
-                                       f"学習に使うのは {train_start:%Y/%m/%d} 以後のレースで、評価開始日より前に"
-                                       f"学習用のレースが要るので、選べるのは {earliest:%Y/%m/%d} – {last:%Y/%m/%d} です")
-        run = c2.button("学習して評価", type="primary", icon=":material/model_training:", width="stretch")
-    if run:
-        try:
-            with st.spinner("学習しています(データ量によって数分かかります)"):
-                st.session_state["report"] = (test_from, gui.train_reports(conn, test_from.isoformat()))
-        except ValueError as e:
-            st.error(f"{test_from:%Y/%m/%d} では学習できませんでした: {e}。"
-                     f"{earliest:%Y/%m/%d} から {last:%Y/%m/%d} の間の日付を選んでください。")
 
-    if "report" not in st.session_state:
+def _db_stamp(path: str) -> float:
+    """DB(と WAL)の更新時刻。結果や予想が増えたら、成績を計算し直すためのキー。"""
+    return max((f.stat().st_mtime for f in (Path(path), Path(path + "-wal")) if f.exists()), default=0.0)
+
+
+@st.cache_data(show_spinner="成績を集計しています")
+def _live_trend(path: str, stamp: float) -> pd.DataFrame:
+    from keibaai import weekly
+
+    return weekly.live_trend(db.connect(path))
+
+
+def page_results() -> None:
+    header("Results", "成績", "予想が実際にどれだけ当たっているかと、日曜の自動評価(直近1年)の結果です。"
+           "学習は予想のたびに自動で行うので、ここで学習する必要はありません。")
+    pct = lambda x: "—" if x != x else f"{x:.0f}%"
+
+    st.subheader("実運用の成績", anchor=False, help=TIPS["review"])
+    trend = _live_trend(st.session_state["db_path"], _db_stamp(st.session_state["db_path"]))
+    if trend.empty:
+        st.info("回顧できた日はまだありません。予想を保存した日の結果が入ると、ここに出ます。", icon=":material/hourglass_empty:")
+    else:
+        t = gui.live_totals(trend)
+        rate = f"{t['honmei_wins'] / t['races']:.1%}" if t["races"] else "—"
+        st.html(_stats_html([("予想したレース", f"{t['races']:,}({t['days']}日)"), ("◎の勝率", rate),
+                             ("◎の回収率", pct(t["honmei_roi"])), ("期待値≧1の回収率", pct(t["ev_roi"]))]))
+        st.dataframe(trend.iloc[::-1], hide_index=True, width="stretch", column_config={
+            "◎単勝回収率(%)": st.column_config.NumberColumn(format="%.0f"),
+            "期待値≧1の回収率(%)": st.column_config.NumberColumn(format="%.0f")})
+
+    st.subheader("日曜の自動評価", anchor=False, help=TIPS["train_result"])
+    evals_dir = Path(st.session_state["db_path"]).parent / "evals"
+    evals = gui.load_evals(evals_dir)
+    if not evals:
+        st.info("まだありません。日曜 18:30 の自動タスク(KeibaAI-sunday.bat)が、最終レースのあとに書きます。",
+                icon=":material/hourglass_empty:")
         return
-    when, report = st.session_state["report"]
-    st.subheader("評価結果", anchor=False, help=TIPS["train_result"])
-    st.caption(f"{when:%Y/%m/%d} 以降の {int(report['レース数'].iloc[0]):,} レースで評価")
+    pick = st.selectbox("評価した日", [e["date"] for e in evals], key="eval_date")
+    e = next(x for x in evals if x["date"] == pick)
+    report = e["report"]
+    st.caption(f"{e['test_from']} 以降の {int(report['レース数'].iloc[0]):,} レースで評価(それより前で学習)")
     best_roi = report["単勝回収率(%)"].max()
     for col, (_, r) in zip(st.container(key="models").columns(len(report), gap="small"), report.iterrows()):
         with col.container(border=True, height="stretch"):
@@ -343,10 +357,17 @@ def page_train() -> None:
             st.markdown(f"**{r['モデル']}**{badge}")
             st.caption(_note(r["モデル"]))
             auc = "—" if r["勝AUC"] != r["勝AUC"] else f"{r['勝AUC']:.3f}"
-            stats = [("1番手的中", f"{r['1番手的中']:.1%}"), ("単勝回収率", f"{r['単勝回収率(%)']:.1f}%"), ("勝AUC", auc)]
-            st.html('<div class="kb-stats">' + "".join(
-                f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>'
-                for k, v in stats) + "</div>")
+            st.html(_stats_html([("1番手的中", f"{r['1番手的中']:.1%}"), ("単勝回収率", f"{r['単勝回収率(%)']:.1f}%"),
+                                 ("勝AUC", auc)]))
+
+    hist = gui.eval_history(evals)
+    if hist["日付"].nunique() > 1:
+        st.markdown("**週ごとの推移(勝LogLoss、小さいほど良い)**")
+        st.altair_chart(alt.Chart(hist).mark_line(point=True).encode(
+            x=alt.X("日付:O", title=None, axis=alt.Axis(labelAngle=0, labelOverlap="greedy")),
+            y=alt.Y("勝LogLoss:Q", title=None, scale=alt.Scale(zero=False)), color=alt.Color("モデル:N", title=None),
+            tooltip=["日付:O", "モデル:N", alt.Tooltip("勝LogLoss:Q", format=".4f"), alt.Tooltip("勝AUC:Q", format=".3f"),
+                     alt.Tooltip("単勝回収率(%):Q", format=".1f")]).properties(height=240), width="stretch")
 
     with st.expander("すべての指標", icon=":material/table:"):
         h = gui_help.TRAIN_COLUMNS
@@ -1697,7 +1718,7 @@ PAGES = {
     "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),
     "past": st.Page(page_past_races, title="過去レース", icon=":material/manage_search:", url_path="past"),
     "kankei": st.Page(page_kankei, title="相関図", icon=":material/hub:", url_path="kankei"),
-    "train": st.Page(page_train, title="学習・評価", icon=":material/insights:", url_path="train"),
+    "results": st.Page(page_results, title="成績", icon=":material/insights:", url_path="results"),
     "review": st.Page(page_review, title="回顧", icon=":material/history:", url_path="review"),
     "backtest": st.Page(page_backtest, title="シミュレーション", icon=":material/payments:", url_path="backtest"),
     "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),

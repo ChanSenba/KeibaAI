@@ -173,6 +173,10 @@ def test_write_evaluation_has_report_and_live_trend(tmp_path):
     path = weekly.write_evaluation(conn, dt.date(2026, 6, 1), tmp_path / "e")
     text = path.read_text(encoding="utf-8")
     assert "2026-06-01 学習・評価" in text and "勝AUC" in text and "実運用の推移" in text and "2025-03-01" in text
+    from keibaai import gui
+    evals = gui.load_evals(tmp_path / "e")  # GUI の「成績」ページ用の数字も書く
+    assert [e["date"] for e in evals] == ["2026-06-01"] and len(evals[0]["report"]) == 3
+    assert evals[0]["report"]["モデル"].iloc[1].startswith("オッズなし")
 
 
 def test_review_lists_every_marked_horse_and_top3_rate_per_mark():

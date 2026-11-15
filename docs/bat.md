@@ -123,7 +123,7 @@ schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "wscri
 `keibaai weekly --after-races` を実行し、出力を `data\weekly.log` の末尾に追記します。
 
 1. 予想を保存した日のうち、今日までの日の結果を取得し、回顧を `data\reviews\<日付>.md` に書く(`KeibaAI-weekly.bat` と違い、今日の分も対象)
-2. 学習・評価を実行し、`data\evals\<日付>.md` に書く。評価期間は今日から 1 年前以降(それ以前で学習)で、`keibaai train` と同じ 3 行と、回顧した日ごとの実運用の成績(◎の的中・回収率など)を並べる
+2. 学習・評価を実行し、`data\evals\<日付>.md` に書く。評価期間は今日から 1 年前以降(それ以前で学習)で、`keibaai train` と同じ 3 行(オッズなしは予想と同じニューラルネット)と、回顧した日ごとの実運用の成績(◎の的中・回収率など)を並べる。同じ 3 行の数字を GUI の「成績」ページ用に `data\evals\<日付>.json` にも書く
 
 今週末の予想は作りません(それは木曜・月曜の `KeibaAI-weekly.bat` の役目です)。
 

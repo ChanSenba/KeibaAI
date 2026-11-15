@@ -1,4 +1,4 @@
-"""LightGBM で勝率・3着以内率を予測し、時系列で評価する。"""
+"""LightGBM で勝率・3着以内率を予測し、時系列で評価する(能力のみの評価は予想と同じニューラルネットでも測れる)。"""
 from __future__ import annotations
 
 import os
@@ -125,15 +125,43 @@ def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 3
         test["p_win_raw"] = _fit(train, features, "win", rounds).predict(test[features])
     test["p_win"] = normalize_within_race(test, test["p_win_raw"].to_numpy())
     test["p_top3"] = top3_m.predict(test[features])
+    return _report("オッズあり" if use_market else "オッズなし(能力のみ)", test, test["p_top3"]), test
 
+
+def evaluate_nn(df: pd.DataFrame, test_from: str) -> tuple[Report, pd.DataFrame]:
+    """能力のみの勝率を、予想と同じニューラルネット(nn_model.fit_predict)で学習して評価する。
+
+    予想の ◎○▲ はこの勝率で付けるので、日曜の評価もこれで測る(evaluate の能力のみは LightGBM で、特徴量も少ない)。
+    複AUC は、3着以内の確率のモデルを別に持たないので、勝率の順で3着以内を並べられたかを見る。
+    """
+    from .nn_model import fit_predict
+
+    cut = pd.Timestamp(test_from)
+    train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
+    if train.empty or test.empty:
+        raise ValueError("学習期間または評価期間にデータがありません")
+    if not (train["date"] >= pd.Timestamp(TRAIN_FROM)).any():
+        raise ValueError(f"学習に使うのは {TRAIN_FROM} 以後のレースなので、評価開始日より前に学習できるレースがありません")
+    p, _ = fit_predict(train, test)
+    test["p_win"] = p
+    test = test[test["p_win"].notna()].copy()  # 19頭目以降は勝率が出ない(実際の JRA のレースにはない)
+    return _report("オッズなし(能力のみ)", test, test["p_win"]), test
+
+
+def _report(name: str, test: pd.DataFrame, top3_score: pd.Series) -> Report:
     top = test.loc[test.groupby("race_id")["p_win"].idxmax()]
-    hit = float(top["win"].mean())
     payout = (top["win"] * top["win_odds"].fillna(0) * 100).sum()
     roi = float(payout / (100 * len(top)) * 100) if len(top) else float("nan")
-    name = "オッズあり" if use_market else "オッズなし(能力のみ)"
     return Report(name, int(test["race_id"].nunique()), logloss(test["win"].to_numpy(), test["p_win"].to_numpy()),
                   auc(test["win"].to_numpy(), test["p_win"].to_numpy()),
-                  auc(test["top3"].to_numpy(), test["p_top3"].to_numpy()), hit, roi), test
+                  auc(test["top3"].to_numpy(), top3_score.to_numpy()), float(top["win"].mean()), roi)
+
+
+def model_reports(df: pd.DataFrame, test_from: str) -> list[Report]:
+    """keibaai train と日曜の評価の3行: 基準(1番人気)・オッズなし(予想と同じニューラルネット)・オッズあり。"""
+    r_abil, test = evaluate_nn(df, test_from)
+    r_mkt, _ = evaluate(df, test_from, use_market=True)
+    return [baseline_market(test), r_abil, r_mkt]
 
 
 def baseline_market(test: pd.DataFrame) -> Report:

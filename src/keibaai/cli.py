@@ -107,7 +107,7 @@ def main(argv=None) -> None:
     r = sub.add_parser("reparse", help="キャッシュ済みページを解析し直してDBを更新（通信なし）")
     r.add_argument("--db", default="data/keiba.db")
     r.add_argument("--cache", default="data/cache")
-    t = sub.add_parser("train", help="特徴量を作ってLightGBMで学習し、時系列で評価する")
+    t = sub.add_parser("train", help="予想と同じモデルで学習し、時系列で評価する(オッズなしはニューラルネット)")
     t.add_argument("--db", default="data/keiba.db")
     t.add_argument("--test-from", required=True, help="この日付以降を評価用にする YYYY-MM-DD")
     e = sub.add_parser("entries", help="指定日の出馬表と単勝オッズを取得して保存")
@@ -425,12 +425,10 @@ def main(argv=None) -> None:
 
     if args.cmd == "train":
         from .features import features_from_db
-        from .model import baseline_market, evaluate, format_report
+        from .model import format_report, model_reports
 
         df = features_from_db(db.connect(args.db))
-        r_abil, test = evaluate(df, args.test_from, use_market=False)
-        r_mkt, _ = evaluate(df, args.test_from, use_market=True)
-        print(format_report([baseline_market(test), r_abil, r_mkt]))
+        print(format_report(model_reports(df, args.test_from)))
         return
 
     if args.cmd == "reparse":

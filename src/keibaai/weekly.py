@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -442,19 +443,23 @@ def live_trend(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def write_evaluation(conn: sqlite3.Connection, today: dt.date, evals_dir: str | Path) -> Path:
-    """学習・評価(直近 EVAL_YEARS 年を評価期間にした keibaai train と同じ3行)と、実運用の推移を書く。"""
+    """学習・評価(直近 EVAL_YEARS 年を評価期間にした keibaai train と同じ3行)と、実運用の推移を書く。
+
+    <日付>.md は読む用、<日付>.json は GUI の「成績」ページ用(3行の数字と評価期間)。
+    """
     from .features import features_from_db
-    from .model import baseline_market, evaluate, format_report
+    from .model import format_report, model_reports
 
     evals_dir = Path(evals_dir)
     evals_dir.mkdir(parents=True, exist_ok=True)
     test_from = (today - dt.timedelta(days=365 * EVAL_YEARS)).isoformat()
-    df = features_from_db(conn)
-    r_abil, test = evaluate(df, test_from, use_market=False)
-    r_mkt, _ = evaluate(df, test_from, use_market=True)
+    reports = model_reports(features_from_db(conn), test_from)
+    (evals_dir / f"{today.isoformat()}.json").write_text(json.dumps(
+        {"date": today.isoformat(), "test_from": test_from, "reports": [asdict(r) for r in reports]},
+        ensure_ascii=False, indent=1, allow_nan=True), encoding="utf-8")
     trend = live_trend(conn)
     out = [f"# {today.isoformat()} 学習・評価", "", f"評価期間: {test_from} 以降(それ以前で学習)", "",
-           "```", format_report([baseline_market(test), r_abil, r_mkt]), "```", "",
+           "```", format_report(reports), "```", "",
            "## 実運用の推移(発走前に保存した予想と確定結果)", ""]
     if trend.empty:
         out.append("回顧できた日はまだありません。")

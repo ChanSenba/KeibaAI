@@ -49,11 +49,35 @@ def test_collect_reports_progress(monkeypatch):
     assert seen == [(0, 2), (1, 2), (2, 2)]
 
 
-def test_train_reports_table():
-    conn = synthetic_db()
-    report = gui.train_reports(conn, "2026-07-01")
-    assert report["モデル"].tolist()[0] .startswith("基準")
-    assert len(report) == 3
+def test_load_evals_reads_sunday_reports_newest_first(tmp_path):
+    import json
+
+    for d in ("2026-11-08", "2026-11-15"):
+        (tmp_path / f"{d}.json").write_text(json.dumps({"date": d, "test_from": "2025-11-15", "reports": [
+            {"name": "基準:オッズ/1番人気", "n_races": 3000, "win_logloss": 0.21, "win_auc": 0.78, "top3_auc": None,
+             "top1_hit_rate": 0.33, "top1_roi": 80.0},
+            {"name": "オッズなし(能力のみ)", "n_races": 3000, "win_logloss": 0.22 if d.endswith("08") else 0.215,
+             "win_auc": 0.80, "top3_auc": 0.78, "top1_hit_rate": 0.30, "top1_roi": 78.0}]}), encoding="utf-8")
+    (tmp_path / "2026-11-01.json").write_text("{", encoding="utf-8")  # 書きかけは飛ばす
+    (tmp_path / "2026-10-25.md").write_text("# 古い形式", encoding="utf-8")
+    evals = gui.load_evals(tmp_path)
+    assert [e["date"] for e in evals] == ["2026-11-15", "2026-11-08"]
+    assert list(evals[0]["report"].columns[:2]) == ["モデル", "レース数"]
+    hist = gui.eval_history(evals)
+    assert hist["日付"].tolist() == ["2026-11-08", "2026-11-08", "2026-11-15", "2026-11-15"]
+    assert gui.load_evals(tmp_path / "none") == [] and gui.eval_history([]).empty
+
+
+def test_live_totals_weights_roi_by_bets():
+    import pandas as pd
+
+    trend = pd.DataFrame({"日付": ["2026-11-08", "2026-11-09"], "レース数": [24, 12], "◎1着": [6, 2],
+                          "◎単勝回収率(%)": [100.0, 40.0], "期待値≧1の頭数": [30, 0], "期待値≧1の回収率(%)": [90.0, float("nan")]})
+    t = gui.live_totals(trend)
+    assert t["races"] == 36 and t["honmei_wins"] == 8 and t["days"] == 2
+    assert abs(t["honmei_roi"] - 80.0) < 1e-9  # (24×100 + 12×40) / 36
+    assert t["ev_bets"] == 30 and abs(t["ev_roi"] - 90.0) < 1e-9
+    assert gui.live_totals(trend.iloc[:0])["races"] == 0
 
 
 def test_preset_range():

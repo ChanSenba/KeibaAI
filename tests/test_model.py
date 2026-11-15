@@ -149,3 +149,21 @@ def test_evaluate_says_why_when_no_training_races_after_train_from():
     df = pd.DataFrame({"date": pd.to_datetime(["2015-06-01", "2016-06-01"]), "race_id": ["a", "b"]})
     with pytest.raises(ValueError, match="2019-01-01 以後"):
         evaluate(df, "2016-01-01", use_market=False)
+
+
+def test_evaluate_nn_learns_only_before_test_from_and_reports_three_rows():
+    """日曜の評価の「オッズなし」(予想と同じニューラルネット): 評価開始日より後の結果を書き換えても、学習は変わらない。"""
+    from keibaai.features import build_features, load_results
+    from keibaai.model import evaluate_nn, model_reports
+
+    df = build_features(load_results(synthetic_db(n_days=30, races_per_day=3)))
+    cut = "2025-06-01"
+    r, test = evaluate_nn(df, cut)
+    assert test["date"].min() >= pd.Timestamp(cut) and test["p_win"].notna().all()
+    assert np.allclose(test.groupby("race_id")["p_win"].sum(), 1.0)
+    later = df.copy()
+    later.loc[later["date"] >= pd.Timestamp(cut), ["win", "top3"]] = 0  # 評価期間の結果を消しても
+    _, test2 = evaluate_nn(later, cut)
+    assert np.allclose(test["p_win"], test2["p_win"])  # 勝率は同じ(学習に使っていない)
+    names = [x.name for x in model_reports(df, cut)]
+    assert names[0].startswith("基準") and names[1] == r.name and names[2] == "オッズあり"
