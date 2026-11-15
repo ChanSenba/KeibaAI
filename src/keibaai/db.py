@@ -174,7 +174,12 @@ _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("p
                   "entry_races": [("course", "TEXT"), ("rail", "TEXT")],
                   "odds_snapshots": [("source", "TEXT")],
                   "other_runs": [("name", "TEXT")],
-                  "predictions": [("after_result", "INTEGER")]}  # 1: 結果が出たあとに保存した予想(確定オッズで後から出したもの)
+                  # after_result=1: 結果が出たあとに保存した予想(確定オッズで後から出したもの)。
+                  # p_win_*: 要素ごとの勝率(全頭の回顧で、強かった要素・弱かった要素を出す)。
+                  # factors_later=1: 要素の列だけ、保存後に予想し直した値から埋めた行
+                  "predictions": [("after_result", "INTEGER")] + [(c, "REAL") for c in (
+                      "p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree",
+                      "p_win_training")] + [("factors_later", "INTEGER")]}
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:

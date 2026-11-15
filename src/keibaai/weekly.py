@@ -14,13 +14,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import flow_review, race_review
+from . import flow_review, horse_review, race_review
 from .gui import add_marks
 from .marks import MARK_ORDER
 
 
 PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_name", "horse_name", "jockey",
-             "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result"]
+             "win_odds", "popularity", "mark", "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result",
+             "p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree", "p_win_training"]
 
 
 FREEZE_HOUR = 9  # 開催日のこの時刻以降は、保存済みの予想を書き換えない(レースが始まってから変えないため)
@@ -49,6 +50,7 @@ def save_predictions(conn: sqlite3.Connection, table: pd.DataFrame, now: dt.date
         oldest = (now.date() - dt.timedelta(days=LATE_DAYS)).isoformat()
         keep |= ~t["race_id"].isin(saved) & (t["date"] >= oldest) & (t["date"] <= now.date().isoformat())
     t["after_result"] = t["race_id"].isin(finished).astype(int)
+    t = t.reindex(columns=[*t.columns, *(c for c in PRED_COLS if c not in t)])  # 要素の列がない表(古い予想)でも保存する
     t = t[keep][PRED_COLS]
     t = t.astype(object).where(t.notna(), None)
     with conn:
@@ -157,6 +159,7 @@ class Review:
     reviews: dict | None = None  # レースごとの、馬ごとの向き・不向き(horse_reviews)
     views: dict | None = None  # レースごとの見解(race_review.race_view)
     next_runs: pd.DataFrame | None = None  # 前走の勝ち方・負け方ごとの次走の成績(race_review.next_run_table)
+    full: dict | None = None  # レースごとの全頭の振り返り(horse_review.race_rows)
 
 
 def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: bool = True) -> Review:
@@ -205,7 +208,8 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: boo
     }
     out = {rid: race_review.race_view(conn, rid, g) for rid, g in h.groupby("race_id", sort=False)} if views else None
     nxt = race_review.next_run_table(race_review.next_run_rates(conn, date)) if views else None
-    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out, nxt)
+    full = {rid: horse_review.race_rows(g, flows.get(rid)) for rid, g in h.groupby("race_id", sort=False)}
+    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out, nxt, full)
 
 
 def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
@@ -384,6 +388,7 @@ def render_markdown(r: Review) -> str:
                     if t["mark"]:  # 印のある馬だけ。全頭は画面の回顧で見られる
                         out.append(f"    - {t['mark']}{t['name']}({t['sub']}): "
                                    + " / ".join(f"{f['name']}{f['grade']}" for f in t["rows"]))
+        out += horse_review.markdown_lines((r.full or {}).get(x["race_id"]))
     return "\n".join(out) + "\n"
 
 
@@ -404,6 +409,12 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
     reviews_dir = Path(reviews_dir)
     reviews_dir.mkdir(parents=True, exist_ok=True)
     out = {"reviewed": [], "forecast": {}, "evaluated": None, "auto": {}}
+    db_file = next((f for _, name, f in conn.execute("PRAGMA database_list") if name == "main"), "")
+    if db_file:  # 要素の記録がない古い予想に、予想の保存から要素の勝率を入れる(全頭の回顧用)
+        try:
+            horse_review.backfill_factors(conn, Path(db_file).parent / "model_cache")
+        except Exception as e:
+            print(f"要素の埋め戻しを飛ばしました: {e}")
     if auto:
         out["auto"] = auto_predict(conn, fetcher, today, include_today=after_races, jv=jv, now=now)
         for d in out["auto"]:  # 回顧を書き直す(足したレースを入れる)

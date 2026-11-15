@@ -1527,7 +1527,7 @@ def page_review() -> None:
         g = r.horses[r.horses["race_id"] == race["race_id"]]
         with st.spinner("レースの見解をまとめています…"):
             view = race_review.race_view(conn, race["race_id"], g)
-        review_race(g, race, (r.reviews or {}).get(race["race_id"]), view)
+        review_race(g, race, (r.reviews or {}).get(race["race_id"]), view, (r.full or {}).get(race["race_id"]))
 
 
 def review_view(view: dict) -> None:
@@ -1576,8 +1576,19 @@ def review_fit(horses: list[dict]) -> None:
             st.html(review_html(rv))
 
 
-def review_race(g, race=None, reviews=None, view=None) -> None:
-    """1レースの回顧: レースの見解、全馬の着順表(印の列つき)、馬ごとの条件。"""
+def review_full(full: dict) -> None:
+    """全頭の振り返り: 予想時の印・勝率・市場比・強み弱み(要素のレース内順位)と結果、予想とのずれ(着順の順)。"""
+    st.subheader("全頭の振り返り", anchor=False)
+    st.caption("発走前の予想(要素ごとの勝率のレース内順位で強み・弱み)と結果を、着順の順に並べています。"
+               "市場比は、能力の勝率 ÷ 確定オッズから出した勝率。強み・弱みは順位で決めただけで、勝ち負けの原因とは限りません。")
+    if full.get("summary"):
+        st.markdown(full["summary"])
+    with st.container(border=True):
+        st.markdown("\n".join(f"- {r['text']}" for r in full["rows"]))
+
+
+def review_race(g, race=None, reviews=None, view=None, full=None) -> None:
+    """1レースの回顧: レースの見解、全馬の着順表(印の列つき)、全頭の振り返り、馬ごとの条件。"""
     from keibaai import weekly
 
     if view:
@@ -1604,6 +1615,8 @@ def review_race(g, race=None, reviews=None, view=None) -> None:
     st.dataframe(allh[list(cols)].style.map(mark_style, subset=["mark"]).apply(
         lambda c: [place_style(allh.at[i, "finish"]) for i in c.index], subset=["finish_text"]),
         hide_index=True, width="stretch", column_config=cols)
+    if full and full.get("rows"):
+        review_full(full)
     if reviews and reviews["horses"]:
         review_fit(reviews["horses"])
 
