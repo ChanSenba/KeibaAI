@@ -578,12 +578,6 @@ def score_race(one: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def score_day(values: pd.DataFrame) -> pd.DataFrame:
-    """factor_values の全レースに score_race をかけて、同じ並びで返す。"""
-    parts = [score_race(g) for _, g in values.groupby("race_id", sort=False)]
-    return pd.concat(parts).reindex(values.index) if parts else pd.DataFrame(index=values.index)
-
-
 # ---------------------------------------------------------------- 予想の要素別の点数と見解(予想ページ用)
 # 要素ごとのモデルの勝率(p_win_*)と、画面での名前。factors.COLUMN と同じ並び
 MODEL_FACTORS: dict[str, str] = {"p_win_quality": "馬の質", "p_win_fit": "適性", "p_win_rotation": "ローテ",

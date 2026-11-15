@@ -111,7 +111,7 @@ def balance_by_date(settled: pd.DataFrame) -> pd.Series:
 
 
 def predict_test(df: pd.DataFrame, test_from: str, use_market: bool = False) -> pd.DataFrame:
-    """評価期間の各馬に勝率(p_win)を付ける。use_market=True はオッズを入力に含めたモデル。"""
+    """評価期間の各馬に勝率(p_win)を付ける。use_market=False は予想と同じニューラルネット、True はオッズ込みのモデル。"""
     _, test = evaluate(df, test_from, use_market=use_market)
     return test
 

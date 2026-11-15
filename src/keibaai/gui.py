@@ -189,12 +189,6 @@ def race_choices(conn: sqlite3.Connection, date: str, listed_ids=()) -> pd.DataF
     )
 
 
-def fetch_entries_for(conn, fetcher, date: dt.date, on_race=None, race_ids: list[str] | None = None) -> int:
-    from .predict import fetch_entries
-
-    return fetch_entries(conn, fetcher, date.isoformat(), on_race=on_race, race_ids=race_ids)
-
-
 def review_dates(conn: sqlite3.Connection) -> list[str]:
     """予想を保存してある日(新しい順)。"""
     return [r[0] for r in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date DESC")]

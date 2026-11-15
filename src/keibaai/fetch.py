@@ -14,7 +14,6 @@ from .parse import JRA_PLACE_CODES
 
 RACE_URL = "https://db.netkeiba.com/race/{race_id}/"
 RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={date}"
-PEDIGREE_URL = "https://db.netkeiba.com/horse/ped/{horse_id}/"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
 OIKIRI_URL = "https://race.netkeiba.com/race/oikiri.html?race_id={race_id}"  # 未ログインで全頭の短評とA〜D評価
 ODDS_URL = "https://race.netkeiba.com/api/api_get_jra_odds.html?race_id={race_id}&type={odds_type}&action=init"
@@ -92,21 +91,6 @@ class Fetcher:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(html, encoding="utf-8")
         return html
-
-    def pedigree_html(self, horse_id: str) -> str:
-        """5代血統表のページ。血統は変わらないので、一度取ったらキャッシュから読む。"""
-        path = self.cache_dir / "ped" / f"{horse_id}.html"
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-        html = self._get(PEDIGREE_URL.format(horse_id=horse_id), encoding="euc-jp")
-        if "blood_table" not in html:
-            raise PageUnavailable(f"血統表のないページです: {horse_id}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(html, encoding="utf-8")
-        return html
-
-    def discard_pedigree(self, horse_id: str) -> None:
-        (self.cache_dir / "ped" / f"{horse_id}.html").unlink(missing_ok=True)
 
     def oikiri_html(self, race_id: str, cache: bool = True) -> str:
         """調教(追い切り)の評価。終わったレースは変わらないのでキャッシュする。発走前のレースは cache=False で取り直す。"""

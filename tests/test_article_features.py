@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from keibaai import factors
 from keibaai.features import (ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, build_features, load_results,
                               parse_late_position)
 
@@ -77,14 +76,6 @@ def test_rotation_and_layoff_by_hand():
 def test_late_position_parser():
     assert parse_late_position("13-12-12-7") == 7 and np.isnan(parse_late_position(None))
     assert np.isnan(parse_late_position(float("nan"))) and parse_late_position("5") == 5
-
-
-def test_every_factor_runs_with_new_features(raw):
-    df = build_features(raw.copy())
-    reports, uniform = factors.evaluate_factors(df, str(sorted(raw["date"].unique())[30].date()), rounds=30)
-    names = [r.name for r in reports]
-    assert {"適性", "ローテーション", "総合+全要素"} <= set(names)
-    assert all(np.isfinite(r.win_logloss) for r in reports)
 
 
 def test_course_flow_uses_only_earlier_days_at_the_same_course():

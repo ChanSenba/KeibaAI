@@ -42,10 +42,10 @@ def test_rate_eta_and_alive(tmp_path):
 
 def test_stale_cache_is_reported_as_stopped(tmp_path):
     now = dt.datetime.now().timestamp()
-    folder = tmp_path / "ped"
+    folder = tmp_path / "oikiri"
     folder.mkdir()
     _touch(folder / "h.html", 86400, now)
-    p = progress.progress_of("pedigree", tmp_path, None, now)
+    p = progress.progress_of("training", tmp_path, None, now)
     assert not p.alive and p.per_min == 0 and p.fraction is None and p.eta_hours is None
 
 

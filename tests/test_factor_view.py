@@ -218,7 +218,6 @@ def test_score_race_sums_points_and_ranks_without_marks(conn):
     assert "score_mark" not in sc  # 予想の印と紛れるので、点数には ◎○▲ を付けない
     assert sc.loc[sc["score"].idxmax(), "score_rank"] == 1
     assert not any(c in fv.SCORE_EXCLUDE for c in (k[3:] for k in sc if k.startswith("pt_")))
-    assert len(fv.score_day(one)) == len(one)
 
 
 def test_score_race_follows_a_hand_calculation():

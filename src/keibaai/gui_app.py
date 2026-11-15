@@ -74,7 +74,8 @@ def bar_chart(df, x: str, y: str, horizontal: bool = False):
 
 # ---------------------------------------------------------------- データ確認
 def page_overview() -> None:
-    header("Overview", "取得済みデータ", "DB に入っているレース結果の量と期間です。")
+    header("Overview", "取得済みデータ", "DB に入っているデータの量と期間、揃い具合と発走前オッズの記録の状態です。")
+    _data_progress()
     conn = connection()
     s = gui.summary(conn)
     if s["races"] == 0:
@@ -188,6 +189,8 @@ def page_collect() -> None:
             else:
                 status.update(label=f"完了しました。新しく {total} レースを保存しました", state="complete")
 
+    _reparse_section()
+
 
 # ---------------------------------------------------------------- 取得の進み具合
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -257,10 +260,8 @@ def _show_data_grid() -> None:
         st.caption(" ・ ".join(bits))
 
 
-def page_progress() -> None:
-    header("Progress", "取得の進み具合",
-           "成績・血統・調教がどこまで揃っているかと、バックグラウンドの取得の進み具合です。")
-
+def _data_progress() -> None:
+    """発走前オッズの記録と、データの揃い具合(30秒ごとに更新)。"""
     @st.fragment(run_every=30)
     def body() -> None:
         _odds_line()
@@ -274,10 +275,11 @@ def page_progress() -> None:
     body()
 
 
-# ---------------------------------------------------------------- 再解析
-def page_reparse() -> None:
-    header("Reparse", "再解析",
-           "保存済みのページを解析し直して DB を更新します。通信はしません。プログラムを更新したあとに実行してください。")
+# ---------------------------------------------------------------- 再解析(取得ページの下)
+def _reparse_section() -> None:
+    """保存済みのページを解析し直して DB を更新する。通信はしない。"""
+    st.subheader("再解析", anchor=False)
+    st.caption("保存済みのページを解析し直して DB を更新します。通信はしません。プログラムを更新したあとに実行してください。")
     n_cached = len(list((Path(st.session_state["cache_dir"]) / "race").glob("*.html")))
     with st.container(border=True):
         st.metric("保存済みページ", f"{n_cached:,}")
@@ -1715,8 +1717,6 @@ def page_settings() -> None:
 PAGES = {
     "overview": st.Page(page_overview, title="データ", icon=":material/dashboard:", default=True),
     "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
-    "progress": st.Page(page_progress, title="進み具合", icon=":material/timelapse:", url_path="progress"),
-    "reparse": st.Page(page_reparse, title="再解析", icon=":material/refresh:", url_path="reparse"),
     "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
     "bets": st.Page(page_bets, title="買い方", icon=":material/calculate:", url_path="bets"),
     "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),

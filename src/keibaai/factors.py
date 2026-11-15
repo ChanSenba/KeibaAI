@@ -1,22 +1,14 @@
-"""要素ごとの予想。馬の質・騎手と厩舎・展開と馬場を別々のモデルで勝率にし、並べて見られるようにする。
+"""要素(馬の質・適性・ローテーション・騎手と厩舎・展開と馬場・血統・調教)の定義。
 
-どの要素が当たりに効いているかは、`keibaai factors --test-from <日付>` で確かめられる。
-血統は `keibaai pedigree`、調教(追い切りの評価)は `keibaai training` で集めたぶんだけ効く。
+予想のニューラルネット(nn_model)は、要素ごとの小さい網の点数を足して勝率にする。どの特徴量をどの要素に入れるかと、
+予想の表での列名をここで決める。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-import lightgbm as lgb
-import pandas as pd
-
-from .features import (APTITUDE_FEATURES, ARTICLE_FEATURES, BASE_FEATURES, BIAS_FEATURES, CATEGORICAL,
-                       COURSE_FLOW_FEATURES, FIGURE_FEATURES, FORM_FEATURES, HUMAN_EXTRA, JOCKEY_DELTA_FEATURES,
-                       LAP_FEATURES, OTHER_FEATURES, PACE_FEATURES, PAST_SCORE_FEATURES, PEDIGREE_FEATURES, RACE_LEVEL_FEATURES,
-                       RELATIVE_FEATURES,
+from .features import (APTITUDE_FEATURES, FIGURE_FEATURES, FORM_FEATURES, HUMAN_EXTRA, JOCKEY_DELTA_FEATURES,
+                       BIAS_FEATURES, COURSE_FLOW_FEATURES, LAP_FEATURES, OTHER_FEATURES, PACE_FEATURES,
+                       PAST_SCORE_FEATURES, PEDIGREE_FEATURES, RACE_LEVEL_FEATURES, RELATIVE_FEATURES,
                        ROTATION_FEATURES, TRAINING_FEATURES)
-from . import model
-from .model import PARAMS, auc, logloss, normalize_within_race, train_rows
 
 FACTORS: dict[str, list[str]] = {
     "馬の質": ["age", "weight_carried", "body_weight", "body_weight_diff", "n_prev", "prev_finish",
@@ -32,62 +24,6 @@ FACTORS: dict[str, list[str]] = {
     "血統": ["distance", "course_type", "venue", "ground", *PEDIGREE_FEATURES],
     "調教": ["age", "n_prev", "days_since_last", "race_class", *TRAINING_FEATURES],
 }
-OVERALL = {"総合": BASE_FEATURES, "総合+馬場の偏り": BASE_FEATURES + BIAS_FEATURES,
-           "総合+全要素": BASE_FEATURES + BIAS_FEATURES + ARTICLE_FEATURES}
 COLUMN = {"馬の質": "p_win_quality", "適性": "p_win_fit", "ローテーション": "p_win_rotation",
           "騎手・厩舎": "p_win_human", "展開・馬場": "p_win_track",
           "血統": "p_win_pedigree", "調教": "p_win_training"}
-
-
-def _fit(train: pd.DataFrame, features: list[str], rounds: int):
-    train = train_rows(train)
-    cats = [c for c in CATEGORICAL if c in features]
-    return lgb.train(PARAMS, lgb.Dataset(train[features], train["win"], categorical_feature=cats), rounds)
-
-
-def predict_factors(train: pd.DataFrame, target: pd.DataFrame, factors: dict[str, list[str]] | None = None,
-                    rounds: int = 300) -> pd.DataFrame:
-    """target の各馬に、要素ごとの勝率(レース内で合計 1)を付けた表を返す。列名は要素名。"""
-    out = pd.DataFrame(index=target.index)
-    for name, feats in (factors or FACTORS).items():
-        out[name] = normalize_within_race(target, _fit(train, feats, rounds).predict(target[feats]))
-    return out
-
-
-@dataclass
-class FactorReport:
-    name: str
-    n_features: int
-    win_logloss: float
-    win_auc: float
-    top1_hit_rate: float  # その要素だけで1番手にした馬が勝った割合
-
-
-def evaluate_factors(df: pd.DataFrame, test_from: str, rounds: int = 300) -> tuple[list[FactorReport], float]:
-    """評価開始日より前で学習し、以後で要素ごとの成績を返す。あわせて「全馬が同じ勝率」の LogLoss も返す。"""
-    cut = pd.Timestamp(test_from)
-    train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
-    if train.empty or test.empty:
-        raise ValueError("学習期間または評価期間にデータがありません")
-    if not (train["date"] >= pd.Timestamp(model.TRAIN_FROM)).any():
-        raise ValueError(f"学習に使うのは {model.TRAIN_FROM} 以後のレースなので、評価開始日より前に学習できるレースがありません")
-    sets = {**FACTORS, **OVERALL}
-    probs = predict_factors(train, test, sets, rounds)
-    y = test["win"].to_numpy()
-    reports = []
-    for name, feats in sets.items():
-        p = probs[name]
-        top = test.loc[p.groupby(test["race_id"]).idxmax()]
-        reports.append(FactorReport(name, len(feats), logloss(y, p.to_numpy()), auc(y, p.to_numpy()),
-                                    float(top["win"].mean())))
-    uniform = logloss(y, (1.0 / test["field_size"]).to_numpy())
-    return reports, uniform
-
-
-def format_factor_report(reports: list[FactorReport], uniform: float) -> str:
-    lines = [f"{'要素':<16}{'特徴量':>6}{'勝LogLoss':>11}{'勝AUC':>8}{'1番手的中':>10}"]
-    for r in reports:
-        lines.append(f"{r.name:<{16 - sum(ord(c) > 255 for c in r.name)}}{r.n_features:>6}{r.win_logloss:>11.4f}"
-                     f"{r.win_auc:>8.3f}{r.top1_hit_rate:>10.1%}")
-    lines.append(f"(全馬が同じ勝率なら LogLoss は {uniform:.4f}。これより小さいほど情報がある)")
-    return "\n".join(lines)

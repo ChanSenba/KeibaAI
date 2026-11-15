@@ -18,7 +18,7 @@ pytest は全部で約3分かかる。途中は `python -m pytest tests/test_xxx
 
 - `src/keibaai/cli.py`：`keibaai` コマンドの入口。GUI も同じ関数を呼ぶ
 - `gui.py` は CLI の関数を呼ぶ薄い層、画面そのものは `gui_app.py`（Streamlit）
-- 特徴量 `features.py`、学習 `model.py` / `nn_model.py`、予想 `predict.py`、買い方 `betting.py` / `bettypes.py`、印 `marks.py`
+- 特徴量 `features.py`、学習 `model.py` / `nn_model.py`、予想 `predict.py`、買い方 `betting.py`、印 `marks.py`
 - JRA-VAN の取り込みは `jv*.py`（JV-Link は 32bit の Windows 部品なので、このコンテナでは動かない）
 
 ## 守ること

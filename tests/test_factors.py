@@ -47,30 +47,14 @@ def df():
 
 
 def test_factor_features_are_known_and_leak_free(df):
-    for feats in {**factors.FACTORS, **factors.OVERALL}.values():
+    for feats in factors.FACTORS.values():
         assert set(feats) <= set(df.columns)
         assert not {"finish", "win", "top3", "win_odds", "popularity", "passing", "early_pos"} & set(feats)
     assert set(BIAS_FEATURES) <= set(df.columns)
 
 
-def test_evaluate_factors_reports_every_factor(df):
-    reports, uniform = factors.evaluate_factors(df, "2025-09-01", rounds=50)
-    names = [r.name for r in reports]
-    assert names == [*factors.FACTORS, *factors.OVERALL]
-    by = {r.name: r for r in reports}
-    assert by["馬の質"].win_logloss < uniform and by["馬の質"].win_auc > 0.6  # 合成データでは馬の強さが効く
-    assert "全馬が同じ勝率" in factors.format_factor_report(reports, uniform)
-
-
-def test_predict_factors_sum_to_one_per_race(df):
-    train, target = df[df["date"] < "2025-09-01"], df[df["date"] >= "2025-09-01"]
-    p = factors.predict_factors(train, target, rounds=30)
-    assert list(p.columns) == list(factors.FACTORS)
-    assert np.allclose(p["馬の質"].groupby(target["race_id"]).sum(), 1.0)
-
-
 def test_cli_commands_return_without_falling_through(tmp_path, capsys):
-    """表示だけのコマンドが、最後に collect の処理まで進んで落ちないこと(factors で起きた不具合の再発防止)。"""
+    """表示だけのコマンドが、最後に collect の処理まで進んで落ちないこと(以前の factors コマンドで起きた不具合の再発防止)。"""
     import sqlite3
 
     from keibaai import cli
@@ -79,10 +63,10 @@ def test_cli_commands_return_without_falling_through(tmp_path, capsys):
     dst = sqlite3.connect(path)
     synthetic_db(n_days=30, races_per_day=3).backup(dst)
     dst.close()
-    for cmd in ("factors", "backtest", "train"):
+    for cmd in ("backtest", "train"):
         cli.main([cmd, "--db", str(path), "--test-from", "2025-06-01"])
     out = capsys.readouterr().out
-    assert "全馬が同じ勝率" in out and "単勝を毎回" in out and "モデル" in out
+    assert "単勝を毎回" in out and "モデル" in out
 
 
 def test_gate_bias_counts_inner_middle_outer_before_the_day(tmp_path):

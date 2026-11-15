@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -91,18 +90,6 @@ class Bet:
     def label(self) -> str:
         sep = "→" if self.kind in ("馬単", "三連単") else "-"
         return sep.join(str(x) for x in self.numbers)
-
-
-def _combos(kind: str, n: int):
-    if kind in ("単勝", "複勝"):
-        return [(i,) for i in range(n)]
-    if kind in ("馬連", "ワイド"):
-        return list(itertools.combinations(range(n), 2))
-    if kind == "馬単":
-        return list(itertools.permutations(range(n), 2))
-    if kind == "三連複":
-        return list(itertools.combinations(range(n), 3))
-    return list(itertools.permutations(range(n), 3))
 
 
 # 複勝・ワイド・馬連の的中確率は、ハーヴィルの確率と、その券種のオッズから出した確率(1/オッズ をレース内で

@@ -1,4 +1,3 @@
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -6,11 +5,9 @@ import pytest
 from keibaai import db
 from keibaai.features import ARTICLE_FEATURES, LAP_FEATURES, PEDIGREE_FEATURES, build_features, load_results
 from keibaai.parse import parse_race
-from keibaai.pedigree import collect_pedigrees, parse_pedigree, pending_horse_ids
 
 from test_model import synthetic_db
 
-SAMPLE = (Path(__file__).parent / "data" / "blood_table_sample.html").read_text(encoding="utf-8")
 
 LAP_HTML = """<html><body><dl class="racedata"><dd><h1>ジャパンC</h1><p>芝右2400m / 天候:晴 / 芝:良 / 発走:15:40</p></dd></dl>
 <p class="smalltxt">2024年11月24日 5回東京8日目</p>
@@ -39,19 +36,6 @@ def test_race_without_lap_table_still_parses():
     assert r.lap_times is None and r.pace_first3f is None
 
 
-def test_parse_pedigree():
-    p = parse_pedigree(SAMPLE, "2019105283")
-    assert (p.sire_id, p.sire, p.sire_line) == ("2001103038", "ハーツクライ", "Halo系")
-    assert (p.sire_sire_id, p.sire_sire) == ("000a00033a", "サンデーサイレンス")
-    assert (p.dam_id, p.dam) == ("000a0137a4", "ダストアンドダイヤモンズ")
-    assert (p.damsire_id, p.damsire) == ("000a010544", "Vindication (米)")
-
-
-def test_parse_pedigree_without_table_fails():
-    with pytest.raises(ValueError):
-        parse_pedigree("<html></html>", "x")
-
-
 def test_old_db_gets_new_columns(tmp_path):
     import sqlite3
     path = tmp_path / "old.db"
@@ -60,41 +44,6 @@ def test_old_db_gets_new_columns(tmp_path):
     c.commit(); c.close()
     cols = {r[1] for r in db.connect(path).execute("PRAGMA table_info(races)")}
     assert {"lap_times", "pace_first3f", "pace_last3f"} <= cols
-
-
-class FakeFetcher:
-    def __init__(self, bad=()):
-        self.asked, self.bad = [], set(bad)
-
-    def pedigree_html(self, horse_id):
-        self.asked.append(horse_id)
-        if horse_id in self.bad:
-            raise ValueError("no table")
-        return SAMPLE
-
-    def discard_pedigree(self, horse_id):
-        pass
-
-
-def test_pending_orders_entries_first_and_collect_resumes():
-    conn = synthetic_db(n_days=3, races_per_day=2)
-    conn.execute("INSERT INTO entry_races (race_id, date) VALUES ('e1', '2030-01-01')")
-    conn.execute("INSERT INTO entries (race_id, number, horse_id) VALUES ('e1', 1, 'h59')")
-    ids = pending_horse_ids(conn)
-    assert ids[0] == "h59" and len(ids) == len(set(ids))
-    f = FakeFetcher()
-    assert collect_pedigrees(conn, f, limit=3, log=lambda *_: None) == 3
-    assert len(pending_horse_ids(conn)) == len(ids) - 3
-    assert collect_pedigrees(conn, FakeFetcher(), log=lambda *_: None) == len(ids) - 3
-    assert pending_horse_ids(conn) == []
-
-
-def test_collect_stops_after_consecutive_failures():
-    conn = synthetic_db(n_days=3, races_per_day=2)
-    f = FakeFetcher(bad=set(pending_horse_ids(conn)))
-    with pytest.raises(RuntimeError):
-        collect_pedigrees(conn, f, log=lambda *_: None)
-    assert len(f.asked) == 5
 
 
 @pytest.fixture(scope="module")
@@ -136,15 +85,3 @@ def test_lap_and_pedigree_features_are_filled_and_past_only(conn_with_extras):
 def test_features_work_without_pedigree_or_lap():
     df = build_features(load_results(synthetic_db(n_days=10, races_per_day=2)))
     assert df["sire_top3_rate"].isna().all() and df["prev_pace_diff"].isna().all()
-
-
-def test_cli_pedigree_command(tmp_path, monkeypatch, capsys):
-    from keibaai import cli
-    path = tmp_path / "k.db"
-    conn = synthetic_db(n_days=3, races_per_day=2)
-    disk = db.connect(path)
-    conn.backup(disk._conn if hasattr(disk, "_conn") else disk)
-    disk.close()
-    monkeypatch.setattr(cli, "Fetcher", lambda cache_dir: FakeFetcher())
-    with pytest.raises(SystemExit, match="jv --what pedigree blood"):  # netkeiba からの血統の取得はやめた
-        cli.main(["pedigree", "--db", str(path), "--limit", "4"])

@@ -1,4 +1,4 @@
-"""LightGBM で勝率・3着以内率を予測し、時系列で評価する(能力のみの評価は予想と同じニューラルネットでも測れる)。"""
+"""勝率のモデルを時系列で評価する。能力のみは予想と同じニューラルネット、オッズ込みは LightGBM(市場からのずれを学ぶ)。"""
 from __future__ import annotations
 
 import os
@@ -8,7 +8,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURES, RESIDUAL_MODEL_FEATURES
+from .features import CATEGORICAL, MARKET_MODEL_FEATURES, RESIDUAL_MODEL_FEATURES
 
 PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_data_in_leaf=50,
               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, verbose=-1, seed=0)
@@ -110,28 +110,31 @@ def _fit(train: pd.DataFrame, features: list[str], target: str, rounds: int):
 
 
 def evaluate(df: pd.DataFrame, test_from: str, use_market: bool, rounds: int = 300) -> tuple[Report, pd.DataFrame]:
-    features = MARKET_MODEL_FEATURES if use_market else ABILITY_MODEL_FEATURES
+    """test_from より前で学習し、test_from 以後の各馬に勝率(p_win)を付けて評価する。
+
+    use_market=False は予想の ◎○▲ と同じニューラルネット(evaluate_nn)、True はオッズ込みの勝率のモデル
+    (市場の見立てからのずれを学ぶ LightGBM)。rounds はオッズ込みの3着以内のモデルの学習回数。
+    """
+    if not use_market:
+        return evaluate_nn(df, test_from)
     cut = pd.Timestamp(test_from)
     train, test = df[df["date"] < cut], df[df["date"] >= cut].copy()
     if train.empty or test.empty:
         raise ValueError("学習期間または評価期間にデータがありません")
     if not (train["date"] >= pd.Timestamp(TRAIN_FROM)).any():
         raise ValueError(f"学習に使うのは {TRAIN_FROM} 以後のレースなので、評価開始日より前に学習できるレースがありません")
-    top3_m = _fit(train, features, "top3", rounds)
-    if use_market:  # 勝率は市場の見立てからのずれを学ぶモデル。オッズのそろわないレースは評価から外す
-        test = test[has_market(test)].copy()
-        test["p_win_raw"] = predict_residual(fit_residual(train), test)
-    else:
-        test["p_win_raw"] = _fit(train, features, "win", rounds).predict(test[features])
+    top3_m = _fit(train, MARKET_MODEL_FEATURES, "top3", rounds)
+    test = test[has_market(test)].copy()  # オッズのそろわないレースは評価から外す
+    test["p_win_raw"] = predict_residual(fit_residual(train), test)
     test["p_win"] = normalize_within_race(test, test["p_win_raw"].to_numpy())
-    test["p_top3"] = top3_m.predict(test[features])
-    return _report("オッズあり" if use_market else "オッズなし(能力のみ)", test, test["p_top3"]), test
+    test["p_top3"] = top3_m.predict(test[MARKET_MODEL_FEATURES])
+    return _report("オッズあり", test, test["p_top3"]), test
 
 
 def evaluate_nn(df: pd.DataFrame, test_from: str) -> tuple[Report, pd.DataFrame]:
     """能力のみの勝率を、予想と同じニューラルネット(nn_model.fit_predict)で学習して評価する。
 
-    予想の ◎○▲ はこの勝率で付けるので、日曜の評価もこれで測る(evaluate の能力のみは LightGBM で、特徴量も少ない)。
+    予想の ◎○▲ はこの勝率で付けるので、日曜の評価・シミュレーション・混ぜ方の決定もこれで測る。
     複AUC は、3着以内の確率のモデルを別に持たないので、勝率の順で3着以内を並べられたかを見る。
     """
     from .nn_model import fit_predict

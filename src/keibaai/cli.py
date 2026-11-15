@@ -130,10 +130,6 @@ def main(argv=None) -> None:
     oh.add_argument("--db", default="data/keiba.db")
     oh.add_argument("--raw", default="data/jv_raw", help="書き出し先(生データ)")
     oh.add_argument("--python32", default=r"C:\Python311-32\jvenv\Scripts\python.exe", help="pywin32 を入れた32bit Python")
-    pd_ =sub.add_parser("pedigree", help="(廃止)netkeiba からの血統の取得。代わりに jv --what pedigree blood を使う")
-    pd_.add_argument("--db", default="data/keiba.db")
-    pd_.add_argument("--cache", default="data/cache")
-    pd_.add_argument("--limit", type=int, default=0, help="この頭数で止める(0なら全部)。まず試すとき用")
     tr_ = sub.add_parser("training", help="調教の評価(短評とA〜D)を取得して保存する。新しいレースから。途中で止めても続きから")
     tr_.add_argument("--db", default="data/keiba.db")
     tr_.add_argument("--cache", default="data/cache")
@@ -167,9 +163,6 @@ def main(argv=None) -> None:
     bp.add_argument("--kelly", type=float, default=0.5, help="ケリー基準をどれだけ抑えるか(0.5で半分)")
     bp.add_argument("--db", default="data/keiba.db")
     bp.add_argument("--cache", default="data/cache")
-    fa = sub.add_parser("factors", help="要素(馬の質・騎手と厩舎・展開と馬場)ごとの予想の当たりやすさを比べる")
-    fa.add_argument("--test-from", required=True, help="この日以後で評価する(YYYY-MM-DD)")
-    fa.add_argument("--db", default="data/keiba.db")
     wk = sub.add_parser("weekly", help="毎週の処理: 前の週の予想を結果と照合して回顧を書き、今週末の予想を保存する")
     wk.add_argument("--db", default="data/keiba.db")
     wk.add_argument("--cache", default="data/cache")
@@ -277,9 +270,6 @@ def main(argv=None) -> None:
               f"期待収支 {plan.expected_profit:+,.0f}円 / 全部外れ {plan.worst:,}円")
         print("注: 期待回収率は予想が当たっている前提の数字です。過去8年の検証(馬連・ワイド)では、実際の回収率は90%前後でした。")
         return
-    if args.cmd == "pedigree":
-        raise SystemExit("netkeiba からの血統の取得はやめました。JRA-VAN から `keibaai jv --what pedigree blood` で取り込んでください")
-        return
     if args.cmd == "jv":
         import os
         import subprocess
@@ -378,13 +368,6 @@ def main(argv=None) -> None:
             print(f"evaluated: {out['evaluated']}")
         for d, n in out["forecast"].items():
             print(f"forecast {d}: {n}頭" if n else f"forecast {d}: 出馬表がまだありません")
-        return
-    if args.cmd == "factors":
-        from .factors import evaluate_factors, format_factor_report
-        from .features import features_from_db
-
-        reports, uniform = evaluate_factors(features_from_db(db.connect(args.db)), args.test_from)
-        print(format_factor_report(reports, uniform))
         return
     if args.cmd == "backtest":
         from .backtest import DEFAULT_RULES, format_summary, predict_test, run_rules
