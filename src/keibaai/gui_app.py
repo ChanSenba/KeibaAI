@@ -336,10 +336,12 @@ def page_results() -> None:
         t = gui.live_totals(trend)
         rate = f"{t['honmei_wins'] / t['races']:.1%}" if t["races"] else "—"
         st.html(_stats_html([("予想したレース", f"{t['races']:,}({t['days']}日)"), ("◎の勝率", rate),
-                             ("◎の回収率", pct(t["honmei_roi"])), ("期待値≧1の回収率", pct(t["ev_roi"]))]))
+                             ("◎の回収率", pct(t["honmei_roi"])), ("期待値≧1の回収率", pct(t["ev_roi"])),
+                             ("★の頭数", f"{t['star_bets']:,}"), ("★の回収率", pct(t["star_roi"]))]))
         st.dataframe(trend.iloc[::-1], hide_index=True, width="stretch", column_config={
             "◎単勝回収率(%)": st.column_config.NumberColumn(format="%.0f"),
-            "期待値≧1の回収率(%)": st.column_config.NumberColumn(format="%.0f")})
+            "期待値≧1の回収率(%)": st.column_config.NumberColumn(format="%.0f"),
+            "★単勝回収率(%)": st.column_config.NumberColumn(format="%.0f")})
 
     st.subheader("日曜の自動評価", anchor=False, help=TIPS["train_result"])
     evals_dir = Path(st.session_state["db_path"]).parent / "evals"
@@ -1487,7 +1489,7 @@ def page_review() -> None:
     s = r.summary
     pct = lambda x: "—" if x != x else f"{x:.0f}%"
     stats = [("予想したレース", f"{s['races']}"), ("◎が1着", f"{s['honmei_wins']}"), ("◎の回収率", pct(s["honmei_roi"])),
-             ("期待値≧1の回収率", pct(s["ev_roi"]))]
+             ("期待値≧1の回収率", pct(s["ev_roi"])), ("★の頭数", f"{s['star_bets']}"), ("★の回収率", pct(s["star_roi"]))]
     st.html('<div class="kb-stats">' + "".join(
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>")
     st.caption("数字の見方", help=TIPS["review"])
@@ -1500,7 +1502,8 @@ def page_review() -> None:
         pct = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
         st.dataframe(marks.drop(columns=["top3"]).style.map(mark_style, subset=["mark"]), hide_index=True,
                      width="stretch", column_config={
-            "mark": st.column_config.TextColumn("印", width="small"),
+            "mark": st.column_config.TextColumn("印", width="small",
+                                                 help="★はオッズ込みのモデルの印で、◎○▲△☆の馬と重なることがある"),
             "n": st.column_config.NumberColumn("頭数", format="%d", help="その印を付けて、走った馬の数(取消・除外は除く)"),
             "wins": st.column_config.NumberColumn("1着", format="%d", help="勝った頭数"),
             "win_rate": pct("勝率", "1着の割合"), "top2_rate": pct("連対率", "2着以内の割合"),

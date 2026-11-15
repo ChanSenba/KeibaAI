@@ -116,15 +116,19 @@ def eval_history(evals: list[dict]) -> pd.DataFrame:
 def live_totals(trend: pd.DataFrame) -> dict:
     """実運用の推移(weekly.live_trend)の通算。回収率は、日ごとの回収率を買った数(◎はレース数)で重み付けて合わせる。"""
     if trend.empty:
-        return {"days": 0, "races": 0, "honmei_wins": 0, "honmei_roi": float("nan"), "ev_bets": 0, "ev_roi": float("nan")}
+        return {"days": 0, "races": 0, "honmei_wins": 0, "honmei_roi": float("nan"), "ev_bets": 0, "ev_roi": float("nan"),
+                "star_bets": 0, "star_roi": float("nan")}
 
     def wavg(col: str, w: pd.Series) -> float:
         ok = trend[col].notna() & (w > 0)
         return float((trend.loc[ok, col] * w[ok]).sum() / w[ok].sum()) if ok.any() else float("nan")
 
-    return {"days": len(trend), "races": int(trend["レース数"].sum()), "honmei_wins": int(trend["◎1着"].sum()),
-            "honmei_roi": wavg("◎単勝回収率(%)", trend["レース数"]), "ev_bets": int(trend["期待値≧1の頭数"].sum()),
-            "ev_roi": wavg("期待値≧1の回収率(%)", trend["期待値≧1の頭数"])}
+    star_n = trend["★の頭数"] if "★の頭数" in trend else pd.Series(0, index=trend.index)  # ★を測り始める前の推移には列がない
+    out = {"days": len(trend), "races": int(trend["レース数"].sum()), "honmei_wins": int(trend["◎1着"].sum()),
+           "honmei_roi": wavg("◎単勝回収率(%)", trend["レース数"]), "ev_bets": int(trend["期待値≧1の頭数"].sum()),
+           "ev_roi": wavg("期待値≧1の回収率(%)", trend["期待値≧1の頭数"]), "star_bets": int(star_n.sum())}
+    out["star_roi"] = wavg("★単勝回収率(%)", star_n) if "★単勝回収率(%)" in trend else float("nan")
+    return out
 
 
 def next_race_day(today: dt.date) -> dt.date:
