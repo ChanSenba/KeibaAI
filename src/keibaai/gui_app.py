@@ -493,7 +493,10 @@ def page_predict() -> None:
         table = gui.saved_prediction(conn, date)  # 自動の予想(weekly)で計算済みなら、押さなくても出す
         if table is not None:
             st.session_state["prediction"] = (date, table)
-            st.caption(":material/info: 自動で作った予想を表示しています。オッズを取り直したら「予想する」で更新してください。")
+            saved_at = table["saved_at"].max() if "saved_at" in table else None
+            st.caption(":material/info: 自動で作った予想を表示しています"
+                       + (f"(保存 {str(saved_at)[:16].replace('T', ' ')} の時点の印・オッズ)" if saved_at else "")
+                       + "。最新のオッズで見るには「予想する」を押してください。")
         elif "prediction" in st.session_state:
             when = st.session_state["prediction"][0]
             st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")

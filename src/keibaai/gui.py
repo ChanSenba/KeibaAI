@@ -305,14 +305,24 @@ def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
 
 
 def saved_prediction(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame | None:
-    """その日の予想がすでに計算・保存されていれば(自動の予想 weekly など)、印を付けた表を返す。なければ None。"""
+    """その日の予想がすでにあれば(自動の予想 weekly など)、印を付けた表を返す。なければ None。
+
+    計算の保存(model_cache)があればそれを使う。コードやデータが変わって保存と合わないときは、
+    weekly が回顧用に保存した予想(predictions。印と勝率・期待値は保存した時点のもの)を出す。
+    """
     from .predict import saved_predict_day
 
     raw = saved_predict_day(conn, date.isoformat())
-    if raw is None:
+    if raw is not None:
+        raw.attrs = {}
+        return add_marks(raw)
+    saved = pd.read_sql_query("SELECT * FROM predictions WHERE date = ? ORDER BY race_id, number", conn,
+                              params=(date.isoformat(),))
+    if saved.empty:
         return None
-    raw.attrs = {}
-    return add_marks(raw)
+    saved["mark"] = saved["mark"].fillna("")
+    saved["star"] = saved["star"].fillna("")
+    return saved
 
 
 def predict_and_save(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:

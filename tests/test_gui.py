@@ -222,3 +222,20 @@ def test_predict_table_drops_attrs(monkeypatch):
     assert out.attrs == {}
     out.astype({"round": int})  # attrs に表が残っていると ValueError
     pd.concat([out, out.astype({"round": int})], axis=1)
+
+
+def test_saved_prediction_falls_back_to_the_saved_table():
+    import datetime as dt
+
+    from keibaai import gui
+    from test_model import synthetic_db
+
+    conn = synthetic_db(n_days=3)
+    assert gui.saved_prediction(conn, dt.date(2030, 1, 5)) is None  # 予想がない日
+    conn.execute("INSERT INTO predictions (race_id, number, saved_at, date, venue, round, horse_name, win_odds, "
+                 "mark, star, p_win_ability, p_win_market, ev_ability, ev_market) VALUES "
+                 "('203001050101', 1, '2030-01-04T21:00:00', '2030-01-05', '東京', 1, '馬A', 3.0, '◎', NULL, 0.3, 0.3, 0.9, 0.9)")
+    t = gui.saved_prediction(conn, dt.date(2030, 1, 5))  # 計算の保存はない(メモリの DB)ので、保存した予想を出す
+    assert list(t["mark"]) == ["◎"] and list(t["star"]) == [""]
+    one = gui.race_entries(conn, "203001050101", t)  # 画面の表に足せる形
+    assert "mark" in one
