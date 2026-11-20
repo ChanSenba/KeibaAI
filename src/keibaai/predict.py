@@ -164,17 +164,24 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, default=str).encode()).hexdigest()[:20]
 
 
+def _cache_file(conn: sqlite3.Connection, kind: str, date: str, with_entries: bool, extra: tuple) -> Path | None:
+    """_cached の保存先。メモリ上の DB など、保存しないときは None。"""
+    path = _db_file(conn)
+    if path is None or db.model_revision(conn) is None:
+        return None
+    return path.parent / CACHE_DIR / f"{kind}-{date}-{_data_key(conn, date, with_entries, extra)}.pkl"
+
+
 def _cached(conn: sqlite3.Connection, kind: str, date: str, with_entries: bool, extra: tuple, compute):
     """compute() の結果を DB の隣に保存し、データが同じなら次からはそれを返す。
 
     予想や混ぜ方の決定は、毎回1万レース以上で学習し直すので数十秒かかる。出馬表やオッズを取り直したり、
     成績を足したりすると指紋が変わり、計算し直す。同じ日・同じ種類の古い保存は消す。
     """
-    path = _db_file(conn)
-    if path is None or db.model_revision(conn) is None:
+    file = _cache_file(conn, kind, date, with_entries, extra)
+    if file is None:
         return compute()
-    folder = path.parent / CACHE_DIR
-    file = folder / f"{kind}-{date}-{_data_key(conn, date, with_entries, extra)}.pkl"
+    folder = file.parent
     if file.exists():
         try:
             with file.open("rb") as f:
@@ -217,6 +224,22 @@ def predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.Da
     結果は保存して使い回す。出馬表やオッズを取り直すと計算し直す。
     """
     return _cached(conn, "predict", date, True, (rounds,), lambda: _predict_day(conn, date, rounds)).copy()
+
+
+def saved_predict_day(conn: sqlite3.Connection, date: str, rounds: int = 300) -> pd.DataFrame | None:
+    """predict_day の保存があれば、計算せずにそれを返す。なければ None。
+
+    自動の予想(weekly)のあとに画面を開いたとき、「予想する」を押さなくても表を出すため。
+    出馬表やオッズを取り直したあとは保存と合わないので None になる。
+    """
+    file = _cache_file(conn, "predict", date, True, (rounds,))
+    if file is None or not file.exists():
+        return None
+    try:
+        with file.open("rb") as f:
+            return pickle.load(f).copy()
+    except Exception:
+        return None
 
 
 def models_for_day(conn: sqlite3.Connection, date: str, train: pd.DataFrame) -> dict:

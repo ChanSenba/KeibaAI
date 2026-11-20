@@ -304,6 +304,17 @@ def predict_table(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
     return predict_with_flow(conn, date)[0]
 
 
+def saved_prediction(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame | None:
+    """その日の予想がすでに計算・保存されていれば(自動の予想 weekly など)、印を付けた表を返す。なければ None。"""
+    from .predict import saved_predict_day
+
+    raw = saved_predict_day(conn, date.isoformat())
+    if raw is None:
+        return None
+    raw.attrs = {}
+    return add_marks(raw)
+
+
 def predict_and_save(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame:
     """予想して、回顧用に(展開予想も)保存し、印を付けた表を返す。"""
     raw, flow = predict_with_flow(conn, date)

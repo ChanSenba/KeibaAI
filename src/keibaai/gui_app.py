@@ -488,8 +488,15 @@ def page_predict() -> None:
     if "prediction" in st.session_state:
         when, table = st.session_state["prediction"]
         if when != date:
-            st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
             table = None
+    if table is None and info["races"]:
+        table = gui.saved_prediction(conn, date)  # 自動の予想(weekly)で計算済みなら、押さなくても出す
+        if table is not None:
+            st.session_state["prediction"] = (date, table)
+            st.caption(":material/info: 自動で作った予想を表示しています。オッズを取り直したら「予想する」で更新してください。")
+        elif "prediction" in st.session_state:
+            when = st.session_state["prediction"][0]
+            st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
     if table is not None and picked is not None and picked["race_id"] not in set(table["race_id"]):
         table = None  # 予想のあとで取得したレースは、もう一度「予想する」まで予想がない
 

@@ -174,3 +174,18 @@ def test_snapshot_odds_appends_with_time_and_skips_empty(capsys):
 
     assert snapshot_odds(conn, Empty([]), "2024-11-24", now=dt.datetime(2024, 11, 24, 16, 0)) == 0
     assert "オッズがまだ" in capsys.readouterr().out
+
+
+def test_saved_prediction_is_shown_without_recomputing(tmp_path):
+    from keibaai.predict import saved_predict_day
+
+    conn = db.connect(tmp_path / "k.db")
+    synthetic_db(n_days=40).backup(conn)
+    _entries_for_future(conn, "2030-01-05")
+    assert saved_predict_day(conn, "2030-01-05", rounds=30) is None  # まだ予想していない
+    out = predict_day(conn, "2030-01-05", rounds=30)  # 自動の予想(weekly)と同じ計算
+    saved = saved_predict_day(conn, "2030-01-05", rounds=30)
+    assert saved is not None and saved[["number", "p_win_ability"]].equals(out[["number", "p_win_ability"]])
+    conn.execute("UPDATE entries SET win_odds = win_odds + 1 WHERE number = 1")  # オッズを取り直した
+    conn.commit()
+    assert saved_predict_day(conn, "2030-01-05", rounds=30) is None
