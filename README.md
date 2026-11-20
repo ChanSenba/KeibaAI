@@ -182,10 +182,10 @@ keibaai weekly
 
 市場の勝率の作り方（単勝オッズの逆数の比例方式か、Shin 方式か）は、`python -m keibaai.devig_trials --test-from 2024-01-01 --test-to 2025-01-01` で市場だけで比べられます（本番の作り方はまだ比例方式のまま）。
 
-Windows のタスクスケジューラに登録するには、次を1度だけ実行します（木曜と月曜の夜 21 時）。
+Windows のタスクスケジューラに登録するには、次を1度だけ実行します（月・木・金・土の夜 21 時）。
 
 ```
-schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D THU,MON /ST 21:00 /TR "wscript.exe //B //Nologo \"C:\パス\KeibaAI\run-hidden.vbs\" \"C:\パス\KeibaAI\KeibaAI-weekly.bat\""
+schtasks /Create /TN "KeibaAI weekly" /SC WEEKLY /D MON,THU,FRI,SAT /ST 21:00 /TR "wscript.exe //B //Nologo \"C:\パス\KeibaAI\run-hidden.vbs\" \"C:\パス\KeibaAI\KeibaAI-weekly.bat\""
 ```
 
 `C:\パス\KeibaAI` はこのフォルダの場所に置き換えてください。記録は `data\weekly.log` に残ります。PC が起動していないと動きません。
