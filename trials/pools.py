@@ -201,7 +201,7 @@ def fit_res(train: pd.DataFrame, feats: list[str], init: np.ndarray, seed: int):
 
 
 def res_logit(train, test, feats, init_col, seeds):
-    """★のモデルの、テストの行の logit(乱数 seeds 通りの平均)。init_col は出発点の対数勝率の列。"""
+    """★のモデルの、テストの行の対数勝率(正規化前。乱数 seeds 通りのロジットの平均から)。init_col は出発点の対数勝率の列。"""
     tr = train_rows(train)
     def to_logit(lp):
         p = np.exp(lp).clip(1e-6, 1 - 1e-6)
@@ -211,7 +211,8 @@ def res_logit(train, test, feats, init_col, seeds):
         m = fit_res(tr, feats, to_logit(tr[init_col].to_numpy()), s)
         zs.append(m.predict(test[feats], raw_score=True) + to_logit(test[init_col].to_numpy()))
     z = np.mean(zs, axis=0)
-    return z, m
+    # 予想と同じく、二値の確率(シグモイド)をレース内で合計1にする。ロジットのソフトマックスにすると人気馬を重く見すぎる
+    return -np.logaddexp(0, -z), m
 
 
 # ---------------------------------------------------------------- 3. 実行
