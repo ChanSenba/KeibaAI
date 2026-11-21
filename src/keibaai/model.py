@@ -56,34 +56,48 @@ def has_market(df: pd.DataFrame) -> pd.Series:
     return (odds > 0).groupby(df["race_id"]).transform("all")
 
 
-def residual_features() -> list[str]:
-    """オッズ込みのモデルの入力: RESIDUAL_MODEL_FEATURES と、能力のみのネットの年ごとの予想(nn_year.FEATURES)。"""
+def residual_features(pools: bool = False) -> list[str]:
+    """オッズ込みのモデルの入力: RESIDUAL_MODEL_FEATURES と、能力のみのネットの年ごとの予想(nn_year.FEATURES)。
+
+    pools=True は、単勝以外の券種のオッズの特徴量(pools.FEATURES)も使う形。
+    """
     from .nn_year import FEATURES
 
+    if pools:
+        from .pools import FEATURES as POOL_FEATURES
+
+        return RESIDUAL_MODEL_FEATURES + FEATURES + POOL_FEATURES
     return RESIDUAL_MODEL_FEATURES + FEATURES
 
 
-def fit_residual(train: pd.DataFrame, rounds: int = RESIDUAL_ROUNDS) -> lgb.Booster:
+def fit_residual(train: pd.DataFrame, rounds: int = RESIDUAL_ROUNDS, pools: bool = False) -> lgb.Booster:
     """オッズ込みの勝率のモデル(市場の見立てからのずれを学ぶ)。オッズのそろったレースだけで学習する。
 
     能力のみのネットの年ごとの予想の列(nn_year.add_nn_year)がなければ、train から作る。
+    pools=True は券種の特徴量(pools.add_pool_features で足しておく)のそろったレースだけで学ぶ。
     """
     from .nn_year import add_nn_year
 
-    train = train_rows(add_nn_year(train)[has_market(train)])
-    feats = residual_features()
+    keep = has_market(train)
+    if pools:
+        from .pools import has_pools
+
+        keep &= has_pools(train)
+    train = train_rows(add_nn_year(train)[keep])
+    feats = residual_features(pools)
     cats = [c for c in CATEGORICAL if c in feats]
     ds = lgb.Dataset(train[feats], train["win"], categorical_feature=cats, init_score=market_logit(train),
                      free_raw_data=False)
     return lgb.train(RESIDUAL_PARAMS, ds, num_boost_round=rounds)
 
 
-def predict_residual(model: lgb.Booster, df: pd.DataFrame) -> np.ndarray:
+def predict_residual(model: lgb.Booster, df: pd.DataFrame, pools: bool = False) -> np.ndarray:
     """fit_residual のモデルの勝率(レース内で合計1にする前)。オッズのない馬は NaN。
 
     df には nn_year.add_nn_year の列が要る(過去の結果とつないだ表で足してから、予想する行を取り出すこと)。
+    pools=True のモデルには、券種の特徴量の列も要る。
     """
-    z = model.predict(df[residual_features()], raw_score=True) + market_logit(df)
+    z = model.predict(df[residual_features(pools)], raw_score=True) + market_logit(df)
     return 1.0 / (1.0 + np.exp(-z))
 
 

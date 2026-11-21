@@ -46,7 +46,7 @@ def test_market_model_starts_from_the_market(monkeypatch):
     cut = str(df["date"].sort_values().iloc[len(df) * 3 // 4].date())
     # 木がほとんど何も足さなければ、市場の勝率そのものになる
     monkeypatch.setattr(model, "RESIDUAL_PARAMS", dict(model.RESIDUAL_PARAMS, learning_rate=1e-9))
-    monkeypatch.setattr(model.fit_residual, "__defaults__", (1,))
+    monkeypatch.setattr(model.fit_residual, "__defaults__", (1, False))
     _, test = evaluate(df, cut, use_market=True)
     mkt = normalize_within_race(test, (1 / test["win_odds"]).to_numpy())
     assert np.allclose(test["p_win"].to_numpy(), mkt)

@@ -130,6 +130,11 @@ def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datet
     if n == 0:
         return 0
     _fetch_training(conn, fetcher, date, jv)
+    if jv:  # ★・期待値のモデルが使う複勝・馬単・三連単のオッズ。取れなくても、単勝だけのモデルで予想する
+        try:
+            print(f"券種のオッズ: {jvlink.snapshot_pool_odds(conn, date.isoformat(), now=now, raw_root=jv[0], python32=jv[1])} レース")
+        except Exception as e:
+            print(f"券種のオッズを取れませんでした: {e}")
     pred = predict_day(conn, date.isoformat())
     n = save_predictions(conn, pred, now)
     flow = pred.attrs.get("flow")

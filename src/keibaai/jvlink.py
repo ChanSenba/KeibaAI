@@ -204,6 +204,63 @@ def fetch_bet_odds(conn: sqlite3.Connection, race_id: str, raw_root: str | Path 
     return read_bet_odds(raw, key)[0]
 
 
+def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple[dict, dict]]:
+    """書き出した速報オッズ(pools.RT_SPECS の種別)から、レースごとの ({券種: {組: オッズ}}, {券種: {組: 上限}})。
+
+    keys は JV-Link のレースのキー → race_id。複勝は下限をオッズ、上限を2つ目の表に入れる。
+    """
+    from .jvodds import ODDS, parse_odds
+    from .pools import RT_SPECS
+
+    out: dict[str, tuple[dict, dict]] = {}
+    for spec, code in RT_SPECS.items():
+        for rec in _rt_records(Path(raw_dir) / f"RT_{spec}.txt"):
+            rid = keys.get(rec[11:27])
+            if rec[:2] != code or not rid:
+                continue
+            odds, hi = out.setdefault(rid, ({}, {}))
+            for kind, name in BET_KINDS.items():
+                if ODDS[kind][0] != code or kind not in ("place", "exacta", "trifecta"):
+                    continue
+                n = ODDS[kind][2]
+                rows = parse_odds(rec, kind)
+                if rows:
+                    odds[name] = {r[:n]: r[n] for r in rows}
+                    if len(ODDS[kind][6]) == 2:
+                        hi[name] = {r[:n]: r[n + 1] for r in rows if r[n + 1]}
+    return out
+
+
+def snapshot_pool_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | None = None,
+                       now: dt.datetime | None = None, raw_root: str | Path = RAW_DIR,
+                       python32: str = PYTHON32) -> int:
+    """date の各レースの複勝・馬単・三連単の速報オッズを JRA-VAN から取り、bet_odds_snapshots に入れる。入れたレース数を返す。
+
+    ★・期待値のモデルの券種の特徴量(pools.py)に使う。JV-Link は1回だけ起動し、種別・レースごとに間をあけて開く
+    (24レースで約6分)。発売前のレースは飛ばす。
+    """
+    from . import db
+    from .pools import RT_SPECS
+
+    stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    ids = race_ids or [r[0] for r in conn.execute("SELECT race_id FROM entry_races WHERE date = ? ORDER BY race_id", (date,))]
+    keys = {}
+    for rid in ids:
+        try:
+            keys[race_key(conn, rid)] = rid
+        except ValueError as e:
+            print(e)
+    if not keys:
+        return 0
+    raw = Path(raw_root) / "pools"
+    export(raw, date.replace("-", ""), [], rt=[f"{s}:{k}" for s in RT_SPECS for k in keys], python32=python32)
+    n = 0
+    for rid, (odds, hi) in read_pool_odds(raw, keys).items():
+        if db.save_bet_odds_snapshot(conn, rid, odds, stamp, hi):
+            n += 1
+    return n
+
+
 def snapshot_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | None = None,
                   now: dt.datetime | None = None, raw_root: str | Path = RAW_DIR, python32: str = PYTHON32) -> int:
     """date(YYYY-MM-DD)の各レースの単勝の速報オッズを JRA-VAN から取り、odds_snapshots に追記する。記録したレース数を返す。
