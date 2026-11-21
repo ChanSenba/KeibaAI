@@ -271,4 +271,24 @@ button, a, [role="button"] { touch-action: manipulation; }
   /* スマホ幅では表と見解の列を隠し、1頭1枚のカードで出す(見解はカードの詳細の中にもある) */
   .st-key-kb_table, .st-key-kb_reviews { display: none; }
   .kb-cards { display: block; }
+  /* 開いたカードでは、常時表示の部分(印・馬番・馬名と数字の並び)をカードの先頭に固定する。
+   * 固定される範囲は親のカードの中だけなので、読み終えたカードの固定は外れて流れていき、
+   * 次に開いたカードが代わりに固定される(複数開いていても順に切り替わる)。
+   * top は Streamlit の上部バー(固定ヘッダ)に隠れないためのずらし。ページ上部の余白
+   * (--kb-space-top、スマホ幅では最小の 4rem で効く)より少しだけ小さくした。
+   * 背景はテーマの背景色(.streamlit/config.toml の backgroundColor と同じ値)で塗り、
+   * 下を流れる詳細の本文が透けないようにする。config.toml の色を変えたら、ここも合わせる。
+   * 上の負の margin と padding はカードの上余白(10px)との相殺で、固定されていないときの
+   * 見た目と位置は変えない。下の padding(4px)ぶんは、詳細との間隔が広がらないように
+   * .kb-card-more の margin をこの幅のときだけ 4px 詰めて相殺する */
+  .kb-card-top {
+    position: sticky;
+    top: 3.75rem;
+    z-index: 2;
+    background: light-dark(#FFFFFF, #0E1311);
+    margin-top: -10px;
+    padding-top: 10px;
+    padding-bottom: 4px;
+  }
+  .kb-card-more { margin-top: 4px; }
 }

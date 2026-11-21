@@ -950,6 +950,8 @@ def race_cards_html(one: pd.DataFrame, reviews: list[dict]) -> str:
 
     常時見せるのは印・馬番・馬名・総合スコア・勝率・期待値・単勝オッズ。
     要素ごとの点数と見解は details に畳む。DB 由来の文字列(馬名・騎手)はすべてエスケープする。
+    常時見せる部分は .kb-card-top で包み、スマホ幅では style.css でカードの先頭に固定して出す
+    (詳細を開いて読み進めても、その馬の情報が画面の上に残る)。
     """
     by_number = {int(rv["number"]): rv for rv in reviews}
     cards = []
@@ -991,11 +993,11 @@ def race_cards_html(one: pd.DataFrame, reviews: list[dict]) -> str:
         details = (f'<details class="kb-card-more"><summary>要素の点数と見解</summary>{"".join(more)}</details>'
                    if more else "")
         cards.append(
-            f'<div class="kb-card"><div class="kb-card-head">'
+            f'<div class="kb-card"><div class="kb-card-top"><div class="kb-card-head">'
             f'<span class="kb-card-mark">{mark}</span>{chip}'
             f'<span class="kb-card-name">{html.escape(str(r["horse_name"]))}</span>'
             f'<span class="kb-card-star">{star}</span></div>'
-            f'<div class="kb-card-nums">{"".join(nums)}</div>{details}</div>')
+            f'<div class="kb-card-nums">{"".join(nums)}</div></div>{details}</div>')
     return f'<div class="kb-cards">{"".join(cards)}</div>'
 
 

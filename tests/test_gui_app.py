@@ -34,6 +34,21 @@ def test_race_cards_html_escapes_and_shows_key_values():
     assert out.count("総合スコア") == 1  # 値のない馬には出さない
 
 
+def test_race_cards_html_wraps_always_visible_part_for_sticky_header():
+    rv = {"mark": "◎", "number": 1, "name": "テスト<馬>", "sub": "", "summary": "勝率40%",
+          "rows": [{"name": "馬の質", "pt": 8.0, "grade": "強み", "text": "根拠"}]}
+    table = cards_table()
+    out = gui_app.race_cards_html(table, [rv])
+    # 常時表示の部分(見出しと数字)は .kb-card-top で包み、スマホ幅ではカード内に固定する(style.css)
+    assert out.count('class="kb-card-top"') == len(table)  # カード1枚(表の1行)に1つ
+    assert "テスト&lt;馬&gt;" in out and "テスト<馬>" not in out  # 包んでも馬名のエスケープは崩れない
+    top = out.index('class="kb-card-top"')
+    head = out.index('class="kb-card-head"')
+    nums = out.index('class="kb-card-nums"')
+    details = out.index("<details")
+    assert top < head < nums < details  # 包むのは詳細より前の部分だけ
+
+
 def test_race_cards_html_without_prediction():
     one = cards_table().drop(columns=["mark", "star", "factor_total", "p_win_ability", "p_win_market",
                                       "ev_ability", "ev_market", "pt_p_win_quality"])
