@@ -161,10 +161,12 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
         # 取得時刻だけ変わっても、中身が同じなら使い回す(列はあとから足されるので、名前で外す)
         cols = [r[1] for r in conn.execute("PRAGMA table_info(entry_races)") if r[1] != "fetched_at"]
         races = conn.execute(f"SELECT {','.join(cols)} FROM entry_races WHERE date = ? ORDER BY race_id", (date,)).fetchall()
-        # 券種のオッズ(★のモデルの特徴量)は、レースごとの最新の取得時刻と件数で見分ける
+        # 券種のオッズ(★のモデルの特徴量)は、レースごとの最新の取得時刻で見分ける。複勝の上限のない記録(買い方の
+        # 画面が残すもの)は特徴量に使わないので、取り直しても予想を出し直さない
         pools = conn.execute(
-            "SELECT b.race_id, MAX(b.snapped_at), COUNT(*) FROM bet_odds_snapshots b JOIN entry_races c USING (race_id) "
-            "WHERE c.date = ? GROUP BY b.race_id ORDER BY b.race_id", (date,)).fetchall()
+            "SELECT b.race_id, MAX(b.snapped_at) FROM bet_odds_snapshots b JOIN entry_races c USING (race_id) "
+            "WHERE c.date = ? AND b.kind = '複勝' AND b.odds_max IS NOT NULL GROUP BY b.race_id ORDER BY b.race_id",
+            (date,)).fetchall()
         parts += [rows, races, pools]
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, default=str).encode()).hexdigest()[:20]
 
@@ -264,12 +266,26 @@ def models_for_day(conn: sqlite3.Connection, date: str, train: pd.DataFrame) -> 
         if shares is not None:
             from .pools import add_pool_features, has_pools
 
-            tp = add_pool_features(tr, shares)
-            if tp.loc[has_pools(tp), "race_id"].nunique() >= POOL_MIN_RACES:
-                out["residual_pools"] = fit_residual(tp, RESIDUAL_ROUNDS, True)
+            try:
+                tp = add_pool_features(tr, shares)
+                if tp.loc[has_pools(tp), "race_id"].nunique() >= POOL_MIN_RACES:
+                    out["residual_pools"] = fit_residual(tp, RESIDUAL_ROUNDS, True)
+            except Exception as e:  # 券種を使うモデルが作れなくても、今のモデルで予想する
+                print(f"券種のオッズを使うモデルを作れませんでした: {e}")
         return out
 
-    return _cached(conn, "models", date, False, (), compute)
+    return _cached(conn, "models", date, False, (_odds_db_stamp(conn),), compute)
+
+
+def _odds_db_stamp(conn: sqlite3.Connection) -> tuple | None:
+    """jravan_odds.db の大きさと更新時刻(確定オッズを取り込み直したら、券種を使うモデルを学び直す)。"""
+    from .pools import ODDS_DB
+
+    path = _db_file(conn)
+    if path is None or not (path.parent / ODDS_DB).exists():
+        return None
+    st = (path.parent / ODDS_DB).stat()
+    return (st.st_size, int(st.st_mtime))
 
 
 POOL_MIN_RACES = 3000  # 券種のオッズのそろった学習のレースがこれより少ないときは、券種を使うモデルを作らない

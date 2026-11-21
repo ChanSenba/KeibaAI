@@ -254,6 +254,9 @@ def main(argv=None) -> None:
     if args.cmd == "snapshot":
         from .predict import snapshot_odds
 
+        if args.pools:
+            print("--pools は JRA-VAN から取るとき(--source jv)だけ使えます。単勝だけ記録します")
+
         n = snapshot_odds(db.connect(args.db), Fetcher(cache_dir=args.cache), args.date, race_ids=args.race_id or None)
         print(f"done: {n} races")
         return

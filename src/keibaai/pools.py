@@ -25,9 +25,11 @@ import pandas as pd
 
 FEATURES = ["d_place", "d_exacta1", "d_exacta2", "d_tri1"]
 SHARES = [f"s_{c[2:]}" for c in FEATURES]
+# 差を取る単勝の市場も、券種と同じ時点のオッズにする(s_win。学習は確定、予想は同じ取得の単勝)
+ALL_SHARES = ["s_win", *SHARES]
 # 予想のときに取る速報オッズ(JVRTOpen の種別)と、bet_odds_snapshots の券種名
 RT_SPECS = {"0B31": "O1", "0B34": "O4", "0B36": "O6"}
-SNAPSHOT_KINDS = ("複勝", "馬単", "三連単")
+SNAPSHOT_KINDS = ("単勝", "複勝", "馬単", "三連単")
 ODDS_DB = "jravan_odds.db"  # keiba.db と同じフォルダ
 
 
@@ -36,6 +38,7 @@ def final_shares(odds_db: str | Path, since: str = "2018") -> pd.DataFrame:
     c = sqlite3.connect(f"file:{Path(odds_db).as_posix()}?mode=ro", uri=True)
     try:
         q = {
+            "s_win": "SELECT race_id, a AS number, 1.0/odds AS s FROM odds_win WHERE race_id >= ? AND odds > 0",
             "s_place": "SELECT race_id, a AS number, 1.0/sqrt(odds_min*odds_max) AS s FROM odds_place "
                        "WHERE race_id >= ? AND odds_min > 0 AND odds_max > 0",
             "s_exacta1": "SELECT race_id, a AS number, SUM(1.0/odds) AS s FROM odds_exacta WHERE race_id >= ? AND odds > 0 "
@@ -55,7 +58,12 @@ def final_shares(odds_db: str | Path, since: str = "2018") -> pd.DataFrame:
 
 
 def snapshot_shares(conn: sqlite3.Connection, race_ids) -> pd.DataFrame:
-    """bet_odds_snapshots の、レースごとに3券種がそろった最新の取得時刻のオッズから、final_shares と同じ形の表。"""
+    """bet_odds_snapshots の、レースごとに券種がそろった最新の取得時刻のオッズから、final_shares と同じ形の表。
+
+    そろった記録 = 単勝・複勝(全馬に幅の上限つき)・馬単と三連単(全部の組にオッズ)が同じ取得時刻にある。
+    買い方の画面が残す記録は複勝の上限がないので使わない(学習の複勝は下限と上限の幾何平均)。
+    発売直後で売れていない組がある記録も、合計が確定オッズと同じ意味にならないので使わない。
+    """
     ids = list(race_ids)
     if not ids:
         return _typed(None)
@@ -66,20 +74,27 @@ def snapshot_shares(conn: sqlite3.Connection, race_ids) -> pd.DataFrame:
             WHERE race_id IN ({marks}) AND kind IN ({kinds}) AND odds > 0""", conn, params=[*ids, *SNAPSHOT_KINDS])
     if rows.empty:
         return _typed(None)
-    full = rows.groupby(["race_id", "snapped_at"])["kind"].nunique()
-    full = full[full == len(SNAPSHOT_KINDS)].reset_index()
+    cnt = rows.pivot_table(index=["race_id", "snapped_at"], columns="kind", values="combo", aggfunc="count")
+    cnt = cnt.reindex(columns=list(SNAPSHOT_KINDS))
+    place_hi = rows[rows["kind"] == "複勝"].assign(ok=lambda d: d["odds_max"] > 0).groupby(
+        ["race_id", "snapped_at"])["ok"].all()
+    n = cnt["複勝"]
+    good = ((cnt["単勝"] == n) & (cnt["馬単"] == n * (n - 1)) & (cnt["三連単"] == n * (n - 1) * (n - 2))
+            & place_hi.reindex(cnt.index, fill_value=False) & (n >= 3))
+    full = good[good].reset_index()[["race_id", "snapped_at"]]
     if full.empty:
         return _typed(None)
     last = full.groupby("race_id")["snapped_at"].max().reset_index()
     rows = rows.merge(last, on=["race_id", "snapped_at"])
     nums = rows["combo"].str.split("-")
     rows["a"] = pd.to_numeric(nums.str[0])
-    rows["b"] = pd.to_numeric(nums.str[1])  # 複勝は空
+    rows["b"] = pd.to_numeric(nums.str[1])  # 単勝・複勝は空
     place = rows[rows["kind"] == "複勝"]
-    hi = place["odds_max"].where(place["odds_max"] > 0, place["odds"])  # 上限がない古い記録は下限だけ
+    win = rows[rows["kind"] == "単勝"]
     parts = [
+        pd.DataFrame({"race_id": win["race_id"], "number": win["a"].astype(int), "s_win": 1.0 / win["odds"]}),
         pd.DataFrame({"race_id": place["race_id"], "number": place["a"].astype(int),
-                      "s_place": 1.0 / np.sqrt(place["odds"] * hi)}),
+                      "s_place": 1.0 / np.sqrt(place["odds"] * place["odds_max"])}),
         _sum(rows[rows["kind"] == "馬単"], "a", "s_exacta1"),
         _sum(rows[rows["kind"] == "馬単"], "b", "s_exacta2"),
         _sum(rows[rows["kind"] == "三連単"], "a", "s_tri1"),
@@ -97,7 +112,7 @@ def _sum(rows: pd.DataFrame, col: str, name: str) -> pd.DataFrame:
 
 def _typed(d: pd.DataFrame | None) -> pd.DataFrame:
     if d is None:
-        d = pd.DataFrame(columns=["race_id", "number", *SHARES])
+        d = pd.DataFrame(columns=["race_id", "number", *ALL_SHARES])
     d = d.copy()
     d["race_id"] = d["race_id"].astype(str)
     d["number"] = pd.to_numeric(d["number"]).astype("int64")
@@ -105,18 +120,18 @@ def _typed(d: pd.DataFrame | None) -> pd.DataFrame:
 
 
 def add_pool_features(df: pd.DataFrame, shares: pd.DataFrame) -> pd.DataFrame:
-    """df に FEATURES を足す。全馬の単勝オッズと3券種がそろわないレースは空(★は今のモデルで出す)。
+    """df に FEATURES を足す。全馬の単勝と3券種のオッズがそろわないレースは空(★は今のモデルで出す)。
 
     df の行の並びと index はそのまま。shares は final_shares・snapshot_shares の表。
     """
     key = pd.DataFrame({"race_id": df["race_id"].astype(str).to_numpy(),
                         "number": pd.to_numeric(df["number"], errors="coerce").to_numpy()})
-    m = key.merge(shares[["race_id", "number", *SHARES]].drop_duplicates(["race_id", "number"]),
+    m = key.merge(shares[["race_id", "number", *ALL_SHARES]].drop_duplicates(["race_id", "number"]),
                   on=["race_id", "number"], how="left")
     m.index = df.index
     race = df["race_id"]
-    odds = pd.to_numeric(df["win_odds"], errors="coerce")
-    inv = (1.0 / odds).where(odds > 0)
+    # 単勝の市場は券種と同じ時点のもの。df の馬すべてにあること(取消の馬が券種のオッズにだけない、などは使わない)
+    inv = pd.to_numeric(m["s_win"], errors="coerce").where(lambda x: x > 0)
     ok = inv.notna().groupby(race).transform("all")
     lp_mkt = np.log(inv / inv.groupby(race).transform("sum"))
     out = {}
