@@ -431,3 +431,29 @@ def test_auto_predict_saves_races_without_prediction_after_results(tmp_path, mon
     out = weekly.run_weekly(conn, FakeFetcher(), dt.date(2025, 3, 20), tmp_path / "r", now=dt.datetime(2025, 3, 20, 21),
                             auto=True)
     assert out["auto"] == {}  # 古い開催日は対象外
+
+
+def test_live_marks_sums_all_days_and_compares_with_expected():
+    conn = db.connect(":memory:")
+    assert weekly.live_marks(conn).empty  # 予想がまだない
+    weekly.save_predictions(conn, pred_table("202505010101", "2025-03-01"), dt.datetime(2025, 2, 28, 20))
+    weekly.save_predictions(conn, pred_table("202505010201", "2025-03-08"), dt.datetime(2025, 3, 7, 20))
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])  # ◎(1番)が勝ち
+    add_result(conn, "202505010201", "2025-03-08", [3, 1, 2, 5, 4])  # ◎は2着
+    m = weekly.live_marks(conn)
+    assert m.attrs["races"] == 2
+    top = m.set_index("mark").loc["◎"]
+    assert top["n"] == 2 and top["wins"] == 1 and top["top2_rate"] == 1 and top["top3_rate"] == 1
+    assert top["p_mean"] == 0.4  # 発走前の能力のみの勝率の平均
+    later = weekly.live_marks(conn, since="2025-03-05")  # 期間で絞る
+    assert later.attrs["races"] == 1 and later.set_index("mark").loc["◎", "wins"] == 0
+
+
+def test_live_marks_skips_predictions_saved_after_results():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    assert weekly.live_marks(conn).attrs["races"] == 1
+    with conn:
+        conn.execute("UPDATE predictions SET after_result = 1")
+    assert weekly.live_marks(conn).empty

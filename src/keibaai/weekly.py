@@ -167,16 +167,22 @@ class Review:
     full: dict | None = None  # レースごとの全頭の振り返り(horse_review.race_rows)
 
 
-def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: bool = True) -> Review:
-    """date の予想と結果の照合。views=False ならレースごとの見解(少し時間がかかる)を作らない。"""
-    pred = pd.read_sql_query("SELECT * FROM predictions WHERE date = ?", conn, params=(date,))
+def _review_horses(conn: sqlite3.Connection, where: str, params: tuple) -> pd.DataFrame:
+    """保存した予想(predictions の where に合う行)と確定結果の照合。結果が出たレースだけ。"""
+    pred = pd.read_sql_query(f"SELECT * FROM predictions WHERE {where}", conn, params=params)
     res = pd.read_sql_query(
         "SELECT race_id, number, finish, status, passing, last3f, horse_id, time_sec, popularity AS final_pop, win_odds AS final_odds "
-        "FROM results WHERE race_id IN (SELECT race_id FROM predictions WHERE date = ?)", conn, params=(date,))
+        f"FROM results WHERE race_id IN (SELECT race_id FROM predictions WHERE {where})", conn, params=params)
     h = pred.merge(res, on=["race_id", "number"], how="left")
     h = h[h.groupby("race_id")["finish"].transform(lambda s: s.notna().any())].copy()  # 結果が出たレースだけ
     h["win"] = (h["finish"] == 1).astype(int)
     h["odds"] = h["final_odds"].fillna(h["win_odds"])  # 精算は確定オッズ。なければ予想時のもの
+    return h
+
+
+def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: bool = True) -> Review:
+    """date の予想と結果の照合。views=False ならレースごとの見解(少し時間がかかる)を作らない。"""
+    h = _review_horses(conn, "date = ?", (date,))
     h["rank"] = h.groupby("race_id")["p_win_ability"].rank(ascending=False, method="first")
     flows = _flows(conn, list(h["race_id"].unique()))
 
@@ -313,6 +319,27 @@ def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
         if not g.empty:
             rows.append(row("★", g))
     return pd.DataFrame(rows, columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi"])
+
+
+def live_marks(conn: sqlite3.Connection, since: str | None = None) -> pd.DataFrame:
+    """保存した予想の全期間(since 以後)の、印ごとの成績(mark_stats)と races(レース数)。
+
+    p_mean は発走前に出していた能力のみの勝率の平均。win_rate と比べると、印の馬の見込みが実際より高いか低いかが分かる。
+    """
+    # 結果が出てから保存した予想は数えない(saved_after_results と同じ見分け方)
+    where = ("date >= ? AND NOT (after_result = 1 OR (after_result IS NULL AND substr(saved_at, 1, 10) > date))")
+    saved = conn.execute(f"SELECT COUNT(*) FROM predictions WHERE {where}", (since or "",)).fetchone()[0]
+    h = _review_horses(conn, where, (since or "",)) if saved else pd.DataFrame()
+    if h.empty:
+        return pd.DataFrame(columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi", "p_mean"])
+    out = mark_stats(h)
+    ran = h[h["finish"].notna()]
+    p = {m: ran.loc[ran["mark"] == m, "p_win_ability"].mean() for m in MARK_ORDER}
+    if "star" in ran:
+        p["★"] = ran.loc[ran["star"] == "★", "p_win_ability"].mean()
+    out["p_mean"] = out["mark"].map(p).astype(float)
+    out.attrs["races"] = int(h["race_id"].nunique())
+    return out
 
 
 def _flow_row(pair) -> dict:

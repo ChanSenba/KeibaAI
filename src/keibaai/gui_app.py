@@ -323,6 +323,43 @@ def _live_trend(path: str, stamp: float) -> pd.DataFrame:
     return weekly.live_trend(db.connect(path))
 
 
+@st.cache_data(show_spinner="印ごとの成績を集計しています")
+def _live_marks(path: str, stamp: float, since: str | None) -> pd.DataFrame:
+    from keibaai import weekly
+
+    return weekly.live_marks(db.connect(path), since)
+
+
+MARK_PERIODS = {"全期間": None, "直近3か月": 91, "直近1か月": 30}
+
+
+def mark_results() -> None:
+    """成績ページの、印ごとの勝率・連対率・馬券内率(保存した予想と確定結果の照合)。"""
+    st.subheader("印ごとの成績", anchor=False,
+                 help="発走前に保存した予想の印と、確定した着順の照合。取消・除外の馬は数えません")
+    period = st.segmented_control("期間", list(MARK_PERIODS), default="全期間", key="mark_period") or "全期間"
+    days = MARK_PERIODS[period]
+    since = None if days is None else (dt.date.today() - dt.timedelta(days=days)).isoformat()
+    path = st.session_state["db_path"]
+    marks = _live_marks(path, _db_stamp(path), since)
+    if marks.empty:
+        st.info("この期間に結果の出た予想はありません。", icon=":material/hourglass_empty:")
+        return
+    st.caption(f"{marks.attrs.get('races', 0):,} レースの集計。見込みの勝率は、発走前に出していた能力のみの勝率の平均で、"
+               "勝率より高ければ、その印の馬を実際より高く見ていたことになります")
+    pct = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
+    st.dataframe(marks.drop(columns=["top3"]).style.map(mark_style, subset=["mark"]), hide_index=True,
+                 width="stretch", column_order=["mark", "n", "wins", "win_rate", "p_mean", "top2_rate", "top3_rate", "roi"],
+                 column_config={
+        "mark": st.column_config.TextColumn("印", width="small",
+                                             help="★はオッズ込みのモデルの印で、◎○▲△☆の馬と重なることがある"),
+        "n": st.column_config.NumberColumn("頭数", format="%d", help="その印を付けて、走った馬の数(取消・除外は除く)"),
+        "wins": st.column_config.NumberColumn("1着", format="%d", help="勝った頭数"),
+        "win_rate": pct("勝率", "1着の割合"), "p_mean": pct("見込みの勝率", "発走前に出していた能力のみの勝率の平均"),
+        "top2_rate": pct("連対率", "2着以内の割合"), "top3_rate": pct("馬券内率", "3着以内の割合"),
+        "roi": pct("単勝回収率", "その印の馬の単勝を100円ずつ買った場合の、払戻 ÷ 投資(確定オッズ)")})
+
+
 def page_results() -> None:
     header("Results", "成績", "予想が実際にどれだけ当たっているかと、日曜の自動評価(直近1年)の結果です。"
            "学習は予想のたびに自動で行うので、ここで学習する必要はありません。")
@@ -342,6 +379,7 @@ def page_results() -> None:
             "◎単勝回収率(%)": st.column_config.NumberColumn(format="%.0f"),
             "期待値≧1の回収率(%)": st.column_config.NumberColumn(format="%.0f"),
             "★単勝回収率(%)": st.column_config.NumberColumn(format="%.0f")})
+        mark_results()
 
     st.subheader("日曜の自動評価", anchor=False, help=TIPS["train_result"])
     evals_dir = Path(st.session_state["db_path"]).parent / "evals"
