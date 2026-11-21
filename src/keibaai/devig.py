@@ -5,6 +5,14 @@
 Shin (1991, 1993) は、インサイダー(情報を持つ賭け手)の割合 z がいる市場では
 ブックメーカーが人気薄ほどオッズを厚く削る、という均衡から z を推定し、
 人気薄側に厚く乗った控除を剥がす。z はレースごとに「Shin 確率の合計が1」を満たすよう二分探索で解く。
+Power 法は、暗黙確率を指数 γ で累乗して正規化する1パラメータの方法で、γ はレースごとには
+推定せず、評価より前の期間で1つ決めて使う。
+
+なお、JRA の単勝はパリミュチュエル(控除はプールから一律に差し引かれる)なので、比例方式は
+「売上のシェアの復元」として正確であり、Shin や Power は控除の剥がし方(devig)というより、
+favourite-longshot bias の補正として位置づけるのが正しい。海外のブックメーカー市場を対象にした
+比較 (Clarke, Kovalchik & Ingram 2017) では、Power が比例方式を上回り、Shin と同等以上だったと
+報告されている(パリミュチュエルで同じかは、ここではなく devig_trials の比較で確かめる)。
 
 ここは方法の部品だけを置き、どちらが JRA で当たるかは devig_trials で比べる(本番の経路はまだ変えない)。
 """
@@ -18,6 +26,22 @@ def proportional(odds: np.ndarray) -> np.ndarray:
     """比例方式。odds は 1 レース分の単勝オッズ(正の値だけ)。"""
     inv = 1.0 / np.asarray(odds, dtype=float)
     return inv / inv.sum()
+
+
+def power(odds: np.ndarray, gamma: float) -> np.ndarray:
+    """Power 法。odds は 1 レース分の単勝オッズ(正の値だけ)、gamma は期間で1つ決める指数。
+
+    暗黙確率 q_i = 1/オッズ に対して p_i ∝ q_i^gamma とし、レース内で合計1に正規化する。
+    gamma = 1 で比例方式と一致する。gamma > 1 では人気馬が比例より厚く・人気薄が薄くなり
+    (favourite-longshot bias の補正方向)、gamma < 1 ではその逆に、人気薄が持ち上がる。
+    JRA ではこれは devig ではなく FLB の補正で、gamma はレースごとには推定せず、
+    評価より前の期間で勝ち馬の対数尤度が最大になるよう1つ決める前提(決め方は devig_trials)。
+    """
+    if gamma <= 0:
+        raise ValueError(f"gamma は正の値: {gamma}")
+    inv = 1.0 / np.asarray(odds, dtype=float)
+    w = inv ** gamma
+    return w / w.sum()
 
 
 def _shin_at_z(inv: np.ndarray, booksum: float, z: float) -> np.ndarray:
@@ -54,14 +78,20 @@ def shin(odds: np.ndarray) -> tuple[np.ndarray, float]:
     return p / p.sum(), z
 
 
-def market_probs(df: pd.DataFrame, method: str = "proportional") -> pd.Series:
+def market_probs(df: pd.DataFrame, method: str = "proportional", gamma: float | None = None) -> pd.Series:
     """df(win_odds, race_id)の各行の市場確率。オッズのない馬・そろわないレースは NaN。
 
-    method は 'proportional'(現行)か 'shin'。レース単位で作るので、同じレースの馬は同じ方法・同じ z で扱う。
+    method は 'proportional'(現行)か 'shin' か 'power'。レース単位で作るので、同じレースの馬は
+    同じ方法・同じパラメータで扱う。'power' のときは gamma(期間で決めた指数)が要る。
     行の対応は位置で持つので、df の index が重複していても壊れない。
     """
-    if method not in ("proportional", "shin"):
-        raise ValueError(f"method は proportional か shin: {method}")
+    if method not in ("proportional", "shin", "power"):
+        raise ValueError(f"method は proportional か shin か power: {method}")
+    if method == "power":
+        if gamma is None:
+            raise ValueError("method が power のときは gamma(指数)が要ります")
+        if gamma <= 0:
+            raise ValueError(f"gamma は正の値: {gamma}")
     odds = pd.to_numeric(df["win_odds"], errors="coerce").to_numpy(dtype=float)
     race = df["race_id"].to_numpy()
     out = np.full(len(df), np.nan)
@@ -70,7 +100,12 @@ def market_probs(df: pd.DataFrame, method: str = "proportional") -> pd.Series:
         o = odds[idx]
         if not (o > 0).all():
             continue
-        out[idx] = proportional(o) if method == "proportional" else shin(o)[0]
+        if method == "proportional":
+            out[idx] = proportional(o)
+        elif method == "shin":
+            out[idx] = shin(o)[0]
+        else:
+            out[idx] = power(o, gamma)
     return pd.Series(out, index=df.index)
 
 
