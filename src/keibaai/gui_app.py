@@ -424,6 +424,82 @@ def page_results() -> None:
         })
 
 
+# ---------------------------------------------------------------- 予想(共通の部品)
+def shared_date(key: str, default: dt.date) -> dt.date:
+    """対象日の入力欄。共通の値(session_state["day"])を正として、ページを移っても同じ日を保つ。
+
+    keyed widget はページを移ると状態が消えるため、共通の値を別のキーに持ち、
+    欄の値はそこから写し、変えたら on_change で書き戻す。
+    """
+    if "day" not in st.session_state:
+        st.session_state["day"] = default
+    st.session_state[key] = st.session_state["day"]
+
+    def _sync() -> None:
+        st.session_state["day"] = st.session_state[key]
+
+    return st.date_input("対象日", format="YYYY/MM/DD", key=key, on_change=_sync)
+
+
+def get_prediction(conn, date: dt.date):
+    """その日の予想を (日付, 表) で返す。画面で予想したものがなければ、保存済み(自動の予想など)も読む。
+
+    予想・買い方・ファクターのページで共用する。保存済みから読んだときは画面の予想として残し、
+    session_state["prediction_saved"] にその日付を入れる(予想ページで「自動で作った予想」と出すため)。
+    予想がなければ None。
+    """
+    pred = st.session_state.get("prediction")
+    if pred is not None and pred[0] == date:
+        return pred
+    table = gui.saved_prediction(conn, date)
+    if table is None:
+        return None
+    st.session_state["prediction"] = (date, table)
+    st.session_state["prediction_saved"] = date
+    return date, table
+
+
+def run_prediction(conn, date: dt.date) -> bool:
+    """学習→予想→保存→各要素の計算を、段階を表示しながら行う。できたら True。"""
+    try:
+        with st.status("予想しています…", expanded=True) as status:
+            status.update(label="学習して予想しています(数分かかります)")
+            raw, flow = gui.predict_with_flow(conn, date)
+            status.update(label="予想を保存しています")
+            gui.save_prediction(conn, raw, flow)
+            st.session_state["prediction"] = (date, gui.add_marks(raw))
+            st.session_state.pop("prediction_saved", None)
+            status.update(label="予想の見解に使う、各要素の値を計算しています(初めてのときは1〜2分かかります)")
+            _race_factor_values(conn, date, None)
+            status.update(label="予想ができました", state="complete", expanded=False)
+    except ValueError as e:
+        st.error(str(e))
+        return False
+    return True
+
+
+def _fetched_age(fetched_at) -> str:
+    """出馬表・オッズの取得時刻を「N分前」で表す。30分以上たっていたら目立つ色にする。"""
+    if not fetched_at:
+        return ""
+    try:
+        at = dt.datetime.fromisoformat(str(fetched_at))
+    except ValueError:
+        return f"取得 {fetched_at}"
+    if at.tzinfo is not None:
+        at = at.astimezone().replace(tzinfo=None)
+    mins = int((dt.datetime.now() - at).total_seconds() // 60)
+    if mins < 1:
+        text = "取得 たった今"
+    elif mins < 60:
+        text = f"取得 {mins}分前"
+    elif mins < 60 * 24:
+        text = f"取得 {mins // 60}時間前"
+    else:
+        text = f"取得 {mins // (60 * 24)}日前"
+    return f":orange[{text}(オッズが古くなっているかもしれません)]" if mins >= 30 else text
+
+
 # ---------------------------------------------------------------- 予想
 PRED_COLUMNS = {
     "mark": st.column_config.TextColumn(
@@ -485,11 +561,11 @@ def page_predict() -> None:
     today = dt.date.today()
     conn = connection()
     with st.container(border=True):
-        date = st.date_input("対象日", gui.next_race_day(today), format="YYYY/MM/DD", key="pred_date")
+        date = shared_date("pred_date", gui.next_race_day(today))
         info = gui.entries_summary(conn, date.isoformat())
         if info["races"]:
             st.caption(f":material/check_circle: 取得済み {info['races']} レース・{info['horses']} 頭"
-                       f"(オッズあり {info['with_odds']} 頭) ・ 取得 {info['fetched_at']}")
+                       f"(オッズあり {info['with_odds']} 頭) ・ {_fetched_age(info['fetched_at'])}")
         else:
             st.caption(":material/info: この日の出馬表はまだ取得していません")
         ok = require_jv()
@@ -498,45 +574,43 @@ def page_predict() -> None:
         st.caption(":material/info: 出馬表は JRA-VAN から、その日の全レースをまとめて取ります(1〜3分)。"
                    "1レースだけのときは、オッズをそのレースだけ取ります。馬番は金曜の枠順の発表後、オッズは発売開始後に入ります。")
         if not single:
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             fetch = c1.button("全レースの出馬表とオッズを取得", icon=":material/download:", width="stretch", disabled=not ok)
             predict = c2.button("予想する", type="primary", icon=":material/insights:", width="stretch",
                                 disabled=info["races"] == 0)
+            refresh = c3.button("オッズを更新して再予想(数分)", icon=":material/refresh:", width="stretch",
+                                disabled=not ok or date < today,
+                                help="最新の出馬表とオッズを取り直してから、予想し直します(過去の日は、発走前の予想を守るため使えません)")
 
     picked = None
     if single:
-        picked, fetch, predict = single_race_controls(conn, date)
+        picked, fetch, predict, refresh = single_race_controls(conn, date)
         if picked is None:
             return
-    st.caption(":material/info: オッズは発売開始後に出ます。オッズが更新されたら、もう一度取得してください。")
+    st.caption(":material/info: オッズは発売開始後に出ます。オッズが更新されたら、「オッズを更新して再予想」を押してください。")
 
     if fetch:
         fetch_entries(conn, date, None if picked is None else [picked["race_id"]])
 
-    if predict:
-        try:
-            with st.spinner("学習して予想しています(数分かかります)"):
-                st.session_state["prediction"] = (date, gui.predict_and_save(conn, date))
-            with st.spinner("予想の見解に使う、各要素の値を計算しています(初めてのときは1〜2分かかります)"):
-                _race_factor_values(conn, date, None)
-        except ValueError as e:
-            st.error(str(e))
+    if refresh:
+        fetched = fetch_entries(conn, date, None if picked is None else [picked["race_id"]], rerun=False)
+        info = gui.entries_summary(conn, date.isoformat())  # 取り直したので、件数と取得時刻も新しいものにする
+        if fetched and info["races"] and run_prediction(conn, date):
+            st.rerun()  # 取得時刻の表示も新しいものにする(予想の段階表示は消える)
 
-    table = None
-    if "prediction" in st.session_state:
-        when, table = st.session_state["prediction"]
+    if predict:
+        run_prediction(conn, date)
+
+    pred = get_prediction(conn, date) if info["races"] else None
+    table = pred[1] if pred else None
+    if pred is not None and st.session_state.get("prediction_saved") == date:
+        saved_at = table["saved_at"].max() if "saved_at" in table else None
+        st.caption(":material/info: 自動で作った予想を表示しています"
+                   + (f"(保存 {str(saved_at)[:16].replace('T', ' ')} の時点の印・オッズ)" if saved_at else "")
+                   + "。最新のオッズで見るには「オッズを更新して再予想」を押してください。")
+    elif table is None and "prediction" in st.session_state:
+        when = st.session_state["prediction"][0]
         if when != date:
-            table = None
-    if table is None and info["races"]:
-        table = gui.saved_prediction(conn, date)  # 自動の予想(weekly)で計算済みなら、押さなくても出す
-        if table is not None:
-            st.session_state["prediction"] = (date, table)
-            saved_at = table["saved_at"].max() if "saved_at" in table else None
-            st.caption(":material/info: 自動で作った予想を表示しています"
-                       + (f"(保存 {str(saved_at)[:16].replace('T', ' ')} の時点の印・オッズ)" if saved_at else "")
-                       + "。最新のオッズで見るには「予想する」を押してください。")
-        elif "prediction" in st.session_state:
-            when = st.session_state["prediction"][0]
             st.info(f"{when:%Y/%m/%d} の予想です。{date:%Y/%m/%d} を見るには「予想する」を押してください。")
     if table is not None and picked is not None and picked["race_id"] not in set(table["race_id"]):
         table = None  # 予想のあとで取得したレースは、もう一度「予想する」まで予想がない
@@ -575,6 +649,7 @@ def page_predict() -> None:
 def single_race_controls(conn, date: dt.date):
     """1レースだけのとき: レースを選ぶ欄と、そのレースの取得・予想ボタン。選んだレースと押されたボタンを返す。
 
+    返すのは (選んだレース, 取得, 予想, オッズを更新して再予想)。
     レース一覧は JRA-VAN の出馬表(entry_races)から作る。まだなければ、出馬表だけを先に取る(オッズは取らない)。
     """
     from keibaai import jvlink
@@ -589,23 +664,26 @@ def single_race_controls(conn, date: dt.date):
                         n = jvlink.fetch_entries(conn, date.isoformat(), odds=False)
                     except Exception as e:
                         st.error(str(e))
-                        return None, False, False
+                        return None, False, False, False
                 if not n:
                     st.warning("この日の出馬表はまだありません(馬番は金曜の枠順の発表後に入ります)。")
-                    return None, False, False
+                    return None, False, False, False
                 st.rerun()
-        return None, False, False
+        return None, False, False, False
     picked, box = race_picker(choices, key=f"pick_{date}")
     with box:
         if picked["fetched"]:
             st.caption(f":material/check_circle: {picked['venue']}{picked['round']}R の出馬表は取得済みです")
         else:
             st.caption(f":material/info: {picked['venue']}{picked['round']}R の出馬表はまだ取得していません")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         fetch = c1.button("このレースの出馬表とオッズを取得", icon=":material/download:", width="stretch")
         predict = c2.button("このレースを予想", type="primary", icon=":material/insights:", width="stretch",
                             disabled=not picked["fetched"])
-    return picked, fetch, predict
+        refresh = c3.button("オッズを更新して再予想(数分)", icon=":material/refresh:", width="stretch",
+                            disabled=not picked["fetched"] or date < dt.date.today(),
+                            help="最新の出馬表とオッズを取り直してから、予想し直します(過去の日は、発走前の予想を守るため使えません)")
+    return picked, fetch, predict, refresh
 
 
 def fetch_training_for(conn, date: dt.date) -> None:
@@ -624,8 +702,11 @@ def fetch_training_for(conn, date: dt.date) -> None:
             print(f"{name}を取れませんでした: {e}")
 
 
-def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
-    """JRA-VAN から出馬表とオッズを取る。race_ids を渡すと、オッズはそのレースだけ。"""
+def fetch_entries(conn, date: dt.date, race_ids: list[str] | None, rerun: bool = True) -> bool:
+    """JRA-VAN から出馬表とオッズを取る。race_ids を渡すと、オッズはそのレースだけ。取得できたら True。
+
+    rerun=False は「オッズを更新して再予想」のように、取得のあと続けて処理するとき(取得後の開き直しをしない)。
+    """
     with st.status("取得しています…", expanded=True) as status:
         bar = st.progress(0.0)
         log = LogBox()
@@ -642,10 +723,12 @@ def fetch_entries(conn, date: dt.date, race_ids: list[str] | None) -> None:
         except Exception as e:
             status.update(label="取得が止まりました", state="error")
             st.error(str(e))
+            return False
         else:
             bar.progress(1.0, "完了")
             status.update(label=f"完了しました。{n} レースの出馬表を保存しました", state="complete")
-            st.rerun() if n else None
+            st.rerun() if n and rerun else None
+            return bool(n)  # 0件(枠順の発表前など)は、古い出馬表で予想し直さないよう失敗扱いにする
 
 
 # 枠番の色(JRA の帽子の色)
@@ -789,6 +872,14 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
         st.caption("出馬表の見方", help=TIPS["entry_table"])
     else:
         st.caption("印と各列の見方", help=TIPS["race_table"])
+    if prediction is not None and "factor_total" in one and one["factor_total"].notna().any():
+        st.caption("印は能力のみの勝率順です。総合スコアは要素ごとの点数の平均で、印とは別物です。")
+        if "mark" in one and one["mark"].notna().any():
+            top = one.loc[one["factor_total"].idxmax()]
+            if pd.notna(top["number"]) and not (isinstance(top["mark"], str) and top["mark"]):
+                st.info(f"総合スコア1位は {int(top['number'])}番 {top['horse_name']} ですが、"
+                        "印は勝率(能力)の高い順に付けるため、この馬には印が付いていません。",
+                        icon=":material/info:")
     # 馬名の列までは、横にスクロールしても動かさない
     pinned = list(cols)[:list(cols).index("horse_name") + 1]
     st.dataframe(styled, hide_index=True, width="stretch",
@@ -927,7 +1018,7 @@ def page_factors() -> None:
 
     today = dt.date.today()
     with st.container(border=True):
-        date = st.date_input("対象日", gui.next_race_day(today), format="YYYY/MM/DD", key="factor_date")
+        date = shared_date("factor_date", gui.next_race_day(today))
         info = gui.entries_summary(conn, date.isoformat())
         if not info["races"]:
             st.caption(":material/info: この日の出馬表をまだ取得していません。「予想」ページで取得すると、ここで見られます。")
@@ -965,7 +1056,7 @@ def page_factors() -> None:
         st.caption("表の見方と総合点", help=TIPS["factor_overall"])
         extra = scored[["score_rank", "score"]]
         cfg.update(SCORE_CONFIG)
-        pred = st.session_state.get("prediction")
+        pred = get_prediction(conn, date)
         if pred is not None and pred[0] == date:
             got = pred[1].loc[pred[1]["race_id"] == race["race_id"], ["number", *OVERALL_COLUMNS]]
             got = got.dropna(axis=1, how="all")
@@ -1007,7 +1098,7 @@ def page_past_races() -> None:
     conn = connection()
     today = dt.date.today()
     with st.container(border=True):
-        date = st.date_input("対象日", gui.next_race_day(today), format="YYYY/MM/DD", key="past_date")
+        date = shared_date("past_date", gui.next_race_day(today))
         info = gui.entries_summary(conn, date.isoformat())
         if not info["races"]:
             st.caption(":material/info: この日の出馬表をまだ取得していません。「予想」ページで取得すると、ここで見られます。")
@@ -1164,8 +1255,9 @@ def page_bets() -> None:
            "AI の予想だけで期待値の高い買い目を出すこともできます。")
     conn = connection()
     today = dt.date.today()
-    pred = st.session_state.get("prediction")
-    date = st.date_input("対象日", pred[0] if pred else gui.next_race_day(today), format="YYYY/MM/DD", key="bets_date")
+    first = st.session_state.get("prediction")
+    date = shared_date("bets_date", first[0] if first else gui.next_race_day(today))
+    pred = get_prediction(conn, date)
     mode = st.segmented_control("出し方", BET_MODES, default=BET_MODES[0], key="bets_mode", width="stretch",
                                 help="自分の印から: 付けた印で買い目を組み、資金の配分を出す。"
                                      "AIにおまかせ: 予想の勝率から、全券種で期待値の高い買い目を選ぶ") or BET_MODES[0]
@@ -1349,12 +1441,8 @@ def bets_auto(conn, date: dt.date, pred) -> None:
                 return
             st.caption(f":material/info: 取得済み {info['races']} レース・{info['horses']} 頭。まだ予想していません。")
             if st.button("この日を予想する", type="primary", icon=":material/insights:"):
-                try:
-                    with st.spinner("学習して予想しています(数分かかります)"):
-                        st.session_state["prediction"] = (date, gui.predict_and_save(conn, date))
+                if run_prediction(conn, date):
                     st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
         return
     date, table = pred
     races = gui.day_races(conn, date.isoformat())
@@ -1779,9 +1867,9 @@ def page_settings() -> None:
 
 
 PAGES = {
-    "overview": st.Page(page_overview, title="データ", icon=":material/dashboard:", default=True),
+    "overview": st.Page(page_overview, title="データ", icon=":material/dashboard:"),
     "collect": st.Page(page_collect, title="取得", icon=":material/download:", url_path="collect"),
-    "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict"),
+    "predict": st.Page(page_predict, title="予想", icon=":material/sports_score:", url_path="predict", default=True),
     "bets": st.Page(page_bets, title="買い方", icon=":material/calculate:", url_path="bets"),
     "factors": st.Page(page_factors, title="ファクター", icon=":material/tune:", url_path="factors"),
     "past": st.Page(page_past_races, title="過去レース", icon=":material/manage_search:", url_path="past"),
@@ -1792,4 +1880,9 @@ PAGES = {
     "settings": st.Page(page_settings, title="設定", icon=":material/settings:", url_path="settings"),
     "help": st.Page(page_help, title="ヘルプ", icon=":material/help:", url_path="help"),
 }
-st.navigation(list(PAGES.values()), position="top").run()
+st.navigation({
+    "当日": [PAGES["predict"], PAGES["bets"]],
+    "確認": [PAGES["results"], PAGES["review"], PAGES["factors"], PAGES["past"], PAGES["kankei"], PAGES["backtest"]],
+    "データ": [PAGES["overview"], PAGES["collect"]],
+    "その他": [PAGES["settings"], PAGES["help"]],
+}, position="top").run()
