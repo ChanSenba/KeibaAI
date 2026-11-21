@@ -57,12 +57,14 @@ def test_fetch_bet_odds_asks_each_type_once_and_merges():
     assert out["単勝"] == {(1,): 3.0, (2,): 4.0} and out["馬連"] == {(1, 2): 6.0}
 
 
-def test_fetch_bet_odds_survives_snapshot_failure():
+def test_fetch_bet_odds_survives_snapshot_failure(monkeypatch):
+    monkeypatch.setattr("keibaai.jvlink.available", lambda: False)  # JV-Link のある PC でも netkeiba 側の経路を試す
     out = gui.fetch_bet_odds(FakeFetcher(), "r1", conn=object())  # 保存できない conn でも、オッズ取得は止めない
     assert out["単勝"][(1,)] == 3.0
 
 
-def test_fetch_bet_odds_saves_snapshot_when_conn_given(tmp_path):
+def test_fetch_bet_odds_saves_snapshot_when_conn_given(tmp_path, monkeypatch):
+    monkeypatch.setattr("keibaai.jvlink.available", lambda: False)  # JV-Link のある PC でも netkeiba 側の経路を試す
     conn = db.connect(tmp_path / "t.db")
     out = gui.fetch_bet_odds(FakeFetcher(), "r1", conn=conn)
     assert out["単勝"] == {(1,): 3.0, (2,): 4.0}
