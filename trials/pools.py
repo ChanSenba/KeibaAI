@@ -32,6 +32,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--repo", default=r"D:\KeibaAI\pr1-check")
 ap.add_argument("--out", default=os.path.dirname(os.path.abspath(__file__)))
 ap.add_argument("--seeds", type=int, default=2)
+ap.add_argument("--only", default="", help="★のモデルの形を絞る(例: R,RP3)")
 ap.add_argument("--no-trifecta", action="store_true", help="三連単を読まない(重いとき)")
 args = ap.parse_args()
 REPO, OUT = Path(args.repo), Path(args.out)
@@ -243,7 +244,14 @@ for label, (cut, end) in SPLITS.items():
         d["lp_blend"] = zz - np.log(np.exp(zz).groupby(d["race_id"]).transform("sum"))
     res["B"] = winner_lp(test, test["lp_blend"].to_numpy())
     log(f"  B 全部: 市場との差 {diff_ci(res['B'], res['M'], day)}")
-    for key, feats, init in (("R", BASE, "lp_mkt"), ("RP", BASE + POOL_FEATS, "lp_mkt"), ("RB", BASE + POOL_FEATS, "lp_blend")):
+    # 取得する券種を減らした形: RP3 = 複勝・馬単・三連単(JV-Link の 0B31・0B34・0B36)、RP4 = それに馬連(0B32)
+    variants = [("R", BASE, "lp_mkt"), ("RP", BASE + POOL_FEATS, "lp_mkt"), ("RB", BASE + POOL_FEATS, "lp_blend"),
+                ("RP3", BASE + ["d_place", "d_exacta1", "d_exacta2", "d_tri1"], "lp_mkt"),
+                ("RP4", BASE + ["d_place", "d_quinella", "d_exacta1", "d_exacta2", "d_tri1"], "lp_mkt"),
+                ("RP2", BASE + ["d_place", "d_exacta1", "d_exacta2"], "lp_mkt")]
+    if args.only:
+        variants = [v for v in variants if v[0] in args.only.split(",")]
+    for key, feats, init in variants:
         z, model = res_logit(train, test, feats, init, args.seeds)
         test[f"z_{key}"] = z
         res[key] = winner_lp(test, z)
@@ -253,14 +261,16 @@ for label, (cut, end) in SPLITS.items():
             log("  RP の特徴量の重要度(上位15、券種の列の順位): "
                 + ", ".join(f"{k}={v:.0f}" for k, v in imp.head(15).items())
                 + " / " + ", ".join(f"{c}:{list(imp.index).index(c) + 1}位" for c in POOL_FEATS))
-    for a, b in (("RP", "R"), ("RB", "R"), ("RB", "RP"), ("B", "M")):
+    for a, b in (("RP", "R"), ("RB", "R"), ("RB", "RP"), ("RP3", "R"), ("RP4", "R"), ("RP2", "R"), ("RP3", "RP"), ("B", "M")):
+        if a not in res or b not in res:
+            continue
         s = diff_ci(res[a], res[b], day)
         yrs = " ".join(f"{y}年 {((res[a] - res[b])[day.dt.year == y]).mean() * 1000:+.1f}"
                        for y in sorted(day.dt.year.unique()))
         log(f"  {a} − {b}: {s}  [{yrs}]")
         rows.append(dict(split=label, cmp=f"{a}-{b}", diff=s, years=yrs))
     # ★の単勝回収率(確定オッズ、期待値≧1.1・勝率≧3%・30倍以下)
-    for key in ("R", "RP", "RB"):
+    for key in [k for k in ("R", "RP", "RB", "RP3", "RP4", "RP2") if k in res]:
         z = pd.Series(test[f"z_{key}"].to_numpy(), index=test.index)
         z = z - z.groupby(test["race_id"]).transform("max")
         p = np.exp(z) / np.exp(z).groupby(test["race_id"]).transform("sum")
