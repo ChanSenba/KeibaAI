@@ -19,7 +19,8 @@ from .features import (ABILITY_MODEL_FEATURES, CATEGORICAL, MARKET_MODEL_FEATURE
 from .flow_review import forecast_flow
 from .factors import COLUMN, FACTORS
 from .jvtraining import add_jv_features
-from .model import PARAMS, TRAIN_FROM, fit_residual, has_market, normalize_within_race, predict_residual
+from .model import (PARAMS, RESIDUAL_ROUNDS, TRAIN_FROM, fit_residual, has_market, normalize_within_race,
+                    predict_residual)
 
 
 def fetch_entries(conn: sqlite3.Connection, fetcher, date: str, now: dt.datetime | None = None,
@@ -160,7 +161,11 @@ def _data_key(conn: sqlite3.Connection, date: str, with_entries: bool, extra: tu
         # 取得時刻だけ変わっても、中身が同じなら使い回す(列はあとから足されるので、名前で外す)
         cols = [r[1] for r in conn.execute("PRAGMA table_info(entry_races)") if r[1] != "fetched_at"]
         races = conn.execute(f"SELECT {','.join(cols)} FROM entry_races WHERE date = ? ORDER BY race_id", (date,)).fetchall()
-        parts += [rows, races]
+        # 券種のオッズ(★のモデルの特徴量)は、レースごとの最新の取得時刻と件数で見分ける
+        pools = conn.execute(
+            "SELECT b.race_id, MAX(b.snapped_at), COUNT(*) FROM bet_odds_snapshots b JOIN entry_races c USING (race_id) "
+            "WHERE c.date = ? GROUP BY b.race_id ORDER BY b.race_id", (date,)).fetchall()
+        parts += [rows, races, pools]
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, default=str).encode()).hexdigest()[:20]
 
 
@@ -251,10 +256,37 @@ def models_for_day(conn: sqlite3.Connection, date: str, train: pd.DataFrame) -> 
     """
     def compute():
         from .nn_model import fit_models
+        from .nn_year import add_nn_year
 
-        return {"nn": fit_models(train), "residual": fit_residual(train)}
+        tr = add_nn_year(train)
+        out = {"nn": fit_models(train), "residual": fit_residual(tr)}
+        shares = _final_pool_shares(conn)
+        if shares is not None:
+            from .pools import add_pool_features, has_pools
+
+            tp = add_pool_features(tr, shares)
+            if tp.loc[has_pools(tp), "race_id"].nunique() >= POOL_MIN_RACES:
+                out["residual_pools"] = fit_residual(tp, RESIDUAL_ROUNDS, True)
+        return out
 
     return _cached(conn, "models", date, False, (), compute)
+
+
+POOL_MIN_RACES = 3000  # 券種のオッズのそろった学習のレースがこれより少ないときは、券種を使うモデルを作らない
+
+
+def _final_pool_shares(conn: sqlite3.Connection) -> pd.DataFrame | None:
+    """keiba.db と同じフォルダの jravan_odds.db から、券種の特徴量の元(pools.final_shares)。なければ None。"""
+    from .pools import ODDS_DB, final_shares
+
+    path = _db_file(conn)
+    if path is None or not (path.parent / ODDS_DB).exists():
+        return None
+    try:
+        return final_shares(path.parent / ODDS_DB)
+    except Exception as e:  # 確定オッズの DB が古い形・壊れているときは、今のモデルだけで予想する
+        print(f"券種の確定オッズを読めませんでした: {e}")
+        return None
 
 
 def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFrame:
@@ -272,6 +304,13 @@ def _predict_day(conn: sqlite3.Connection, date: str, rounds: int) -> pd.DataFra
     p_ability, parts = predict_models(models["nn"], train, target)
     target["p_win_ability"] = p_ability
     target["p_win_market"] = np.where(has_market(target), predict_residual(models["residual"], target), np.nan)
+    if "residual_pools" in models:  # 複勝・馬単・三連単の速報オッズがそろったレースは、それも使うモデルで出す
+        from .pools import add_pool_features, has_pools, snapshot_shares
+
+        target = add_pool_features(target, snapshot_shares(conn, target["race_id"].unique()))
+        use = has_pools(target) & has_market(target)
+        if use.any():
+            target.loc[use, "p_win_market"] = predict_residual(models["residual_pools"], target[use], True)
     ok = target["p_win_market"].notna()
     target.loc[ok, "p_win_market"] = normalize_within_race(target[ok], target.loc[ok, "p_win_market"].to_numpy())
     target["ev_ability"] = target["p_win_ability"] * target["win_odds"]

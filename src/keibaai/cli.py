@@ -123,6 +123,8 @@ def main(argv=None) -> None:
     sn.add_argument("--db", default="data/keiba.db")
     sn.add_argument("--cache", default="data/cache")
     sn.add_argument("--race-id", nargs="*", default=[], help="このレース(race_id 12桁)だけ記録する。省くとその日の全レース")
+    sn.add_argument("--pools", action="store_true",
+                    help="jv: 複勝・馬単・三連単のオッズも記録する(★・期待値のモデルが使う。24レースで約6分)")
     _add_source(sn, "オッズ", netkeiba=True)
     oh = sub.add_parser("odds-history", help="JRA-VAN の時系列オッズ(発売開始から締め切りまでの単勝オッズの推移)を、レース後でも取って odds_snapshots に入れる。途中で止めても続きから")
     oh.add_argument("--from", dest="start", help="この日以後のレース YYYY-MM-DD(--race-id を使わないとき必須)")
@@ -239,8 +241,12 @@ def main(argv=None) -> None:
         from . import jvlink
 
         try:
-            n = jvlink.snapshot_odds(db.connect(args.db), args.date, args.race_id or None, raw_root=args.raw,
-                                     python32=args.python32)
+            conn = db.connect(args.db)
+            n = jvlink.snapshot_odds(conn, args.date, args.race_id or None, raw_root=args.raw, python32=args.python32)
+            if args.pools:
+                m = jvlink.snapshot_pool_odds(conn, args.date, args.race_id or None, raw_root=args.raw,
+                                              python32=args.python32)
+                print(f"券種のオッズ: {m} races")
         except jvlink.JVError as e:
             raise SystemExit(str(e))
         print(f"done: {n} races")

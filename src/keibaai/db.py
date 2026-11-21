@@ -49,10 +49,11 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
     PRIMARY KEY (race_id, number, snapped_at)
 );
 -- 買い方を出すときに取った全券種のオッズを、取得時刻つきで溜める(単勝の odds_snapshots と違い、全券種は後から取り直せない)。
--- odds は買い方の計算に使った値そのもの(複勝・ワイドは幅のあるオッズの下限)。combo は馬番を '-' でつないだ形(馬単・三連単は着順どおり)
+-- odds は買い方の計算に使った値そのもの(複勝・ワイドは幅のあるオッズの下限)。combo は馬番を '-' でつないだ形(馬単・三連単は着順どおり)。
+-- odds_max は複勝・ワイドの幅の上限(★のモデルの券種の特徴量に使う。pools.py)。予想のときに取ったもの(source='pools')も入る
 CREATE TABLE IF NOT EXISTS bet_odds_snapshots (
     race_id TEXT NOT NULL, snapped_at TEXT NOT NULL, kind TEXT NOT NULL, combo TEXT NOT NULL,
-    odds REAL,
+    odds REAL, odds_max REAL,
     PRIMARY KEY (race_id, snapped_at, kind, combo)
 );
 -- セリ(競走馬市場)の取引価格(JRA-VAN HOSN)。特徴量にはまだ使わず、データだけ溜める
@@ -174,6 +175,7 @@ _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("p
                   "entry_races": [("course", "TEXT"), ("rail", "TEXT")],
                   "odds_snapshots": [("source", "TEXT")],
                   "other_runs": [("name", "TEXT")],
+                  "bet_odds_snapshots": [("odds_max", "REAL")],
                   # after_result=1: 結果が出たあとに保存した予想(確定オッズで後から出したもの)。
                   # star: ★(オッズ込みモデルの印)。付け始める前の保存は NULL
                   # p_win_*: 要素ごとの勝率(全頭の回顧で、強かった要素・弱かった要素を出す)。
@@ -213,19 +215,24 @@ def has_race(conn: sqlite3.Connection, race_id: str) -> bool:
     return conn.execute("SELECT 1 FROM races WHERE race_id = ?", (race_id,)).fetchone() is not None
 
 
-def save_bet_odds_snapshot(conn: sqlite3.Connection, race_id: str, odds: dict, snapped_at: str) -> int:
+def save_bet_odds_snapshot(conn: sqlite3.Connection, race_id: str, odds: dict, snapped_at: str,
+                           odds_max: dict | None = None) -> int:
     """買い方用の全券種オッズ {券種: {馬番の組: オッズ}} を取得時刻つきで追記し、記録した件数を返す。
 
     同じレース・同じ時刻の取り直しは置き換える。空のオッズは何も書かず 0 を返す。
     あとから確定オッズ(jravan_odds.db)と並べて、買う時点のオッズで検証するために残す。
+    odds_max は複勝・ワイドの幅の上限(同じ形の {券種: {組: オッズ}})。
     """
-    rows = [(race_id, snapped_at, kind, "-".join(f"{n:02d}" for n in combo), float(o))
+    odds_max = odds_max or {}
+    rows = [(race_id, snapped_at, kind, "-".join(f"{n:02d}" for n in combo), float(o),
+             odds_max.get(kind, {}).get(combo))
             for kind, table in odds.items() for combo, o in table.items() if o]
     if not rows:
         return 0
     with conn:
         conn.executemany(
-            "INSERT OR REPLACE INTO bet_odds_snapshots (race_id, snapped_at, kind, combo, odds) VALUES (?,?,?,?,?)", rows)
+            "INSERT OR REPLACE INTO bet_odds_snapshots (race_id, snapped_at, kind, combo, odds, odds_max) "
+            "VALUES (?,?,?,?,?,?)", rows)
     return len(rows)
 
 
