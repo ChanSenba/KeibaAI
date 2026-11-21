@@ -40,8 +40,8 @@ def available(python32: str = PYTHON32) -> bool:
 
 
 def export(out: str | Path, from_ymd: str, specs: list[str], option: int = 1, rt: list[str] = (),
-           python32: str = PYTHON32) -> None:
-    """jvexport を 32bit Python で動かす。出力(件数など)はそのまま print する。失敗したら JVError。"""
+           python32: str = PYTHON32, timeout: float | None = None) -> None:
+    """jvexport を 32bit Python で動かす。出力(件数など)はそのまま print する。失敗・timeout 秒を超えたら JVError。"""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     for name in [f"{s}.txt" for s in specs] + [f"RT_{r.split(':')[0]}.txt" for r in rt]:
@@ -51,7 +51,12 @@ def export(out: str | Path, from_ymd: str, specs: list[str], option: int = 1, rt
            "--specs", *specs, "--rt", *rt]
     global _last_run
     time.sleep(max(0.0, _last_run + jvexport.RT_INTERVAL - time.monotonic()))
-    p = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    try:
+        p = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        _last_run = time.monotonic()
+        raise JVError(f"JV-Link からの書き出しが {timeout:.0f} 秒で終わらなかったので止めました") from e
     _last_run = time.monotonic()
     for line in (p.stdout + p.stderr).splitlines():
         print(line)
@@ -207,7 +212,7 @@ def fetch_bet_odds(conn: sqlite3.Connection, race_id: str, raw_root: str | Path 
 def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple[dict, dict]]:
     """書き出した速報オッズ(pools.RT_SPECS の種別)から、レースごとの ({券種: {組: オッズ}}, {券種: {組: 上限}})。
 
-    keys は JV-Link のレースのキー → race_id。複勝は下限をオッズ、上限を2つ目の表に入れる。
+    keys は JV-Link のレースのキー → race_id。単勝(券種と同じ時点の市場)も入れる。複勝は下限をオッズ、上限を2つ目の表に入れる。
     """
     from .jvodds import ODDS, parse_odds
     from .pools import RT_SPECS
@@ -220,7 +225,7 @@ def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple
                 continue
             odds, hi = out.setdefault(rid, ({}, {}))
             for kind, name in BET_KINDS.items():
-                if ODDS[kind][0] != code or kind not in ("place", "exacta", "trifecta"):
+                if ODDS[kind][0] != code or kind not in ("win", "place", "exacta", "trifecta"):
                     continue
                 n = ODDS[kind][2]
                 rows = parse_odds(rec, kind)
@@ -243,9 +248,15 @@ def snapshot_pool_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] 
     from .pools import RT_SPECS
 
     stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    # 単勝オッズが出ていない(発売前の)レースは開かない。開くたびに5秒あけるので、無駄に待たない
+    on_sale = {r[0] for r in conn.execute(
+        "SELECT DISTINCT e.race_id FROM entries e JOIN entry_races c USING (race_id) WHERE c.date = ? AND e.win_odds > 0",
+        (date,))}
     ids = race_ids or [r[0] for r in conn.execute("SELECT race_id FROM entry_races WHERE date = ? ORDER BY race_id", (date,))]
     keys = {}
     for rid in ids:
+        if rid not in on_sale:
+            continue
         try:
             keys[race_key(conn, rid)] = rid
         except ValueError as e:
@@ -253,7 +264,9 @@ def snapshot_pool_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] 
     if not keys:
         return 0
     raw = Path(raw_root) / "pools"
-    export(raw, date.replace("-", ""), [], rt=[f"{s}:{k}" for s in RT_SPECS for k in keys], python32=python32)
+    # 固まったときに週次の処理ごと止まらないよう、1回の開き直しあたり30秒を上限にする
+    export(raw, date.replace("-", ""), [], rt=[f"{s}:{k}" for s in RT_SPECS for k in keys], python32=python32,
+           timeout=60 + 30 * len(RT_SPECS) * len(keys))
     n = 0
     for rid, (odds, hi) in read_pool_odds(raw, keys).items():
         if db.save_bet_odds_snapshot(conn, rid, odds, stamp, hi):
