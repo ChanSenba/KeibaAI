@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS predictions (
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL, after_result INTEGER,
     PRIMARY KEY (race_id, number)
 );
+-- 仕様 8-25 の買い方を、実際には買わずに追って確かめる記録(paper.py)。予想の保存と同じタイミングで、
+-- その時点のスナップショット(bet_odds_snapshots)のオッズから計算した買い目を1点100円で残す。
+-- combo は bet_odds_snapshots と同じ形(馬単・三連単は着順どおり、三連複は小さい順)。payout は精算後の払戻(円/100円)、未精算は NULL、外れは 0
+CREATE TABLE IF NOT EXISTS paper_bets (
+    race_id TEXT NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL, combo TEXT NOT NULL,
+    odds REAL, prob REAL, ev REAL, stake INTEGER, snapped_at TEXT, saved_at TEXT,
+    payout INTEGER,
+    PRIMARY KEY (race_id, kind, combo)
+);
+-- ペーパートレードで買い目の記録を済ませたレース(paper.py)。買い目が0点のレースも含む。
+-- 後から別の時点のスナップショットで買い目を足すと「2時点の和集合」になって検証が崩れるので、記録は予想1回につき1回だけにする
+CREATE TABLE IF NOT EXISTS paper_recorded (
+    race_id TEXT PRIMARY KEY, date TEXT NOT NULL, saved_at TEXT
+);
 -- 発走前の展開予想(レースごと)。回顧で、結果から出した実際の展開と比べる
 CREATE TABLE IF NOT EXISTS flow_forecast (
     race_id TEXT PRIMARY KEY, n_front INTEGER, front_share REAL, course_edge REAL, course_pace_diff REAL,

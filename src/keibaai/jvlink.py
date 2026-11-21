@@ -213,6 +213,7 @@ def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple
     """書き出した速報オッズ(pools.RT_SPECS の種別)から、レースごとの ({券種: {組: オッズ}}, {券種: {組: 上限}})。
 
     keys は JV-Link のレースのキー → race_id。単勝(券種と同じ時点の市場)も入れる。複勝は下限をオッズ、上限を2つ目の表に入れる。
+    三連複は ★の特徴量には使わないが、仕様 8-25 のペーパートレード(paper.py)用に記録へ残す。
     """
     from .jvodds import ODDS, parse_odds
     from .pools import RT_SPECS
@@ -225,7 +226,7 @@ def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple
                 continue
             odds, hi = out.setdefault(rid, ({}, {}))
             for kind, name in BET_KINDS.items():
-                if ODDS[kind][0] != code or kind not in ("win", "place", "exacta", "trifecta"):
+                if ODDS[kind][0] != code or kind not in ("win", "place", "exacta", "trio", "trifecta"):
                     continue
                 n = ODDS[kind][2]
                 rows = parse_odds(rec, kind)
@@ -239,10 +240,10 @@ def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple
 def snapshot_pool_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | None = None,
                        now: dt.datetime | None = None, raw_root: str | Path = RAW_DIR,
                        python32: str = PYTHON32) -> int:
-    """date の各レースの複勝・馬単・三連単の速報オッズを JRA-VAN から取り、bet_odds_snapshots に入れる。入れたレース数を返す。
+    """date の各レースの複勝・馬単・三連複・三連単の速報オッズを JRA-VAN から取り、bet_odds_snapshots に入れる。入れたレース数を返す。
 
-    ★・期待値のモデルの券種の特徴量(pools.py)に使う。JV-Link は1回だけ起動し、種別・レースごとに間をあけて開く
-    (24レースで約6分)。発売前のレースは飛ばす。
+    ★・期待値のモデルの券種の特徴量(pools.py)に使う。三連複は仕様 8-25 のペーパートレード(paper.py)用。
+    JV-Link は1回だけ起動し、種別・レースごとに間をあけて開く(24レースで約8分)。発売前のレースは飛ばす。
     """
     from . import db
     from .pools import RT_SPECS

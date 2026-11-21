@@ -130,13 +130,21 @@ def forecast_day(conn: sqlite3.Connection, fetcher, date: dt.date, now: dt.datet
     if n == 0:
         return 0
     _fetch_training(conn, fetcher, date, jv)
-    if jv:  # ★・期待値のモデルが使う複勝・馬単・三連単のオッズ。取れなくても、単勝だけのモデルで予想する
+    if jv:  # ★・期待値のモデルが使う複勝・馬単・三連単のオッズと、ペーパートレード(paper.py)用の三連複。取れなくても、単勝だけのモデルで予想する
         try:
             print(f"券種のオッズ: {jvlink.snapshot_pool_odds(conn, date.isoformat(), now=now, raw_root=jv[0], python32=jv[1])} レース")
         except Exception as e:
             print(f"券種のオッズを取れませんでした: {e}")
     pred = predict_day(conn, date.isoformat())
     n = save_predictions(conn, pred, now)
+    # 仕様 8-25 の追試: 保存と同じタイミングのスナップショットから、実際には買わない買い目を残す。
+    # record_day は記録済みのレースを二度記録しないので、保存が0件の日や再実行でもそのまま呼べる
+    try:
+        from . import paper
+
+        print(f"ペーパートレードの買い目: {paper.record_day(conn, date.isoformat())} 点")
+    except Exception as e:
+        print(f"ペーパートレードの買い目を残せませんでした: {e}")
     flow = pred.attrs.get("flow")
     if n and flow is not None:  # 今回保存した予想のレースだけ、展開予想も保存する
         saved = {r[0] for r in conn.execute("SELECT race_id FROM predictions WHERE saved_at = ?",
@@ -521,6 +529,26 @@ def write_evaluation(conn: sqlite3.Connection, today: dt.date, evals_dir: str | 
         out.append("発走前に保存し、確定オッズと比べられる予想はまだありません。")
     else:
         out.append(clv.to_markdown(index=False) if _has_tabulate() else clv.to_string(index=False))
+    from . import paper
+    out += ["", "## ペーパートレード(仕様 8-25 の追試: 実際には買わず、発走前に記録したオッズで残した買い目。精算は払戻)", ""]
+    try:
+        paper.settle(conn)
+    except Exception as e:
+        print(f"ペーパートレードの精算を飛ばしました: {e}")
+    psum = paper.summary(conn)
+    if psum.empty:
+        out.append("精算できた買い目はまだありません。")
+    else:
+        out.append(psum.to_markdown(index=False, floatfmt=".0f") if _has_tabulate() else psum.to_string(index=False))
+        few = [k for k in paper.KINDS
+               if k in set(psum["券種"]) and int(psum.loc[psum["券種"] == k, "点数"].iloc[0]) < paper.MIN_JUDGE_BETS]
+        if few:
+            out.append(f"{'・'.join(few)} はまだ点数が少なく、判定には不足しています(目安は {paper.MIN_JUDGE_BETS} 点)。"
+                       "区間は開催日単位で引き直した95%の幅。")
+        ptrend = paper.trend(conn)
+        if len(ptrend) > 1:
+            out += ["", "累計の推移(全券種の合計):", "",
+                    ptrend.to_markdown(index=False, floatfmt=".0f") if _has_tabulate() else ptrend.to_string(index=False)]
     path = evals_dir / f"{today.isoformat()}.md"
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
     return path

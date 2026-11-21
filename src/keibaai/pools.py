@@ -27,8 +27,10 @@ FEATURES = ["d_place", "d_exacta1", "d_exacta2", "d_tri1"]
 SHARES = [f"s_{c[2:]}" for c in FEATURES]
 # 差を取る単勝の市場も、券種と同じ時点のオッズにする(s_win。学習は確定、予想は同じ取得の単勝)
 ALL_SHARES = ["s_win", *SHARES]
-# 予想のときに取る速報オッズ(JVRTOpen の種別)と、bet_odds_snapshots の券種名
-RT_SPECS = {"0B31": "O1", "0B34": "O4", "0B36": "O6"}
+# 予想のときに取る速報オッズ(JVRTOpen の種別)と、bet_odds_snapshots の券種名。
+# 0B35(三連複)は ★の特徴量には使わないが、仕様 8-25 のペーパートレード(paper.py)が予想時点の
+# 三連複オッズを必要とするので一緒に取る。特徴量の「そろった」判定は SNAPSHOT_KINDS で見るので、三連複の有無では変わらない
+RT_SPECS = {"0B31": "O1", "0B34": "O4", "0B35": "O5", "0B36": "O6"}
 SNAPSHOT_KINDS = ("単勝", "複勝", "馬単", "三連単")
 ODDS_DB = "jravan_odds.db"  # keiba.db と同じフォルダ
 

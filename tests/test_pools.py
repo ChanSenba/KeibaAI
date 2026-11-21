@@ -84,6 +84,26 @@ def test_read_pool_odds_keeps_place_range(tmp_path):
     assert "馬連" not in odds and "ワイド" not in odds
 
 
+def test_read_pool_odds_includes_trio(tmp_path):
+    """三連複(0B35)も読み、bet_odds_snapshots に残る形にする(仕様 8-25 のペーパートレード用)。"""
+    key = "2026100305040111"
+    o5 = odds_rec("trio", {"010203": "000050001", "010204": "000060002"})
+    (tmp_path / "RT_0B35.txt").write_text(f"{key}\t{o5}\n", encoding="utf-8")
+    odds, hi = read_pool_odds(tmp_path, {key: "202605040111"})["202605040111"]
+    assert odds["三連複"] == {(1, 2, 3): 5.0, (1, 2, 4): 6.0}
+    assert hi == {}
+
+
+def test_snapshot_shares_ignores_trio_rows():
+    """三連複の行が混ざっても、★の特徴量の「そろった」判定(SNAPSHOT_KINDS)は変わらない。"""
+    conn = db.connect(":memory:")
+    _snapshot(conn, "r9", {1: 2.0, 2: 4.0, 3: 6.0, 4: 8.0})
+    db.save_bet_odds_snapshot(conn, "r9", {"三連複": {(1, 2, 3): 10.0}}, "2030-01-04T21:00:00")
+    df = pd.DataFrame({"race_id": ["r9"] * 4, "number": [1, 2, 3, 4], "win_odds": [2.0, 4.0, 6.0, 8.0]})
+    out = pools.add_pool_features(df, pools.snapshot_shares(conn, ["r9"]))
+    assert pools.has_pools(out).all()
+
+
 def test_predict_uses_pool_model_only_for_races_with_pool_odds(tmp_path, monkeypatch):
     mem = synthetic_db(n_days=40)
     _entries_for_future(mem, DAY)
