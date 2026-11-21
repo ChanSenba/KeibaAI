@@ -238,3 +238,37 @@ button, a, [role="button"] { touch-action: manipulation; }
 .kb-kk-sw-sub { border-top: 1px solid currentColor; }
 .kb-kk-sw-gold { inline-size: 0.8rem; block-size: 0.8rem; border: 3px solid #d4a72c; border-radius: 50%; }
 .kb-kk-dot { display: inline-block; inline-size: 0.7rem; block-size: 0.7rem; border-radius: 50%; }
+
+/* ---- 予想表のカード(スマホ幅で、横に長い表の代わりに出す) ----
+ * 表とカードの出し分けは、伸び縮みでは切り替えられないので、ここだけ max-width の例外にする
+ * (見解の .kb-rv-row と同じ扱い)。広い画面ではカードを隠し、表と見解の列を出す */
+.kb-cards { display: none; }
+.kb-card {
+  border: 1px solid var(--kb-line); border-radius: 12px;
+  padding: 10px 12px; margin: 0 0 10px;
+}
+.kb-card-head { display: flex; align-items: center; gap: 8px; }
+.kb-card-mark { font-size: 20px; font-weight: 800; min-width: 22px; text-align: center; }
+.kb-card-no {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--kb-line);
+  font-weight: 700; font-size: 14px; flex: none;
+}
+.kb-card-name { font-weight: 700; font-size: 16px; overflow-wrap: anywhere; }
+.kb-card-star { color: var(--kb-accent); font-size: 18px; margin-left: auto; }
+.kb-card-nums { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.kb-card-nums span { font-size: 14px; font-variant-numeric: tabular-nums; }
+.kb-card-nums i { font-style: normal; color: var(--kb-muted); font-size: 11px; margin-right: 4px; }
+.kb-card-more { margin-top: 8px; }
+.kb-card-more > summary { cursor: pointer; color: var(--kb-accent); font-size: 13px; padding: 4px 0; }
+.kb-card-pts { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; margin: 6px 0; }
+.kb-card-pts div { background: var(--kb-accent-subtle); border-radius: 8px; padding: 6px 8px; }
+.kb-card-pts span { display: block; font-size: 11px; color: var(--kb-muted); }
+.kb-card-pts b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.kb-card-pts i { font-style: normal; font-size: 11px; color: var(--kb-muted); }
+
+@media (max-width: 640px) {
+  /* スマホ幅では表と見解の列を隠し、1頭1枚のカードで出す(見解はカードの詳細の中にもある) */
+  .st-key-kb_table, .st-key-kb_reviews { display: none; }
+  .kb-cards { display: block; }
+}

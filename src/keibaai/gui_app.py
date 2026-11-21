@@ -311,20 +311,32 @@ def _stats_html(stats: list[tuple[str, str]]) -> str:
         f'<div><div class="kb-stat-label">{k}</div><div class="kb-stat-value">{v}</div></div>' for k, v in stats) + "</div>"
 
 
-def _db_stamp(path: str) -> float:
-    """DB(と WAL)の更新時刻。結果や予想が増えたら、成績を計算し直すためのキー。"""
-    return max((f.stat().st_mtime for f in (Path(path), Path(path + "-wal")) if f.exists()), default=0.0)
+def _results_key(path: str) -> tuple:
+    """成績のキャッシュのキー。結果が確定した日ごとのレース数と、予想の保存の新しさで作る。
+
+    DB の更新時刻をキーにしていたときは、開催日にオッズを取るたび DB が更新されて、
+    集計済みの成績まで計算し直していた。オッズの取得(出馬表・オッズの表への書き込み)では、このキーは変わらない。
+    """
+    from keibaai import weekly
+
+    conn = db.connect(path)
+    try:
+        settled = tuple(sorted(weekly.settled_races_by_date(conn).items()))
+        n, latest = conn.execute("SELECT COUNT(*), MAX(saved_at) FROM predictions").fetchone()
+    finally:
+        conn.close()
+    return settled, n, latest
 
 
 @st.cache_data(show_spinner="成績を集計しています")
-def _live_trend(path: str, stamp: float) -> pd.DataFrame:
+def _live_trend(path: str, key: tuple) -> pd.DataFrame:
     from keibaai import weekly
 
     return weekly.live_trend(db.connect(path))
 
 
 @st.cache_data(show_spinner="印ごとの成績を集計しています")
-def _live_marks(path: str, stamp: float, since: str | None) -> pd.DataFrame:
+def _live_marks(path: str, key: tuple, since: str | None) -> pd.DataFrame:
     from keibaai import weekly
 
     return weekly.live_marks(db.connect(path), since)
@@ -341,7 +353,7 @@ def mark_results() -> None:
     days = MARK_PERIODS[period]
     since = None if days is None else (dt.date.today() - dt.timedelta(days=days)).isoformat()
     path = st.session_state["db_path"]
-    marks = _live_marks(path, _db_stamp(path), since)
+    marks = _live_marks(path, _results_key(path), since)
     if marks.empty:
         st.info("この期間に結果の出た予想はありません。", icon=":material/hourglass_empty:")
         return
@@ -366,7 +378,7 @@ def page_results() -> None:
     pct = lambda x: "—" if x != x else f"{x:.0f}%"
 
     st.subheader("実運用の成績", anchor=False, help=TIPS["review"])
-    trend = _live_trend(st.session_state["db_path"], _db_stamp(st.session_state["db_path"]))
+    trend = _live_trend(st.session_state["db_path"], _results_key(st.session_state["db_path"]))
     if trend.empty:
         st.info("回顧できた日はまだありません。予想を保存した日の結果が入ると、ここに出ます。", icon=":material/hourglass_empty:")
     else:
@@ -860,13 +872,12 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
         cols = {**dict(list(cols.items())[:at]), "factor_total": st.column_config.NumberColumn(
             "総合スコア", format="%.1f/100", help="各要素の点数の平均を100点満点にしたもの。モデルの勝率そのものではありません"),
             **dict(list(cols.items())[at:])}
-    styled = one[[c for c in cols if c in one]].style.map(bracket_color, subset=["bracket"])
+    pt_cols = [c for c in cols if c.startswith("pt_")]
+    main_cols = [c for c in cols if c not in pt_cols]  # PC の表のはじめの表示は主要な列だけ(要素ごとの点数は畳んだ先)
+    styled = one[[c for c in main_cols if c in one]].style.map(bracket_color, subset=["bracket"])
     if "mark" in one:
         styled = styled.map(mark_style, subset=["mark"])
-    pt_cols = [c for c in cols if c.startswith("pt_")]
-    if pt_cols:
-        styled = styled.map(point_style, subset=pt_cols)
-    if "factor_total" in cols:
+    if "factor_total" in main_cols:
         styled = styled.map(total_style, subset=["factor_total"])
     if prediction is None:
         st.caption("出馬表の見方", help=TIPS["entry_table"])
@@ -881,19 +892,22 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
                         "印は勝率(能力)の高い順に付けるため、この馬には印が付いていません。",
                         icon=":material/info:")
     # 馬名の列までは、横にスクロールしても動かさない
-    pinned = list(cols)[:list(cols).index("horse_name") + 1]
-    st.dataframe(styled, hide_index=True, width="stretch",
-                 column_config={k: ({**v, "pinned": True} if k in pinned else v) for k, v in cols.items()})
+    pinned = main_cols[:main_cols.index("horse_name") + 1]
+    with st.container(key="kb_table"):  # スマホ幅では style.css で隠し、下のカードと切り替える
+        st.dataframe(styled, hide_index=True, width="stretch",
+                     column_config={k: ({**v, "pinned": True} if k in pinned else v)
+                                    for k, v in cols.items() if k in main_cols})
+        if pt_cols:
+            with st.expander("要素ごとの点数", icon=":material/fact_check:"):
+                st.dataframe(one[["number", "horse_name", *pt_cols]].style.map(point_style, subset=pt_cols),
+                             hide_index=True, width="stretch",
+                             column_config={c: cols[c] for c in ["number", "horse_name", *pt_cols] if c in cols})
     values = _race_factor_values(conn, date, race_id) if date is not None and "mark" in one else None
     reviews = factor_view.race_reviews(one, points, values) if "mark" in one else []
+    st.html(race_cards_html(one, reviews))
     if reviews:
-        st.subheader("予想の見解", anchor=False)
-        st.caption("全頭について、要素ごとの点数と、その根拠(過去の成績など)を書いています。"
-                   "印のある馬が先で、印のない馬は総合スコアの高い順です。点数はこのレース内の相対評価で、勝率そのものではありません。")
-        for rv in reviews:
-            title = f"{rv['mark']} {rv['number']} {rv['name']}".strip()
-            with st.expander(f"{title} ― {rv['sub']}" if rv["sub"] else title, expanded=bool(rv["mark"])):
-                st.html(review_html(rv))
+        with st.container(key="kb_reviews"):  # スマホ幅ではカードの詳細に寄せるので、こちらは隠す
+            _reviews_block(reviews, race_id)
 
 
 def _race_factor_values(conn, date: dt.date, race_id: str | None):
@@ -920,6 +934,96 @@ def review_html(rv: dict) -> str:
         f'<div class="kb-rv-grade">{html.escape(f["grade"])}</div></div>'
         f'<div class="kb-rv-text">{html.escape(f["text"])}</div></div>' for f in rv["rows"])
     return (f'<div class="kb-review"><p class="kb-rv-summary">{html.escape(rv["summary"])}</p>{rows}</div>')
+
+
+def _card_value(v) -> float | None:
+    """カードに出す数値。欠けている(None・NaN・数値でない)なら None。"""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x
+
+
+def race_cards_html(one: pd.DataFrame, reviews: list[dict]) -> str:
+    """スマホ幅で出す、1頭1枚の予想表のカード。広い画面では style.css で隠し、上の表と切り替える。
+
+    常時見せるのは印・馬番・馬名・総合スコア・勝率・期待値・単勝オッズ。
+    要素ごとの点数と見解は details に畳む。DB 由来の文字列(馬名・騎手)はすべてエスケープする。
+    """
+    by_number = {int(rv["number"]): rv for rv in reviews}
+    cards = []
+    for _, r in one.iterrows():
+        n = int(r["number"])
+        mark = html.escape(r["mark"]) if "mark" in one and isinstance(r.get("mark"), str) else ""
+        star = "★" if "star" in one and r.get("star") == "★" else ""
+        bracket = _card_value(r.get("bracket")) if "bracket" in one else None
+        bg, fg = BRACKET_COLORS.get(int(bracket), (None, None)) if bracket is not None else (None, None)
+        chip = (f'<span class="kb-card-no" style="background:{bg};color:{fg}">{n}</span>' if bg
+                else f'<span class="kb-card-no">{n}</span>')
+        nums = []
+        if (total := _card_value(r.get("factor_total"))) is not None:
+            nums.append(f"<span><i>総合スコア</i>{total:.1f}</span>")
+        if (pa := _card_value(r.get("p_win_ability"))) is not None:
+            nums.append(f"<span><i>勝率(能力)</i>{pa:.0%}</span>")
+        if (pm := _card_value(r.get("p_win_market"))) is not None:
+            nums.append(f"<span><i>勝率(オッズ込)</i>{pm:.0%}</span>")
+        ev = _card_value(r.get("ev_market")) if "ev_market" in one else None
+        if ev is None:
+            ev = _card_value(r.get("ev_ability")) if "ev_ability" in one else None
+        if ev is not None:
+            nums.append(f"<span><i>期待値</i>{ev:.2f}</span>")
+        if (odds := _card_value(r.get("win_odds"))) is not None:
+            nums.append(f"<span><i>単勝</i>{odds:.1f}倍</span>")
+        if (pop := _card_value(r.get("popularity"))) is not None:
+            nums.append(f"<span><i>人気</i>{int(pop)}</span>")
+        if "jockey" in one and isinstance(r.get("jockey"), str) and r["jockey"]:
+            nums.append(f"<span><i>騎手</i>{html.escape(r['jockey'])}</span>")
+        more = []
+        pts = [(name, _card_value(r.get(f"pt_{c}"))) for c, name in factor_view.MODEL_FACTORS.items()]
+        pts = [(name, v) for name, v in pts if v is not None]
+        if pts:
+            more.append('<div class="kb-card-pts">' + "".join(
+                f"<div><span>{html.escape(name)}</span><b>{v:.1f}</b><i>/10</i></div>"
+                for name, v in pts) + "</div>")
+        if n in by_number:
+            more.append(review_html(by_number[n]))
+        details = (f'<details class="kb-card-more"><summary>要素の点数と見解</summary>{"".join(more)}</details>'
+                   if more else "")
+        cards.append(
+            f'<div class="kb-card"><div class="kb-card-head">'
+            f'<span class="kb-card-mark">{mark}</span>{chip}'
+            f'<span class="kb-card-name">{html.escape(str(r["horse_name"]))}</span>'
+            f'<span class="kb-card-star">{star}</span></div>'
+            f'<div class="kb-card-nums">{"".join(nums)}</div>{details}</div>')
+    return f'<div class="kb-cards">{"".join(cards)}</div>'
+
+
+def _review_expander(rv: dict, expanded: bool | None = None) -> None:
+    title = f"{rv['mark']} {rv['number']} {rv['name']}".strip()
+    with st.expander(f"{title} ― {rv['sub']}" if rv["sub"] else title,
+                     expanded=bool(rv["mark"]) if expanded is None else expanded):
+        st.html(review_html(rv))
+
+
+@st.fragment
+def _reviews_block(reviews: list[dict], race_id: str) -> None:
+    """予想の見解。印のある馬ははじめから出し、印のない馬は選んだときだけ描く。
+
+    全頭分をはじめから描くと開くたびに重くなるので、印のない馬は選択式にした。見解の内容は変えていない。
+    この中だけの操作では、画面全体は再実行されない(fragment)。
+    """
+    st.subheader("予想の見解", anchor=False)
+    st.caption("要素ごとの点数と、その根拠(過去の成績など)を書いています。"
+               "印のある馬が先で、印のない馬は総合スコアの高い順です。点数はこのレース内の相対評価で、勝率そのものではありません。")
+    for rv in reviews:
+        if rv["mark"]:
+            _review_expander(rv)
+    others = {f"{rv['number']} {rv['name']}": rv for rv in reviews if not rv["mark"]}
+    if others:
+        pick = st.selectbox("印のない馬の見解", ["選んでください", *others], key=f"review_pick_{race_id}")
+        if pick in others:
+            _review_expander(others[pick], expanded=True)
 
 
 def point_style(v) -> str:
@@ -1249,6 +1353,24 @@ KELLY_CHOICES = {"半分(おすすめ)": 0.5, "4分の1(控えめ)": 0.25, "全�
 BET_MODES = ["自分の印から", "AIにおまかせ"]
 
 
+@st.fragment
+def _bets_from_marks(date: dt.date, table) -> None:
+    """買い方の「自分の印から」。この中だけの操作では、画面全体は再実行されない(fragment)。
+
+    接続はこの中で開く。fragment の再実行は別のスレッドで走るので、外で開いた接続は使い回せない。
+    """
+    bets_from_marks(db.connect(st.session_state["db_path"]), date, table)
+
+
+@st.fragment
+def _bets_auto(date: dt.date, pred) -> None:
+    """買い方の「AIにおまかせ」。この中だけの操作では、画面全体は再実行されない(fragment)。
+
+    接続はこの中で開く(_bets_from_marks と同じ理由)。
+    """
+    bets_auto(db.connect(st.session_state["db_path"]), date, pred)
+
+
 def page_bets() -> None:
     header("Bets", "買い方",
            "出馬表に自分で印を付けると、最新のオッズから、おすすめの券種・買い目と資金の配分を出します。"
@@ -1262,9 +1384,9 @@ def page_bets() -> None:
                                 help="自分の印から: 付けた印で買い目を組み、資金の配分を出す。"
                                      "AIにおまかせ: 予想の勝率から、全券種で期待値の高い買い目を選ぶ") or BET_MODES[0]
     if mode == BET_MODES[0]:
-        bets_from_marks(conn, date, pred[1] if pred and pred[0] == date else None)
+        _bets_from_marks(date, pred[1] if pred and pred[0] == date else None)
     else:
-        bets_auto(conn, date, pred)
+        _bets_auto(date, pred)
 
 
 def bets_from_marks(conn, date: dt.date, table) -> None:
@@ -1369,11 +1491,11 @@ def mark_editor(conn, race_id: str, table) -> dict[int, str]:
                  help="「予想」ページで予想した印を、自分の印としてそのまま入れます" if ai else "この日を予想すると使えます"):
         gui.save_user_marks(conn, race_id, ai)
         st.session_state.pop(key, None)
-        st.rerun()
+        st.rerun(scope="fragment")  # 編集欄だけ描き直す(買い方の fragment の中から呼ばれる)
     if c2.button("印を消す", icon=":material/backspace:", disabled=not saved, key=f"clear_{race_id}"):
         gui.save_user_marks(conn, race_id, {})
         st.session_state.pop(key, None)
-        st.rerun()
+        st.rerun(scope="fragment")  # 編集欄だけ描き直す(買い方の fragment の中から呼ばれる)
     edited = st.data_editor(
         df.style.map(bracket_color, subset=["bracket"]) if "bracket" in df else df, key=key, hide_index=True,
         width="stretch", height=35 * (len(df) + 1) + 3, disabled=[c for c in df.columns if c != "mark"],
@@ -1442,7 +1564,7 @@ def bets_auto(conn, date: dt.date, pred) -> None:
             st.caption(f":material/info: 取得済み {info['races']} レース・{info['horses']} 頭。まだ予想していません。")
             if st.button("この日を予想する", type="primary", icon=":material/insights:"):
                 if run_prediction(conn, date):
-                    st.rerun()
+                    st.rerun(scope="app")  # fragment の中からは画面全体を回し直す(予想ができたので、買い方を作れる状態にする)
         return
     date, table = pred
     races = gui.day_races(conn, date.isoformat())

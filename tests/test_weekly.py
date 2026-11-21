@@ -458,3 +458,68 @@ def test_live_marks_skips_predictions_saved_after_results():
     with conn:
         conn.execute("UPDATE predictions SET after_result = 1")
     assert weekly.live_marks(conn).empty
+
+
+def test_live_daily_is_stored_and_reused():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    weekly.save_predictions(conn, pred_table("202505020101", "2025-03-02"), dt.datetime(2025, 3, 1, 20))
+    add_result(conn, "202505020101", "2025-03-02", [2, 1, 3, 4, 5])
+    trend = weekly.live_trend(conn)
+    assert list(trend["日付"]) == ["2025-03-01", "2025-03-02"]
+    assert conn.execute("SELECT COUNT(*) FROM live_daily").fetchone()[0] == 2
+    # 保存済みの値を書き換えても、そのまま返る(計算し直していない)。日付を足しても、既存の日の値は変わらない
+    with conn:
+        conn.execute("UPDATE live_daily SET honmei_roi = 123.0 WHERE date = '2025-03-01'")
+    weekly.save_predictions(conn, pred_table("202505030101", "2025-03-03"), dt.datetime(2025, 3, 2, 20))
+    add_result(conn, "202505030101", "2025-03-03", [1, 2, 3, 4, 5])
+    trend = weekly.live_trend(conn)
+    assert list(trend["日付"]) == ["2025-03-01", "2025-03-02", "2025-03-03"]
+    assert trend.set_index("日付").loc["2025-03-01", "◎単勝回収率(%)"] == 123.0
+
+
+def test_live_daily_version_bump_recomputes(monkeypatch):
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])  # ◎(1番)が勝ち、2.0倍 → 回収率200%
+    weekly.live_trend(conn)
+    with conn:
+        conn.execute("UPDATE live_daily SET honmei_roi = 123.0")
+    monkeypatch.setattr(weekly, "LIVE_DAILY_VERSION", weekly.LIVE_DAILY_VERSION + 1)
+    trend = weekly.live_trend(conn)
+    assert trend.iloc[0]["◎単勝回収率(%)"] == 200.0  # 版の違う保存は使わず、計算し直す
+    assert conn.execute("SELECT version FROM live_daily").fetchone()[0] == weekly.LIVE_DAILY_VERSION
+
+
+def test_live_daily_not_saved_until_settled():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    assert weekly.save_live_daily(conn, "2025-03-01") is False  # 結果がまだ
+    assert weekly.live_trend(conn).empty
+    assert conn.execute("SELECT COUNT(*) FROM live_daily").fetchone()[0] == 0
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    assert weekly.save_live_daily(conn, "2025-03-01") is True
+    assert conn.execute("SELECT COUNT(*) FROM live_daily").fetchone()[0] == 1
+    row = weekly.live_trend(conn).iloc[0]
+    assert row["★の頭数"] == 0 and row["★単勝回収率(%)"] != row["★単勝回収率(%)"]  # ★なしの回収率は NaN のまま返る
+
+
+def test_live_daily_recomputed_when_more_results_arrive():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [2, 1, 3, 4, 5])  # ◎(1番)は2着
+    assert weekly.live_trend(conn).iloc[0]["レース数"] == 1
+    weekly.save_predictions(conn, pred_table("202505010201", "2025-03-01"), dt.datetime(2025, 2, 28, 21))
+    add_result(conn, "202505010201", "2025-03-01", [1, 2, 3, 4, 5])  # 同じ日に2レース目、◎が勝ち
+    trend = weekly.live_trend(conn)
+    assert trend.iloc[0]["レース数"] == 2 and trend.iloc[0]["◎1着"] == 1
+
+
+def test_settled_races_by_date():
+    conn = db.connect(":memory:")
+    assert weekly.settled_races_by_date(conn) == {}
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    assert weekly.settled_races_by_date(conn) == {}  # 予想だけでは確定しない
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    assert weekly.settled_races_by_date(conn) == {"2025-03-01": 1}

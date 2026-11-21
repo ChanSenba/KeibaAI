@@ -474,6 +474,10 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
         if r.summary["races"]:  # 結果がまだなら、次回に回す
             (reviews_dir / f"{d}.md").write_text(render_markdown(r), encoding="utf-8")
             out["reviewed"].append(d)
+            try:
+                save_live_daily(conn, d, r.summary)  # 成績ページ用に、その日の集計も保存する(画面で計算し直さない)
+            except Exception as e:
+                print(f"実運用の集計の保存を飛ばしました: {e}")
     if after_races:
         if evals_dir is not None:
             out["evaluated"] = str(write_evaluation(conn, today, evals_dir))
@@ -486,17 +490,101 @@ def run_weekly(conn: sqlite3.Connection, fetcher, today: dt.date, reviews_dir: s
 EVAL_YEARS = 1  # 評価期間: 今日からさかのぼる年数(それ以前で学習する)
 
 
+LIVE_DAILY_VERSION = 1  # live_daily(日ごとの実運用の集計)の出し方の版。review_day の summary の出し方を変えたら上げる
+
+LIVE_TREND_COLUMNS = ["日付", "レース数", "◎1着", "◎単勝回収率(%)", "期待値≧1の頭数", "期待値≧1の回収率(%)",
+                      "★の頭数", "★単勝回収率(%)"]
+
+
+def settled_races_by_date(conn: sqlite3.Connection) -> dict[str, int]:
+    """予想があり、結果(着順)が出たレースの日ごとの数。
+
+    保存済みの集計が新しいかどうかの判定と、画面の成績のキャッシュのキーに使う。
+    オッズの取得では変わらない(予想と結果の表だけを見る)。
+    数え方は review_day の summary["races"] と同じにする(結果のあとに保存した予想は数えない)。
+    """
+    return {d: n for d, n in conn.execute(
+        "SELECT p.date, COUNT(DISTINCT p.race_id) FROM predictions p "
+        "JOIN results r ON r.race_id = p.race_id AND r.number = p.number AND r.finish IS NOT NULL "
+        "WHERE p.date IS NOT NULL AND COALESCE(p.after_result, 0) = 0 GROUP BY p.date")}
+
+
+def _live_daily_row(date: str, s: dict) -> dict:
+    """review_day の summary を、live_trend の1行(と live_daily の1行)の形にする。
+
+    SQLite にそのまま渡せるよう、数は int / float にそろえる(summary には numpy の数も混じる)。
+    """
+    return {"日付": date, "レース数": int(s["races"]), "◎1着": int(s["honmei_wins"]),
+            "◎単勝回収率(%)": float(s["honmei_roi"]),
+            "期待値≧1の頭数": int(s["ev_bets"]), "期待値≧1の回収率(%)": float(s["ev_roi"]),
+            "★の頭数": int(s["star_bets"]), "★単勝回収率(%)": float(s["star_roi"])}
+
+
+def _live_daily_for(conn: sqlite3.Connection, date: str) -> dict | None:
+    """その日の集計を計算する。結果がまだ(集計できるレースがない)なら None。"""
+    s = review_day(conn, date, views=False).summary
+    return _live_daily_row(date, s) if s["races"] else None
+
+
+def _store_live_daily(conn: sqlite3.Connection, row: dict) -> None:
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO live_daily (date, version, races, honmei_wins, honmei_roi, ev_bets, ev_roi,"
+            " star_bets, star_roi, saved_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (row["日付"], LIVE_DAILY_VERSION, row["レース数"], row["◎1着"], row["◎単勝回収率(%)"],
+             row["期待値≧1の頭数"], row["期待値≧1の回収率(%)"], row["★の頭数"], row["★単勝回収率(%)"],
+             dt.datetime.now().isoformat(timespec="seconds")))
+
+
+def save_live_daily(conn: sqlite3.Connection, date: str, summary: dict | None = None) -> bool:
+    """その日の実運用の集計を live_daily に保存する。結果がまだなら保存せず False を返す。
+
+    summary を渡すとその値で保存する(weekly が回顧を作ったときは、計算し直さない)。
+    """
+    row = _live_daily_row(date, summary) if summary is not None else _live_daily_for(conn, date)
+    if row is None or not row["レース数"]:
+        return False
+    _store_live_daily(conn, row)
+    return True
+
+
+def _stored_live_daily(conn: sqlite3.Connection) -> dict[str, dict]:
+    """保存済みの日ごとの集計(今の版のものだけ)。{日付: live_trend の1行}。"""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_daily'").fetchone():
+        return {}  # live_daily のない接続(作りかけの DB など)では、保存なしとして扱う
+    nan = float("nan")
+    out = {}
+    for d, races, wins, hroi, evb, evroi, stb, stroi in conn.execute(
+            "SELECT date, races, honmei_wins, honmei_roi, ev_bets, ev_roi, star_bets, star_roi"
+            " FROM live_daily WHERE version = ?", (LIVE_DAILY_VERSION,)):
+        out[d] = {"日付": d, "レース数": races, "◎1着": wins,
+                  "◎単勝回収率(%)": hroi if hroi is not None else nan,
+                  "期待値≧1の頭数": evb, "期待値≧1の回収率(%)": evroi if evroi is not None else nan,
+                  "★の頭数": stb, "★単勝回収率(%)": stroi if stroi is not None else nan}
+    return out
+
+
 def live_trend(conn: sqlite3.Connection) -> pd.DataFrame:
-    """回顧した日ごとの、実運用の成績(発走前に保存した予想と確定結果の照合)。"""
+    """回顧した日ごとの、実運用の成績(発走前に保存した予想と確定結果の照合)。
+
+    確定した日の分は live_daily に保存してあり、そちらを読む。保存がない日と、
+    あとから結果が増えた日(確定したレース数が保存と違う日)だけ、その日の分を計算して保存し直す。
+    保存に失敗しても(読み取り専用の接続・ロック中など)、表示は計算した値で続ける。
+    """
+    stored = _stored_live_daily(conn)
     rows = []
-    for (d,) in conn.execute("SELECT DISTINCT date FROM predictions ORDER BY date").fetchall():
-        s = review_day(conn, d, views=False).summary
-        if s["races"]:
-            rows.append({"日付": d, "レース数": s["races"], "◎1着": s["honmei_wins"],
-                         "◎単勝回収率(%)": s["honmei_roi"], "期待値≧1の頭数": s["ev_bets"],
-                         "期待値≧1の回収率(%)": s["ev_roi"], "★の頭数": s["star_bets"],
-                         "★単勝回収率(%)": s["star_roi"]})
-    return pd.DataFrame(rows)
+    for date, races in sorted(settled_races_by_date(conn).items()):
+        row = stored.get(date)
+        if row is None or row["レース数"] != races:
+            row = _live_daily_for(conn, date)
+            if row is not None:
+                try:
+                    _store_live_daily(conn, row)
+                except Exception:
+                    pass  # 保存は次回に回す
+        if row is not None:
+            rows.append(row)
+    return pd.DataFrame(rows, columns=LIVE_TREND_COLUMNS)
 
 
 def write_evaluation(conn: sqlite3.Connection, today: dt.date, evals_dir: str | Path) -> Path:

@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS predictions (
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL, after_result INTEGER,
     PRIMARY KEY (race_id, number)
 );
+-- 実運用の成績(予想と確定結果の照合)の、日ごとの集計(weekly の live_daily)。成績ページが開くたびに
+-- 全期間を計算し直さないよう、確定した日の分をここに保存し、画面はこれを読む。
+-- version は集計の出し方の版。出し方を変えたら版を上げて、保存済みの行は計算し直す
+CREATE TABLE IF NOT EXISTS live_daily (
+    date TEXT PRIMARY KEY, version INTEGER NOT NULL,
+    races INTEGER, honmei_wins INTEGER, honmei_roi REAL,
+    ev_bets INTEGER, ev_roi REAL, star_bets INTEGER, star_roi REAL,
+    saved_at TEXT
+);
 -- 仕様 8-25 の買い方を、実際には買わずに追って確かめる記録(paper.py)。予想の保存と同じタイミングで、
 -- その時点のスナップショット(bet_odds_snapshots)のオッズから計算した買い目を1点100円で残す。
 -- combo は bet_odds_snapshots と同じ形(馬単・三連単は着順どおり、三連複は小さい順)。payout は精算後の払戻(円/100円)、未精算は NULL、外れは 0
