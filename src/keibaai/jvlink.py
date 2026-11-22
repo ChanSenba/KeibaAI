@@ -5,15 +5,28 @@ netkeiba と違ってアクセス間隔の待ちはない(JV-Link の内部サ�
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import functools
+import inspect
 import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from . import jvexport
+
+try:
+    import msvcrt  # Windows のファイルロック
+except ImportError:
+    msvcrt = None
+try:
+    import fcntl  # POSIX のファイルロック
+except ImportError:
+    fcntl = None
 
 def _find_python32() -> str:
     """pywin32 を入れた 32bit Python。環境変数 KEIBAAI_PYTHON32 があればそれ、なければ決まった場所で見つかったもの。"""
@@ -33,6 +46,139 @@ class JVError(RuntimeError):
 
 _last_run = 0.0  # 前の書き出しが終わった時刻(続けて開き直すと JV-Link の内部サービスが落ちることがあったため)
 
+# 取得の排他と、一時的なファイルロックへの再試行の設定(テストで差し替えられるよう定数で持つ)
+FETCH_LOCK_FILE = ".fetch.lock"  # raw_root 直下に置く、取得の順番待ちのためのファイル
+LOCK_POLL = 0.5  # ほかの取得が終わるのを待つときの確認間隔(秒)
+LOCK_RETRY = 5  # ファイルが一時的にロックされていたときの再試行回数(最初の試行を含む)
+LOCK_RETRY_INTERVAL = 0.2  # 再試行の間隔(秒)
+
+_lock_slots: dict[str, dict] = {}  # ロックファイルごとの、プロセス内での持ち主(スレッドと入れ子の深さ)
+_lock_slots_guard = threading.Lock()
+
+
+def _lock_slot(path: Path) -> dict:
+    with _lock_slots_guard:
+        return _lock_slots.setdefault(str(path), {"mutex": threading.Lock(), "owner": None, "depth": 0})
+
+
+def _try_lock(f) -> bool:
+    """開いたロックファイルを、待たずにロックできたら True。"""
+    if msvcrt is not None:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    if fcntl is not None:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+    return True  # ロックの仕組みがない環境では、プロセス内の mutex だけで守る
+
+
+def _unlock(f) -> None:
+    try:
+        if msvcrt is not None:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        elif fcntl is not None:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass  # ハンドルを閉じれば OS が解放するので、失敗してもそのまま閉じる
+
+
+@contextlib.contextmanager
+def fetch_lock(raw_root: str | Path):
+    """JV-Link の取得を1つずつにする(プロセスをまたいで効く)。
+
+    書き出し先のファイル名が取得どうしで共通のため、同時に走ると片方の削除・読み込みが
+    「ファイルが使用中」(WinError 32)で落ちる。raw_root 直下のロックファイルを OS のファイルロックで押さえ、
+    取れるまで待つ(待たされる側はエラーにせず、順番に実行する)。ロックは OS が管理するので、
+    持ったままプロセスが終わっても残らない。同じスレッドからの入れ子はそのまま通す
+    (取得の中で取得を呼んでも止まらないように)。
+    """
+    root = Path(raw_root)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / FETCH_LOCK_FILE
+    slot = _lock_slot(path.resolve())
+    ident = threading.get_ident()
+    with _lock_slots_guard:
+        nested = slot["owner"] == ident
+        if nested:
+            slot["depth"] += 1
+    if nested:
+        try:
+            yield
+        finally:
+            with _lock_slots_guard:
+                slot["depth"] -= 1
+        return
+    slot["mutex"].acquire()  # 同じプロセスのほかのスレッドとは、まずここで順番待ちする
+    try:
+        with path.open("a+b") as f:
+            if f.seek(0, os.SEEK_END) == 0:
+                f.write(b"\0")
+                f.flush()  # msvcrt のバイト範囲ロックは、実在するバイトにしか掛けられない
+            waited = False
+            while not _try_lock(f):
+                if not waited:
+                    print("ほかの取得が終わるのを待っています…", flush=True)
+                    waited = True
+                time.sleep(LOCK_POLL)
+            with _lock_slots_guard:
+                slot["owner"], slot["depth"] = ident, 1
+            try:
+                yield
+            finally:
+                with _lock_slots_guard:
+                    slot["owner"], slot["depth"] = None, 0
+                _unlock(f)
+    finally:
+        slot["mutex"].release()
+
+
+def _locked_fetch(fn):
+    """取得の関数全体を fetch_lock で囲むデコレータ。排他の単位は raw_root 引数の場所。"""
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kw):
+        # 省略されたときは、関数自身の既定値(定義時の RAW_DIR)を使う。本体の書き出し先とロックの場所をそろえるため
+        raw_root = sig.bind_partial(*args, **kw).arguments.get("raw_root", sig.parameters["raw_root"].default)
+        with fetch_lock(raw_root):
+            return fn(*args, **kw)
+
+    return wrapper
+
+
+def _retry_locked(fn):
+    """ファイルが一時的にロックされている(PermissionError)間だけ、間隔をあけて数回まで試す。
+
+    書き出し側の終了直後や、ウイルス対策ソフトの確認で一瞬だけ掴まれることがあるため。
+    それ以外のエラーはそのまま投げる。
+    """
+    tries = max(1, LOCK_RETRY)
+    for i in range(tries):
+        try:
+            return fn()
+        except PermissionError:
+            if i + 1 >= tries:
+                raise
+            time.sleep(LOCK_RETRY_INTERVAL)
+
+
+def _unlink(path: Path) -> None:
+    """前の書き出しを消す(なければ何もしない)。一時的にロックされていても少し待って消す。"""
+    _retry_locked(lambda: path.unlink(missing_ok=True))
+
+
+def _open_read(path: Path):
+    """読み込み用に開く。一時的にロックされていても少し待って開く。"""
+    return _retry_locked(lambda: path.open(encoding="utf-8"))
+
 
 def available(python32: str = PYTHON32) -> bool:
     """JV-Link を呼ぶ 32bit Python があるか(Windows でセットアップ済みの PC だけ)。"""
@@ -45,7 +191,7 @@ def export(out: str | Path, from_ymd: str, specs: list[str], option: int = 1, rt
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     for name in [f"{s}.txt" for s in specs] + [f"RT_{r.split(':')[0]}.txt" for r in rt]:
-        (out / name).unlink(missing_ok=True)  # 「該当データなし」のとき、前の日の書き出しが残らないように
+        _unlink(out / name)  # 「該当データなし」のとき、前の日の書き出しが残らないように
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent), "PYTHONIOENCODING": "utf-8"}
     cmd = [python32, "-m", "keibaai.jvexport", "--from", from_ymd, "--out", str(out), "--option", str(option),
            "--specs", *specs, "--rt", *rt]
@@ -65,6 +211,7 @@ def export(out: str | Path, from_ymd: str, specs: list[str], option: int = 1, rt
                       "JV-Link の内部サービスが止まっている場合は、PC の再起動で直ります")
 
 
+@_locked_fetch
 def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_root: str | Path = RAW_DIR,
                   python32: str = PYTHON32, now: dt.datetime | None = None, race_ids: list[str] | None = None) -> int:
     """その日(YYYY-MM-DD)の出馬表と単勝オッズを JRA-VAN から取って保存する。保存したレース数を返す。
@@ -81,7 +228,7 @@ def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_ro
     ymd = date.replace("-", "")
     week = (dt.date.fromisoformat(date) - dt.timedelta(days=7)).strftime("%Y%m%d")
     export(raw, week, ["RACE"], option=2, rt=[f"0B15:{ymd}", f"0B14:{ymd}"], python32=python32)
-    (raw / "RT_0B31.txt").unlink(missing_ok=True)  # 前に取った別の日のオッズを混ぜない
+    _unlink(raw / "RT_0B31.txt")  # 前に取った別の日のオッズを混ぜない
     numbered = {p.race.race_id for p in read_entries(raw, date)}  # 馬番の入ったレースだけ(枠順の発表前はオッズもない)
     keys = [k for k in race_keys(raw, date) if k[:4] + k[8:] in numbered and (race_ids is None or k[:4] + k[8:] in race_ids)]
     if keys and odds:
@@ -96,6 +243,7 @@ def fetch_entries(conn: sqlite3.Connection, date: str, odds: bool = True, raw_ro
 TRAINING_DAYS = 14  # 調教タイムは、DB にある最新の日からこの日数ぶん戻って取り直す(速報の後から入る分を拾う)
 
 
+@_locked_fetch
 def fetch_training(conn: sqlite3.Connection, raw_root: str | Path = RAW_DIR, python32: str = PYTHON32,
                    today: dt.date | None = None) -> int:
     """坂路・ウッドの調教タイム(SLOP・WOOD)を、DB にある最新の日の少し前から取って入れる。入れた件数を返す。
@@ -115,6 +263,7 @@ def fetch_training(conn: sqlite3.Connection, raw_root: str | Path = RAW_DIR, pyt
     return import_raw(conn, raw)
 
 
+@_locked_fetch
 def fetch_results(conn: sqlite3.Connection, start: dt.date, end: dt.date, raw_root: str | Path = RAW_DIR,
                   python32: str = PYTHON32, today: dt.date | None = None) -> tuple[int, int]:
     """start〜end の成績を JRA-VAN から取って入れる。(レース数, 出走数) を返す。
@@ -168,7 +317,7 @@ def announced_at(rec: str) -> str | None:
 
 def _rt_records(path: Path):
     if path.exists():
-        with path.open(encoding="utf-8") as f:
+        with _open_read(path) as f:
             for line in f:
                 _, _, rec = line.rstrip("\n").partition("\t")
                 if rec:
@@ -197,6 +346,7 @@ def read_bet_odds(raw_dir: str | Path, key: str) -> tuple[dict, str | None]:
     return out, announced
 
 
+@_locked_fetch
 def fetch_bet_odds(conn: sqlite3.Connection, race_id: str, raw_root: str | Path = RAW_DIR,
                    python32: str = PYTHON32) -> dict:
     """1レースの全券種の速報オッズを JRA-VAN から取って {券種: {馬番の組: オッズ}} にする(netkeiba の6回の取得の代わり)。
@@ -237,6 +387,7 @@ def read_pool_odds(raw_dir: str | Path, keys: dict[str, str]) -> dict[str, tuple
     return out
 
 
+@_locked_fetch
 def snapshot_pool_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | None = None,
                        now: dt.datetime | None = None, raw_root: str | Path = RAW_DIR,
                        python32: str = PYTHON32) -> int:
@@ -275,6 +426,7 @@ def snapshot_pool_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] 
     return n
 
 
+@_locked_fetch
 def snapshot_odds(conn: sqlite3.Connection, date: str, race_ids: list[str] | None = None,
                   now: dt.datetime | None = None, raw_root: str | Path = RAW_DIR, python32: str = PYTHON32) -> int:
     """date(YYYY-MM-DD)の各レースの単勝の速報オッズを JRA-VAN から取り、odds_snapshots に追記する。記録したレース数を返す。
@@ -341,6 +493,7 @@ def store_odds_history(conn: sqlite3.Connection, path: Path, wanted: set[str]) -
     return len(seen)
 
 
+@_locked_fetch
 def import_odds_history(conn: sqlite3.Connection, race_ids: list[str], raw_root: str | Path = RAW_DIR,
                         python32: str = PYTHON32, batch: int = 50) -> int:
     """race_ids の時系列オッズ(JV-Link 0B41。発売開始から締め切りまでの単勝オッズの推移)を取って odds_snapshots に入れる。

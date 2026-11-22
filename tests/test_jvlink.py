@@ -1,5 +1,10 @@
 import datetime as dt
+import os
 import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
@@ -244,3 +249,200 @@ def test_fetch_training_starts_before_latest_date_and_imports(tmp_path, monkeypa
     assert jvlink.fetch_training(conn, tmp_path, today=dt.date(2026, 11, 1)) == 1
     assert calls == [(tmp_path / "training", "20261016", ["SLOP", "WOOD"], 1)]  # 最新 10/30 の14日前から
     assert conn.execute("SELECT COUNT(*) FROM jv_training").fetchone()[0] == 2
+
+
+# ---- 取得の排他(fetch_lock)と、一時的なファイルロックへの再試行 ----
+
+def test_fetch_lock_runs_one_at_a_time(tmp_path, monkeypatch):
+    """同時に呼んでも、片方が終わるまで他方は入らない。両方とも完走する。"""
+    monkeypatch.setattr(jvlink, "LOCK_POLL", 0.02)
+    order = []
+
+    def run(name, hold):
+        with jvlink.fetch_lock(tmp_path):
+            order.append(f"{name}-in")
+            time.sleep(hold)
+            order.append(f"{name}-out")
+
+    a = threading.Thread(target=run, args=("a", 0.3))
+    a.start()
+    for _ in range(100):  # a が先に入ったことを確かめてから b を呼ぶ
+        if order:
+            break
+        time.sleep(0.01)
+    b = threading.Thread(target=run, args=("b", 0))
+    b.start()
+    a.join()
+    b.join()
+    assert order == ["a-in", "a-out", "b-in", "b-out"]
+
+
+def test_fetch_lock_keeps_file_contents_unmixed(tmp_path, monkeypatch):
+    """同じファイルを書いて読み直す処理を同時に呼んでも、内容が混ざらない。"""
+    monkeypatch.setattr(jvlink, "LOCK_POLL", 0.02)
+    shared = tmp_path / "shared.txt"
+    seen = {}
+
+    def run(name):
+        with jvlink.fetch_lock(tmp_path):
+            shared.write_text(name, encoding="utf-8")
+            time.sleep(0.1)
+            seen[name] = shared.read_text(encoding="utf-8")
+
+    threads = [threading.Thread(target=run, args=(n,)) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert seen == {"a": "a", "b": "b"}
+
+
+def test_fetch_lock_allows_nesting_in_same_thread(tmp_path):
+    """同じスレッドからの入れ子は止まらない(取得の中で取得を呼んでもよい)。"""
+    with jvlink.fetch_lock(tmp_path):
+        with jvlink.fetch_lock(tmp_path):
+            pass
+
+
+def test_fetch_lock_waits_for_other_process_and_survives_its_death(tmp_path, monkeypatch):
+    """ほかのプロセスが持っている間は待ち、持っていたプロセスが死ねば OS が解放するので入れる。"""
+    monkeypatch.setattr(jvlink, "LOCK_POLL", 0.05)
+    root = Path(__file__).resolve().parent.parent
+    code = ("import sys, time\n"
+            "from keibaai import jvlink\n"
+            "with jvlink.fetch_lock(sys.argv[1]):\n"
+            "    print('locked', flush=True)\n"
+            "    time.sleep(60)\n")
+    env = {**os.environ, "PYTHONPATH": str(root / "src")}
+    child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], stdout=subprocess.PIPE, text=True, env=env)
+    try:
+        assert child.stdout.readline().strip() == "locked"
+        got = threading.Event()
+
+        def wait_for_lock():
+            with jvlink.fetch_lock(tmp_path):
+                got.set()
+
+        t = threading.Thread(target=wait_for_lock)
+        t.start()
+        assert not got.wait(0.8)  # 持たれている間は、エラーにならず待つ
+        child.kill()
+        assert got.wait(10)  # プロセスが死ねば、ロックは残らない
+        t.join()
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_fetch_entries_waits_while_lock_is_held(tmp_path, fake, monkeypatch):
+    """取得の関数も fetch_lock で囲まれている(2026-11-22 の競合の再発防止)。"""
+    monkeypatch.setattr(jvlink, "LOCK_POLL", 0.02)
+    monkeypatch.setattr("keibaai.jventries.race_keys", lambda raw, date: [])
+    monkeypatch.setattr("keibaai.jventries.read_entries", lambda raw, date: [])
+    monkeypatch.setattr("keibaai.jventries.import_entries", lambda conn, raw, date, at: 0)
+    done = threading.Event()
+
+    def call():
+        jvlink.fetch_entries(db.connect(":memory:"), "2026-10-17", raw_root=tmp_path)
+        done.set()
+
+    with jvlink.fetch_lock(tmp_path):
+        t = threading.Thread(target=call)
+        t.start()
+        assert not done.wait(0.5)  # ほかの取得が終わるまで始まらない
+    t.join(timeout=10)
+    assert done.is_set()
+
+
+def test_concurrent_fetch_results_do_not_mix(tmp_path, monkeypatch):
+    """成績の取得を同時に呼んでも、書き出しと取り込みの組が混ざらず、両方完走する。"""
+    monkeypatch.setattr(jvlink.jvexport, "RT_INTERVAL", 0)
+    monkeypatch.setattr(jvlink, "LOCK_POLL", 0.02)
+
+    def run(cmd, **kw):
+        out = Path(cmd[cmd.index("--out") + 1])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "RACE.txt").write_text(threading.current_thread().name, encoding="utf-8")
+        time.sleep(0.2)  # 書き出しに時間がかかっている間に、もう片方が割り込まないことを見る
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(jvlink.subprocess, "run", run)
+    seen = {}
+
+    def import_races(conn, raw, since, refresh_since=None):
+        seen[threading.current_thread().name] = (raw / "RACE.txt").read_text(encoding="utf-8")
+        return (1, 1)
+
+    monkeypatch.setattr("keibaai.jvrace.import_races", import_races)
+
+    def call():
+        jvlink.fetch_results(db.connect(":memory:"), dt.date(2026, 10, 1), dt.date(2026, 10, 2),
+                             tmp_path, today=dt.date(2026, 10, 15))
+
+    threads = [threading.Thread(target=call, name=n) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert seen == {"a": "a", "b": "b"}
+
+
+def _flaky_unlink(monkeypatch, target, fails):
+    """target の unlink だけ、fails 回まで PermissionError にする。失敗した回数を返す。"""
+    real_unlink = Path.unlink
+    calls = {"n": 0}
+
+    def flaky(self, missing_ok=False):
+        if self == target and calls["n"] < fails:
+            calls["n"] += 1
+            raise PermissionError(32, "プロセスはファイルにアクセスできません")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", flaky)
+    return calls
+
+
+def test_unlink_retries_until_unlocked(tmp_path, monkeypatch):
+    target = tmp_path / "RT_0B31.txt"
+    target.write_text("old", encoding="utf-8")
+    calls = _flaky_unlink(monkeypatch, target, fails=2)
+    monkeypatch.setattr(jvlink, "LOCK_RETRY_INTERVAL", 0)
+    jvlink._unlink(target)
+    assert calls["n"] == 2 and not target.exists()
+
+
+def test_unlink_gives_up_after_retries(tmp_path, monkeypatch):
+    target = tmp_path / "RT_0B31.txt"
+    target.write_text("old", encoding="utf-8")
+    calls = _flaky_unlink(monkeypatch, target, fails=100)
+    monkeypatch.setattr(jvlink, "LOCK_RETRY", 3)
+    monkeypatch.setattr(jvlink, "LOCK_RETRY_INTERVAL", 0)
+    with pytest.raises(PermissionError):
+        jvlink._unlink(target)
+    assert calls["n"] == 3 and target.exists()
+
+
+def test_export_retries_clearing_old_files(tmp_path, fake, monkeypatch):
+    (tmp_path / "RACE.txt").write_text("old", encoding="utf-8")
+    calls = _flaky_unlink(monkeypatch, tmp_path / "RACE.txt", fails=1)
+    monkeypatch.setattr(jvlink, "LOCK_RETRY_INTERVAL", 0)
+    jvlink.export(tmp_path, "20261010", ["RACE"], python32="py32")
+    assert calls["n"] == 1
+
+
+def test_rt_records_retries_read(tmp_path, monkeypatch):
+    path = tmp_path / "RT_0B31.txt"
+    path.write_text("x\tREC\n", encoding="utf-8")
+    real_open = Path.open
+    calls = {"n": 0}
+
+    def flaky(self, *args, **kw):
+        if self == path and calls["n"] < 1:
+            calls["n"] += 1
+            raise PermissionError(32, "プロセスはファイルにアクセスできません")
+        return real_open(self, *args, **kw)
+
+    monkeypatch.setattr(Path, "open", flaky)
+    monkeypatch.setattr(jvlink, "LOCK_RETRY_INTERVAL", 0)
+    assert list(jvlink._rt_records(path)) == ["REC"]
+    assert calls["n"] == 1

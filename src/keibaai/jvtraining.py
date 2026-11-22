@@ -86,11 +86,13 @@ def import_raw(conn: sqlite3.Connection, raw_dir: str | Path, chunk: int = 50_00
     sql = (f"INSERT INTO jv_training ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))}) "
            f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET "
            + ",".join(f"{c} = excluded.{c}" for c in COLUMNS if c not in keys))
+    from .jvlink import _open_read  # 相互参照を避けるため、ここで import する
+
     for path in sorted(Path(raw_dir).glob("*.txt")):
         if path.stem in ("RACE", "DIFN"):  # 成績と馬のマスタは jvrace.py が読む
             continue
         rows = []
-        with path.open(encoding="utf-8") as f:
+        with _open_read(path) as f:  # 一時的にロックされていても少し待って開く(jvlink._open_read)
             for line in f:
                 _, _, rec = line.rstrip("\n").partition("\t")
                 row = parse_record(rec)

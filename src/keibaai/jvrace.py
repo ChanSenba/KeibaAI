@@ -204,7 +204,9 @@ def parse_um(b: bytes) -> tuple | None:
 
 
 def _records(path: Path):
-    with path.open(encoding="utf-8") as f:
+    from .jvlink import _open_read  # 相互参照を避けるため、ここで import する
+
+    with _open_read(path) as f:  # 一時的にロックされていても少し待って開く(jvlink._open_read)
         for line in f:
             _, _, rec = line.rstrip("\n").partition("\t")
             if rec:
