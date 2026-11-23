@@ -370,6 +370,20 @@ def mark_results() -> None:
         "win_rate": pct("勝率", "1着の割合"), "p_mean": pct("見込みの勝率", "発走前に出していた能力のみの勝率の平均"),
         "top2_rate": pct("連対率", "2着以内の割合"), "top3_rate": pct("馬券内率", "3着以内の割合"),
         "roi": pct("単勝回収率", "その印の馬の単勝を100円ずつ買った場合の、払戻 ÷ 投資(確定オッズ)")})
+    conf = marks.attrs.get("conf")
+    if conf is not None and not conf.empty:
+        st.markdown("**本命感(◆)の成績**")
+        st.caption("◆は◎のうち能力のみの勝率が40%以上の馬(モデルの自信)。◎全体・◆のない◎と比べて、"
+                   "的中率がどれだけ上がるかを見ます")
+        st.dataframe(conf.drop(columns=["top2", "top3"]), hide_index=True, width="stretch",
+                     column_order=["group", "n", "wins", "win_rate", "top2_rate", "top3_rate", "p_mean"],
+                     column_config={
+            "group": st.column_config.TextColumn("区分", width="small"),
+            "n": st.column_config.NumberColumn("頭数", format="%d", help="その区分で、走った馬の数(取消・除外は除く)"),
+            "wins": st.column_config.NumberColumn("1着", format="%d", help="勝った頭数"),
+            "win_rate": pct("勝率", "1着の割合"), "top2_rate": pct("連対率", "2着以内の割合"),
+            "top3_rate": pct("複勝率", "3着以内の割合"),
+            "p_mean": pct("見込みの勝率", "発走前に出していた能力のみの勝率の平均")})
 
 
 def page_results() -> None:
@@ -522,6 +536,10 @@ PRED_COLUMNS = {
         help="オッズ込みのモデルが、オッズより高く評価している馬(その期待値1.1以上・勝率3%以上・単勝30倍以内)。"
              "過去8年の検証では、これらの馬を単勝で買った回収率は90〜97%で、100%には届かず、買えば得になる印ではありません。"
              "表示される期待値は、実際より1〜3割高く出る傾向があります"),
+    "conf_mark": st.column_config.TextColumn(
+        "◆", width="small",
+        help="本命感の印。◎(能力のみの勝率1位)のうち、その勝率が40%以上の馬につく、モデルの自信の目安です。"
+             "★(買う価値)とは別の物差しで、的中率で測ります"),
     "number": st.column_config.NumberColumn("馬番", format="%d", help="馬番(ゼッケンの番号)"),
     "horse_name": st.column_config.TextColumn("馬名", help="馬の名前"),
     "jockey": st.column_config.TextColumn("騎手", help="今回乗る騎手"),
@@ -857,8 +875,10 @@ def race_detail(conn, race, race_id: str, prediction, date: dt.date | None = Non
     for c in ("win_odds", "popularity", "p_win_market", "ev_market", "ev_ability"):
         if c in one:
             one[c] = pd.to_numeric(one[c], errors="coerce")
-    cols = {**({"mark": PRED_COLUMNS["mark"], "star": PRED_COLUMNS["star"]} if "mark" in one else {}), **ENTRY_COLUMNS,
-            **(PRED_COLUMNS if prediction is not None else {})}
+    head = {"mark": PRED_COLUMNS["mark"], "star": PRED_COLUMNS["star"]} if "mark" in one else {}
+    if "conf_mark" in one:  # ◆を付け始める前の予想には列がない
+        head["conf_mark"] = PRED_COLUMNS["conf_mark"]
+    cols = {**head, **ENTRY_COLUMNS, **(PRED_COLUMNS if prediction is not None else {})}
     # 要素ごとの勝率は、点数(0〜10点)で見せる。勝率そのものは、能力・オッズ込みの2列だけ残す
     for c, name in factor_view.MODEL_FACTORS.items():
         cols.pop(c, None)
@@ -959,6 +979,7 @@ def race_cards_html(one: pd.DataFrame, reviews: list[dict]) -> str:
         n = int(r["number"])
         mark = html.escape(r["mark"]) if "mark" in one and isinstance(r.get("mark"), str) else ""
         star = "★" if "star" in one and r.get("star") == "★" else ""
+        conf = "◆" if "conf_mark" in one and r.get("conf_mark") == "◆" else ""  # 本命感は◎の隣(◎◆)に出す
         bracket = _card_value(r.get("bracket")) if "bracket" in one else None
         bg, fg = BRACKET_COLORS.get(int(bracket), (None, None)) if bracket is not None else (None, None)
         chip = (f'<span class="kb-card-no" style="background:{bg};color:{fg}">{n}</span>' if bg
@@ -994,7 +1015,7 @@ def race_cards_html(one: pd.DataFrame, reviews: list[dict]) -> str:
                    if more else "")
         cards.append(
             f'<div class="kb-card"><div class="kb-card-top"><div class="kb-card-head">'
-            f'<span class="kb-card-mark">{mark}</span>{chip}'
+            f'<span class="kb-card-mark">{mark}{conf}</span>{chip}'
             f'<span class="kb-card-name">{html.escape(str(r["horse_name"]))}</span>'
             f'<span class="kb-card-star">{star}</span></div>'
             f'<div class="kb-card-nums">{"".join(nums)}</div></div>{details}</div>')

@@ -10,9 +10,11 @@ from test_weekly import add_result, pred_table
 def cards_table():
     return pd.DataFrame([
         {"number": 1, "bracket": 1, "horse_name": "テスト<馬>", "jockey": "騎手&", "mark": "◎", "star": "★",
+         "conf_mark": "◆",
          "factor_total": 7.5, "p_win_ability": 0.4, "p_win_market": 0.35, "ev_ability": 0.8, "ev_market": 1.4,
          "win_odds": 3.5, "popularity": 1, "pt_p_win_quality": 8.0},
         {"number": 2, "bracket": 2, "horse_name": "二番", "jockey": "騎手", "mark": "", "star": "",
+         "conf_mark": "",
          "factor_total": None, "p_win_ability": None, "p_win_market": None, "ev_ability": None, "ev_market": None,
          "win_odds": None, "popularity": None, "pt_p_win_quality": None},
     ])
@@ -49,8 +51,15 @@ def test_race_cards_html_wraps_always_visible_part_for_sticky_header():
     assert top < head < nums < details  # 包むのは詳細より前の部分だけ
 
 
+def test_race_cards_html_confidence_mark():
+    out = gui_app.race_cards_html(cards_table(), [])
+    assert "◎◆" in out  # 本命感は◎の隣に出す
+    one = cards_table().drop(columns=["conf_mark"])  # ◆を付け始める前の予想(列がない)でも、そのまま出る
+    assert "◆" not in gui_app.race_cards_html(one, [])
+
+
 def test_race_cards_html_without_prediction():
-    one = cards_table().drop(columns=["mark", "star", "factor_total", "p_win_ability", "p_win_market",
+    one = cards_table().drop(columns=["mark", "star", "conf_mark", "factor_total", "p_win_ability", "p_win_market",
                                       "ev_ability", "ev_market", "pt_p_win_quality"])
     out = gui_app.race_cards_html(one, [])
     assert "二番" in out and "単勝" in out and "3.5倍" in out  # 出馬表だけでも、オッズまでは出す

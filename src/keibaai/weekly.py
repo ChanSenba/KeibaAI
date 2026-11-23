@@ -20,7 +20,8 @@ from .marks import MARK_ORDER
 
 
 PRED_COLS = ["race_id", "number", "saved_at", "date", "venue", "round", "race_name", "horse_name", "jockey",
-             "win_odds", "popularity", "mark", "star", "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result",
+             "win_odds", "popularity", "mark", "star", "conf_mark", "conf_version", "star_version", "margin", "n_runners",
+             "p_win_ability", "p_win_market", "ev_ability", "ev_market", "after_result",
              "p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree", "p_win_training"]
 
 
@@ -173,6 +174,7 @@ class Review:
     views: dict | None = None  # レースごとの見解(race_review.race_view)
     next_runs: pd.DataFrame | None = None  # 前走の勝ち方・負け方ごとの次走の成績(race_review.next_run_table)
     full: dict | None = None  # レースごとの全頭の振り返り(horse_review.race_rows)
+    conf: pd.DataFrame | None = None  # 本命感(◆)の成績(conf_stats)
 
 
 def _review_horses(conn: sqlite3.Connection, where: str, params: tuple) -> pd.DataFrame:
@@ -230,7 +232,8 @@ def review_day(conn: sqlite3.Connection, date: str, stake: int = 100, views: boo
     out = {rid: race_review.race_view(conn, rid, g) for rid, g in h.groupby("race_id", sort=False)} if views else None
     nxt = race_review.next_run_table(race_review.next_run_rates(conn, date)) if views else None
     full = {rid: horse_review.race_rows(g, flows.get(rid)) for rid, g in h.groupby("race_id", sort=False)}
-    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out, nxt, full)
+    return Review(date, h, races, summary, mark_stats(h), horse_reviews(conn, h, flows, date), out, nxt, full,
+                  conf=conf_stats(h))
 
 
 def _flows(conn: sqlite3.Connection, ids: list[str]) -> dict:
@@ -329,6 +332,38 @@ def mark_stats(h: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi"])
 
 
+def conf_stats(h: pd.DataFrame) -> pd.DataFrame:
+    """本命感(◆)の成績。◆の馬と、比べるための◎全体・◆のない◎について、的中率・連対率・複勝率(3着内率)と
+    見込みの勝率(発走前に出していた能力のみの勝率の平均)を出す。取消・除外(着順のない馬)は数えない。
+
+    ◆を付け始める前の予想(conf_mark の列がない・NULL ばかり)では、◎全体の行だけ出す。
+    """
+    cols = ["group", "n", "wins", "top2", "top3", "win_rate", "top2_rate", "top3_rate", "p_mean"]
+    if h.empty or "mark" not in h or "finish" not in h:
+        return pd.DataFrame(columns=cols)
+    ran = h[h["finish"].notna()]
+    conf = ran["conf_mark"].fillna("") if "conf_mark" in ran else pd.Series("", index=ran.index)
+
+    def row(name: str, g: pd.DataFrame) -> dict:
+        return {"group": name, "n": len(g), "wins": int((g["finish"] == 1).sum()),
+                "top2": int(g["finish"].between(1, 2).sum()), "top3": int(g["finish"].between(1, 3).sum()),
+                "win_rate": float((g["finish"] == 1).mean()), "top2_rate": float(g["finish"].between(1, 2).mean()),
+                "top3_rate": float(g["finish"].between(1, 3).mean()), "p_mean": float(g["p_win_ability"].mean())}
+
+    rows = []
+    honmei = ran[ran["mark"] == "◎"]
+    confed = ran[conf == "◆"]
+    if not confed.empty:
+        rows.append(row("◆", confed))
+    if not honmei.empty:
+        rows.append(row("◎全体", honmei))
+    if not confed.empty:  # index に依存しないよう、マスクで選ぶ(連結した表でも頭数が膨らまない)
+        plain = ran[(ran["mark"] == "◎") & (conf != "◆")]
+        if not plain.empty:
+            rows.append(row("◎(◆なし)", plain))
+    return pd.DataFrame(rows, columns=cols)
+
+
 def live_marks(conn: sqlite3.Connection, since: str | None = None) -> pd.DataFrame:
     """保存した予想の全期間(since 以後)の、印ごとの成績(mark_stats)と races(レース数)。
 
@@ -339,7 +374,9 @@ def live_marks(conn: sqlite3.Connection, since: str | None = None) -> pd.DataFra
     saved = conn.execute(f"SELECT COUNT(*) FROM predictions WHERE {where}", (since or "",)).fetchone()[0]
     h = _review_horses(conn, where, (since or "",)) if saved else pd.DataFrame()
     if h.empty:
-        return pd.DataFrame(columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi", "p_mean"])
+        out = pd.DataFrame(columns=["mark", "n", "wins", "top3", "win_rate", "top2_rate", "top3_rate", "roi", "p_mean"])
+        out.attrs["conf"] = conf_stats(h)
+        return out
     out = mark_stats(h)
     ran = h[h["finish"].notna()]
     p = {m: ran.loc[ran["mark"] == m, "p_win_ability"].mean() for m in MARK_ORDER}
@@ -347,6 +384,7 @@ def live_marks(conn: sqlite3.Connection, since: str | None = None) -> pd.DataFra
         p["★"] = ran.loc[ran["star"] == "★", "p_win_ability"].mean()
     out["p_mean"] = out["mark"].map(p).astype(float)
     out.attrs["races"] = int(h["race_id"].nunique())
+    out.attrs["conf"] = conf_stats(h)  # 本命感(◆)の成績は attrs に載せる(成績ページで別枠に出す)
     return out
 
 
@@ -399,6 +437,12 @@ def render_markdown(r: Review) -> str:
         out += ["## 印ごとの成績", "", "| 印 | 頭数 | 1着 | 3着内 | 3着内率 |", "|---|---|---|---|---|"]
         out += [f"| {x['mark']} | {x['n']} | {x['wins']} | {x['top3']} | {x['top3_rate']:.0%} |"
                 for _, x in r.marks.iterrows()]
+    if r.conf is not None and len(r.conf):
+        out += ["", "## 本命感(◆)の成績", "",
+                "◆は◎のうち能力のみの勝率が基準以上の馬(モデルの自信)。◎全体・◆のない◎と比べて、的中率がどれだけ上がるかを見る。",
+                "", "| 区分 | 頭数 | 1着 | 勝率 | 連対率 | 複勝率 | 見込みの勝率 |", "|---|---|---|---|---|---|---|"]
+        out += [f"| {x['group']} | {x['n']} | {x['wins']} | {x['win_rate']:.0%} | {x['top2_rate']:.0%} | "
+                f"{x['top3_rate']:.0%} | {x['p_mean']:.0%} |" for _, x in r.conf.iterrows()]
     if r.next_runs is not None and len(r.next_runs):
         out += ["", "## 前走の勝ち方・負け方ごとの次走の成績(2019年〜)", "",
                 "実績÷見込み は、次走の勝ち数 ÷ 次走の単勝オッズから出した見込みの勝ち数。1.0 から離れていれば市場が見落としている。", "",

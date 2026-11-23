@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE TABLE IF NOT EXISTS predictions (
     race_id TEXT NOT NULL, number INTEGER NOT NULL, saved_at TEXT,
     date TEXT, venue TEXT, round INTEGER, race_name TEXT, horse_name TEXT, jockey TEXT,
-    win_odds REAL, popularity INTEGER, mark TEXT, star TEXT,
+    win_odds REAL, popularity INTEGER, mark TEXT, star TEXT, conf_mark TEXT,
+    conf_version INTEGER, star_version INTEGER, margin REAL, n_runners INTEGER,
     p_win_ability REAL, p_win_market REAL, ev_ability REAL, ev_market REAL, after_result INTEGER,
     PRIMARY KEY (race_id, number)
 );
@@ -203,9 +204,14 @@ _ADDED_COLUMNS = {"races": [("lap_times", "TEXT"), ("pace_first3f", "REAL"), ("p
                   # star: ★(オッズ込みモデルの印)。付け始める前の保存は NULL
                   # p_win_*: 要素ごとの勝率(全頭の回顧で、強かった要素・弱かった要素を出す)。
                   # factors_later=1: 要素の列だけ、保存後に予想し直した値から埋めた行
+                  # conf_mark: 本命感(◆)。conf_version・star_version: ◆と★の定義の版(定義を変えたら
+                  # 集計を版で分けるため、保存のたびに記録する)。margin: ◎と2位の能力のみの勝率の差、
+                  # n_runners: 頭数。どちらも定義の検証用に記録するだけで、印の条件には使わない
                   "predictions": [("after_result", "INTEGER"), ("star", "TEXT")] + [(c, "REAL") for c in (
                       "p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree",
-                      "p_win_training")] + [("factors_later", "INTEGER")]}
+                      "p_win_training")] + [("factors_later", "INTEGER"), ("conf_mark", "TEXT"),
+                      ("conf_version", "INTEGER"), ("star_version", "INTEGER"), ("margin", "REAL"),
+                      ("n_runners", "INTEGER")]}
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:

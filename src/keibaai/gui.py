@@ -174,7 +174,7 @@ def race_entries(conn: sqlite3.Connection, race_id: str, prediction: pd.DataFram
         cols = ["number", "p_win_ability", "p_win_market", "ev_ability", "ev_market"]
         cols += [c for c in ("p_win_quality", "p_win_fit", "p_win_rotation", "p_win_human", "p_win_track", "p_win_pedigree",
                                      "p_win_training") if c in prediction]
-        cols += [c for c in ("mark", "star") if c in prediction]
+        cols += [c for c in ("mark", "star", "conf_mark") if c in prediction]
         df = df.merge(prediction.loc[prediction["race_id"] == race_id, cols], on="number", how="left")
     return df
 
@@ -259,6 +259,12 @@ def race_head_html(race) -> str:
 # ★の基準: オッズ込みモデルの期待値、勝率、オッズ。過去8年(2019年以降)の検証では、この基準の馬を単勝で買った回収率は
 # 90〜97%(能力のみのモデルの期待値で選ぶと79.5%で、無作為に買うのと変わらなかった)。100%には届かない
 STAR_EV, STAR_P, STAR_ODDS = 1.1, 0.03, 30.0
+STAR_VERSION = 1  # ★の定義の版。定義を変えたら上げて、predictions の star_version に記録する(集計を版で分けるため)
+
+# 本命感(◆)の基準: ◎(能力のみの勝率1位)の馬で、その勝率がこの値以上なら付ける。
+# 暫定値・未測定。過去データの帯域別実勝率と週あたり頭数(目安3〜10頭)で決め直す
+CONF_P_V1 = 0.40
+CONF_VERSION = 1  # ◆の定義の版(同上。predictions の conf_version に記録する)
 
 
 def add_marks(table: pd.DataFrame) -> pd.DataFrame:
@@ -273,9 +279,17 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
     2021〜2026年の検証で、☆の単勝の勝率は 1.0% → 2.1%、回収率は 69.5% → 75.8% になった(それでも得な印ではない)。
     別の star 列に、オッズ込みのモデルが、オッズより高く評価している馬(その期待値・勝率・オッズが基準以上)へ ★。
     オッズがない馬には付けない。
+    別の conf_mark 列に、本命感の印 ◆。◎の馬の能力のみの勝率が CONF_P_V1 以上なら付ける(モデルの自信の目安で、
+    ★=買う価値とは別の物差しとして、的中率で測る)。margin(◎と2位の勝率の差)と n_runners(頭数)も、
+    ◆の定義を後から検証するために各行へ記録する(印の条件には使わない)。
     """
     out = table.copy()
     out["mark"] = ""
+    out["conf_mark"] = ""
+    out["conf_version"] = CONF_VERSION
+    out["star_version"] = STAR_VERSION
+    out["margin"] = float("nan")
+    out["n_runners"] = 0
     out["ev_star"] = out["ev_market"].fillna(out["ev_ability"]) if "ev_market" in out else out["ev_ability"]
     out["star"] = ((out["ev_market"] >= STAR_EV) & (out["p_win_market"] >= STAR_P)
                    & (out["win_odds"] <= STAR_ODDS)).map({True: "★", False: ""})
@@ -284,6 +298,11 @@ def add_marks(table: pd.DataFrame) -> pd.DataFrame:
         marks = top_marks(len(g))
         top = list(ranked[:len(marks)])
         out.loc[top, "mark"] = marks[:len(top)]
+        ps = g.loc[ranked, "p_win_ability"]
+        out.loc[g.index, "margin"] = float(ps.iloc[0] - ps.iloc[1]) if len(ps) >= 2 else float("nan")
+        out.loc[g.index, "n_runners"] = len(g)
+        if top and float(ps.iloc[0]) >= CONF_P_V1:  # ◎にだけ付ける(◎以外には付けない)
+            out.loc[top[0], "conf_mark"] = "◆"
         rest = g.drop(top)["ev_star"].dropna()
         if not rest.empty and rest.max() >= 1:
             out.loc[rest.idxmax(), "mark"] = "☆"
@@ -322,6 +341,8 @@ def saved_prediction(conn: sqlite3.Connection, date: dt.date) -> pd.DataFrame | 
         return None
     saved["mark"] = saved["mark"].fillna("")
     saved["star"] = saved["star"].fillna("")
+    if "conf_mark" in saved:  # ◆を付け始める前の保存は NULL。列自体がない古い DB でもそのまま返す
+        saved["conf_mark"] = saved["conf_mark"].fillna("")
     return saved
 
 

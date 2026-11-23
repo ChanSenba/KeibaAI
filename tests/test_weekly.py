@@ -145,6 +145,56 @@ def test_star_column_is_added_to_existing_db(tmp_path):
     assert "star" in {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
 
 
+def test_conf_mark_is_saved_and_measured():
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))  # ◎(1番)の勝率は0.40で基準ちょうど
+    saved = conn.execute("SELECT number, conf_mark, conf_version, star_version, margin, n_runners "
+                         "FROM predictions ORDER BY number").fetchall()
+    assert saved[0][1] == "◆" and all(s[1] == "" for s in saved[1:])
+    assert all(s[2] == 1 and s[3] == 1 and s[5] == 5 for s in saved)  # 定義の版と頭数
+    assert abs(saved[0][4] - 0.15) < 1e-9  # margin は ◎(0.40)と2位(0.25)の差
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])  # ◎が勝ち
+    r = weekly.review_day(conn, "2025-03-01")
+    conf = r.conf.set_index("group")
+    assert conf.loc["◆", "n"] == 1 and conf.loc["◆", "win_rate"] == 1.0 and conf.loc["◆", "p_mean"] == 0.4
+    assert conf.loc["◎全体", "n"] == 1 and "◎(◆なし)" not in conf.index  # ◆のない◎はいないので行は出ない
+    assert "本命感(◆)の成績" in weekly.render_markdown(r)
+    live = weekly.live_marks(conn)
+    assert live.attrs["conf"].set_index("group").loc["◆", "n"] == 1  # 実運用の集計にも載る
+
+
+def test_conf_stats_compares_honmei_groups():
+    h = pd.DataFrame([
+        {"mark": "◎", "conf_mark": "◆", "finish": 1, "p_win_ability": 0.5},
+        {"mark": "◎", "conf_mark": "", "finish": 2, "p_win_ability": 0.3},
+        {"mark": "○", "conf_mark": "", "finish": 3, "p_win_ability": 0.2},
+        {"mark": "◎", "conf_mark": "◆", "finish": None, "p_win_ability": 0.45},  # 取消・除外は数えない
+    ])
+    out = weekly.conf_stats(h).set_index("group")
+    assert out.loc["◆", "n"] == 1 and out.loc["◆", "win_rate"] == 1.0
+    assert out.loc["◎全体", "n"] == 2 and out.loc["◎全体", "top2_rate"] == 1.0
+    assert out.loc["◎(◆なし)", "n"] == 1 and out.loc["◎(◆なし)", "win_rate"] == 0.0
+    # conf_mark の列がない旧形式では、◎全体の行だけ出す
+    assert list(weekly.conf_stats(h.drop(columns=["conf_mark"]))["group"]) == ["◎全体"]
+    # NULL ばかり(付け始める前の保存)でも、◎全体だけ出る
+    h2 = h.copy(); h2["conf_mark"] = None
+    assert list(weekly.conf_stats(h2)["group"]) == ["◎全体"]
+
+
+def test_conf_columns_are_added_to_existing_db(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE predictions (race_id TEXT NOT NULL, number INTEGER NOT NULL, mark TEXT, "
+                "PRIMARY KEY (race_id, number))")
+    raw.commit()
+    raw.close()
+    conn = db.connect(path)  # 接続時に、足りない列が足される
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+    assert {"conf_mark", "conf_version", "star_version", "margin", "n_runners"} <= cols
+
+
 def test_unreviewed_dates_and_upcoming_weekend(tmp_path):
     conn = db.connect(":memory:")
     weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))

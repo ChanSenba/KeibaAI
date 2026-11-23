@@ -167,6 +167,30 @@ def test_add_marks_by_win_probability():
     assert [out["mark"]["A", i] for i in (2, 3, 4)] == ["◎", "○", "▲"] and out["star"]["A", 9] == "★"
 
 
+def test_add_marks_confidence_mark_and_records():
+    import pandas as pd
+
+    t = pd.DataFrame({
+        "race_id": ["A"] * 5 + ["B"] * 5,
+        "number": list(range(1, 6)) * 2,
+        "p_win_ability": [0.45, 0.25, 0.15, 0.1, 0.05] + [0.39, 0.3, 0.2, 0.06, 0.05],
+        "p_win_market": [None] * 10,
+        "ev_ability": [0.5] * 10,
+        "ev_market": [None] * 10,
+        "win_odds": [3.0] * 10,
+    })
+    out = gui.add_marks(t).set_index(["race_id", "number"])
+    # ◆は◎のうち勝率が基準(0.40)以上の馬だけ。A の◎(45%)に付き、B の◎(39%)には付かない
+    assert out.loc[("A", 1), "conf_mark"] == "◆"
+    assert (out.loc["A", "conf_mark"].iloc[1:] == "").all()  # ◎以外には付けない
+    assert (out.loc["B", "conf_mark"] == "").all()
+    # margin(◎と2位の勝率の差)と頭数は、レースの各行に記録する
+    assert abs(out.loc[("A", 3), "margin"] - 0.20) < 1e-9
+    assert abs(out.loc[("B", 1), "margin"] - 0.09) < 1e-9
+    assert (out["n_runners"] == 5).all()
+    assert (out["conf_version"] == gui.CONF_VERSION).all() and (out["star_version"] == gui.STAR_VERSION).all()
+
+
 def test_backtest_run_returns_table_and_curves():
     conn = synthetic_db(n_days=60, races_per_day=4)
     n_races, table, settled = gui.backtest_run(conn, "2025-09-01", False, 1.0, None, 100)
