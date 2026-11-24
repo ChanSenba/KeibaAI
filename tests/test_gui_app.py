@@ -51,6 +51,20 @@ def test_race_cards_html_wraps_always_visible_part_for_sticky_header():
     assert top < head < nums < details  # 包むのは詳細より前の部分だけ
 
 
+def test_marks_display_strips_dataframe_attrs():
+    # live_marks の出力は attrs に◆の成績(DataFrame)を持つ。成績ページの表示では
+    # _marks_display で取り分けて attrs を空にする(2026-11-24 の実機エラー対策)
+    conn = db.connect(":memory:")
+    weekly.save_predictions(conn, pred_table(), dt.datetime(2025, 2, 28, 20))
+    add_result(conn, "202505010101", "2025-03-01", [1, 2, 3, 4, 5])
+    marks = weekly.live_marks(conn)
+    out, conf, races = gui_app._marks_display(marks)
+    assert out.attrs == {} and marks.attrs.get("conf") is not None  # 元の表には手を付けない
+    assert races == 1 and conf is not None and not conf.empty
+    html = out.drop(columns=["top3"]).style.map(gui_app.mark_style, subset=["mark"]).to_html()
+    assert "◎" in html
+
+
 def test_race_cards_html_confidence_mark():
     out = gui_app.race_cards_html(cards_table(), [])
     assert "◎◆" in out  # 本命感は◎の隣に出す

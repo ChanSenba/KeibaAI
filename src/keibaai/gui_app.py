@@ -345,6 +345,20 @@ def _live_marks(path: str, key: tuple, since: str | None) -> pd.DataFrame:
 MARK_PERIODS = {"全期間": None, "直近3か月": 91, "直近1か月": 30}
 
 
+def _marks_display(marks: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame | None, int]:
+    """成績ページの表示用に、live_marks の attrs に載った付属情報(◆の成績とレース数)を取り分ける。
+
+    attrs に DataFrame が入ったままだと、style の内部処理で attrs が比較されて
+    ValueError になる(2026-11-24 に実機で発生)ので、表示用の表は attrs を空にして返す。
+    元の表(cache された物)には手を付けない。
+    """
+    conf = marks.attrs.get("conf")
+    races = marks.attrs.get("races", 0)
+    out = marks.copy()
+    out.attrs = {}
+    return out, conf, races
+
+
 def mark_results() -> None:
     """成績ページの、印ごとの勝率・連対率・馬券内率(保存した予想と確定結果の照合)。"""
     st.subheader("印ごとの成績", anchor=False,
@@ -357,7 +371,8 @@ def mark_results() -> None:
     if marks.empty:
         st.info("この期間に結果の出た予想はありません。", icon=":material/hourglass_empty:")
         return
-    st.caption(f"{marks.attrs.get('races', 0):,} レースの集計。見込みの勝率は、発走前に出していた能力のみの勝率の平均で、"
+    marks, conf, races = _marks_display(marks)
+    st.caption(f"{races:,} レースの集計。見込みの勝率は、発走前に出していた能力のみの勝率の平均で、"
                "勝率より高ければ、その印の馬を実際より高く見ていたことになります")
     pct = lambda label, t: st.column_config.NumberColumn(label, format="percent", help=t)
     st.dataframe(marks.drop(columns=["top3"]).style.map(mark_style, subset=["mark"]), hide_index=True,
@@ -370,7 +385,6 @@ def mark_results() -> None:
         "win_rate": pct("勝率", "1着の割合"), "p_mean": pct("見込みの勝率", "発走前に出していた能力のみの勝率の平均"),
         "top2_rate": pct("連対率", "2着以内の割合"), "top3_rate": pct("馬券内率", "3着以内の割合"),
         "roi": pct("単勝回収率", "その印の馬の単勝を100円ずつ買った場合の、払戻 ÷ 投資(確定オッズ)")})
-    conf = marks.attrs.get("conf")
     if conf is not None and not conf.empty:
         st.markdown("**本命感(◆)の成績**")
         st.caption("◆は◎のうち能力のみの勝率が40%以上の馬(モデルの自信)。◎全体・◆のない◎と比べて、"
